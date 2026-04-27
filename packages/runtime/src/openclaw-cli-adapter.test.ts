@@ -50,7 +50,7 @@ describe("OpenClawCliAdapter", () => {
           "--message",
           "Summarize mission status",
         ]);
-        expect(options).toEqual({ timeoutSeconds: 35 });
+        expect(options).toEqual({ timeoutSeconds: 60 });
         return {
           exitCode: 0,
           stdout: JSON.stringify({ text: "Mission status is ready" }),

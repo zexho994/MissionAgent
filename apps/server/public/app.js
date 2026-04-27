@@ -43,11 +43,10 @@ function renderSnapshot() {
       task.status,
       task.contract.objective,
     ]),
-    bucket("Artifacts", artifacts, (artifact) => [
-      artifact.type,
-      artifact.taskId,
-      artifact.evidence.join(", "),
-    ]),
+    bucket("Artifacts", artifacts, (artifact) => {
+      const summary = extractAgentText(artifact.content)?.slice(0, 120) || artifact.type;
+      return [summary, artifact.type, `score: ${artifact.qualityScore ?? "-"}`];
+    }),
     bucket("Reviews", reviews, (review) => [
       review.decision,
       review.reviewerAgentId,
@@ -185,7 +184,52 @@ function renderExecutionResult(execution) {
   }
 
   const artifact = state.snapshot.artifacts.find((candidate) => candidate.id === execution.artifactId);
-  $("run-result").textContent = artifact
-    ? JSON.stringify(artifact.content, null, 2)
-    : `Execution completed without artifact: ${execution.id}`;
+  if (!artifact) {
+    $("run-result").textContent = `Execution completed without artifact: ${execution.id}`;
+    return;
+  }
+
+  const agentText = extractAgentText(artifact.content);
+  const meta = extractMeta(artifact.content);
+  const parts = [];
+  if (agentText) {
+    parts.push(agentText);
+  }
+  if (meta) {
+    parts.push("\n---\n" + meta);
+  }
+  $("run-result").textContent = parts.join("\n") || JSON.stringify(artifact.content, null, 2);
+}
+
+function extractAgentText(content) {
+  try {
+    const oc = content.openclaw;
+    if (!oc) return null;
+    if (oc.payloads && Array.isArray(oc.payloads)) {
+      return oc.payloads
+        .map((p) => p.text || p.content || JSON.stringify(p))
+        .filter((t) => t && t !== "{}")
+        .join("\n");
+    }
+    if (typeof oc.text === "string") return oc.text;
+    if (typeof oc.output === "string") return oc.output;
+  } catch { /* fall through */ }
+  return null;
+}
+
+function extractMeta(content) {
+  try {
+    const oc = content.openclaw;
+    if (!oc || !oc.meta) return null;
+    const m = oc.meta;
+    const duration = m.durationMs ? `${(m.durationMs / 1000).toFixed(1)}s` : null;
+    const model = m.agentMeta?.model;
+    const tokens = m.agentMeta?.usage?.total;
+    const parts = [];
+    if (model) parts.push(`model: ${model}`);
+    if (duration) parts.push(`duration: ${duration}`);
+    if (tokens) parts.push(`tokens: ${tokens}`);
+    return parts.length ? parts.join(" · ") : null;
+  } catch { /* fall through */ }
+  return null;
 }

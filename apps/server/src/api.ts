@@ -70,7 +70,7 @@ export async function handleApiRequest(
       void deps.openclaw
         .runAgentTask({
           message: buildOpenClawMessage({ message, mission, task }),
-          timeoutSeconds: 60,
+          timeoutSeconds: 300,
         })
         .then((result) => {
           deps.missions.submitExecutionResult({

@@ -102,7 +102,7 @@ export class OpenClawCliAdapter {
       String(task.timeoutSeconds),
       "--message",
       task.message,
-    ], { timeoutSeconds: task.timeoutSeconds + 5 });
+    ], { timeoutSeconds: task.timeoutSeconds + 30 });
 
     if (result.exitCode !== 0) {
       throw new Error(result.stderr.trim() || result.stdout.trim() || `OpenClaw exited ${result.exitCode}`);
