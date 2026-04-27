@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.openclaw/
+.DS_Store
+
+# Local generated previews and render scratch space.
+scratch/
+
+# Environment files.
+.env
+.env.*

@@ -1,0 +1,19 @@
+{
+  "name": "@digitalagent/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "pnpm --filter @digitalagent/core build && pnpm --filter @digitalagent/runtime build",
+    "build": "tsc && rm -rf dist/public && mkdir -p dist/public && cp -R public/. dist/public/",
+    "pretest": "pnpm --filter @digitalagent/core build && pnpm --filter @digitalagent/runtime build",
+    "dev": "pnpm build && node dist/server.js",
+    "test": "vitest run",
+    "pretypecheck": "pnpm --filter @digitalagent/core build && pnpm --filter @digitalagent/runtime build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@digitalagent/core": "workspace:*",
+    "@digitalagent/runtime": "workspace:*"
+  }
+}

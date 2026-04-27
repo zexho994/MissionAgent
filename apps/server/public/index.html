@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DigitalAgent Mission Harness</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">DigitalAgent</p>
+          <h1>Mission Harness 控制台</h1>
+          <p class="lead">创建目标、生成初始任务、连接本地 OpenClaw 执行器，并把结果沉淀为 Artifact 和 Review。</p>
+        </div>
+        <div class="status">
+          <span id="openclaw-dot" class="dot"></span>
+          <div>
+            <strong>OpenClaw</strong>
+            <p id="openclaw-status">检测中...</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <form id="mission-form" class="panel">
+          <h2>创建 Mission</h2>
+          <label>
+            目标
+            <textarea id="goal" rows="4">学习 harness：使用 ChatGPT Image 2 生成一张包含核心知识的图片，帮助用户快速了解和学习 harness 的长任务系统设计方法。</textarea>
+          </label>
+          <label>
+            成功指标
+            <input id="metrics" value="输出 harness 核心知识结构, 生成图片提示词, 图片适合 3 分钟快速理解" />
+          </label>
+          <label>
+            约束
+            <input id="constraints" value="内容简洁通俗, 不堆术语, 先解释 harness 再组织视觉结构" />
+          </label>
+          <button type="submit">创建 Mission</button>
+        </form>
+
+        <section class="panel">
+          <h2>运行 OpenClaw</h2>
+          <p class="hint">选择当前第一条任务，让 OpenClaw 生成第一版执行计划。执行会调用本地 openclaw CLI。</p>
+          <textarea id="run-message" rows="5">请根据当前 Mission 设计一个 harness 学习产物：说明核心概念、拆解视觉结构，并给出可用于 ChatGPT Image 2 的图片生成提示词。请输出简洁 JSON。</textarea>
+          <button id="run-openclaw" type="button">执行当前任务</button>
+          <div class="execution-status">
+            <span id="execution-dot" class="dot"></span>
+            <div>
+              <strong id="execution-title">暂无执行</strong>
+              <p id="execution-detail">创建 Mission 后点击执行当前任务。</p>
+            </div>
+          </div>
+          <pre id="run-result"></pre>
+        </section>
+      </section>
+
+      <section class="panel wide">
+        <div class="section-header">
+          <h2>Mission Snapshot</h2>
+          <button id="refresh" type="button">刷新</button>
+        </div>
+        <div id="snapshot" class="snapshot"></div>
+      </section>
+    </main>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
