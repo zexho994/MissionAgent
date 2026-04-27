@@ -2,7 +2,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OpenClawCliAdapter } from "@digitalagent/runtime";
+import { OpenClawCliAdapter, type OpenClawCliAdapterOptions } from "@digitalagent/runtime";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 
@@ -10,9 +10,13 @@ const port = Number(process.env.PORT ?? 3000);
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
 const missions = new InMemoryMissionService();
-const openclaw = new OpenClawCliAdapter({
-  defaultAgentId: process.env.OPENCLAW_AGENT_ID ?? "digitalagent-harness",
-});
+const openclawOptions: OpenClawCliAdapterOptions = {
+  command: "openclaw",
+};
+if (process.env.OPENCLAW_AGENT_ID) {
+  openclawOptions.defaultAgentId = process.env.OPENCLAW_AGENT_ID;
+}
+const openclaw = new OpenClawCliAdapter(openclawOptions);
 
 const server = createServer(async (req, res) => {
   try {
