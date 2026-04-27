@@ -37,7 +37,12 @@ describe("InMemoryMissionService", () => {
       executionId: execution.id,
       missionId: mission.id,
       taskId: task.id,
-      content: { text: "OpenClaw execution completed" },
+      content: {
+        openclaw: {
+          payloads: [{ text: "Xiaohongshu account growth plan: daily review generated successfully" }],
+          meta: { durationMs: 5000 },
+        },
+      },
       evidence: ["openclaw:local"],
     });
 
@@ -68,5 +73,31 @@ describe("InMemoryMissionService", () => {
 
     expect(failed.status).toBe("failed");
     expect(failed.error).toBe("OpenClaw command failed");
+  });
+
+  it("rejects artifacts with empty or missing OpenClaw output", () => {
+    const service = new InMemoryMissionService();
+    const mission = service.createMission({
+      goal: "Generate a marketing image",
+      successMetrics: ["image produced"],
+      constraints: ["human approval before publishing"],
+    });
+    const task = service.snapshot().tasks[0];
+    if (!task) throw new Error("missing task");
+    const execution = service.startExecution({
+      missionId: mission.id,
+      taskId: task.id,
+    });
+
+    const result = service.submitExecutionResult({
+      executionId: execution.id,
+      missionId: mission.id,
+      taskId: task.id,
+      content: { text: "some text" },
+      evidence: ["openclaw:local"],
+    });
+
+    expect(result.review.decision).toBe("reject");
+    expect(service.snapshot().tasks[0]?.status).toBe("failed");
   });
 });

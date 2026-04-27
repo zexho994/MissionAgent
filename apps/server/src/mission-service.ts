@@ -149,12 +149,13 @@ export class InMemoryMissionService {
     }
 
     const runningTask = task.status === "running" ? task : ensureTaskRunning(task);
+    const qualityResult = evaluateArtifactQuality(input.content, mission);
     const artifact = createArtifact({
       taskId: runningTask.id,
       type: "execution_log",
       content: input.content,
       evidence: input.evidence,
-      qualityScore: 0.8,
+      qualityScore: qualityResult.score,
     });
     const submittedTask = transitionTask(runningTask, {
       type: "artifact.submitted",
@@ -164,17 +165,19 @@ export class InMemoryMissionService {
     const review = createReview({
       artifactId: artifact.id,
       reviewerAgentId: "system_evaluator",
-      decision: "approve",
-      comments: ["Execution artifact captured for the next planning step"],
+      decision: qualityResult.decision,
+      comments: qualityResult.comments,
     });
-    const completedTask = transitionTask(reviewingTask, {
-      type: "review.approved",
-      reviewId: review.id,
-    });
+    const transitionEvent = review.decision === "approve"
+      ? { type: "review.approved" as const, reviewId: review.id }
+      : review.decision === "revise"
+        ? { type: "review.revision_requested" as const, reviewId: review.id }
+        : { type: "review.rejected" as const, reviewId: review.id, reason: qualityResult.comments.join("; ") };
+    const resultTask = transitionTask(reviewingTask, transitionEvent);
 
     this.artifacts.set(artifact.id, artifact);
     this.reviews.set(review.id, review);
-    this.tasks.set(completedTask.id, completedTask);
+    this.tasks.set(resultTask.id, resultTask);
     this.executions.set(execution.id, {
       ...execution,
       status: "completed",
@@ -228,4 +231,88 @@ function ensureTaskRunning(task: Task): Task {
   const ready = transitionTask(task, { type: "contract.completed" });
   const queued = transitionTask(ready, { type: "dependencies.met" });
   return transitionTask(queued, { type: "worker.assigned", agentInstanceId: "openclaw_runner" });
+}
+
+function evaluateArtifactQuality(
+  content: Record<string, unknown>,
+  mission: Mission,
+): { score: number; decision: "approve" | "revise" | "reject"; comments: string[] } {
+  const comments: string[] = [];
+  let score = 0.5;
+  let decision: "approve" | "revise" | "reject" = "approve";
+
+  const openclaw = content.openclaw as Record<string, unknown> | undefined;
+  if (!openclaw) {
+    return { score: 0.1, decision: "reject", comments: ["Artifact has no OpenClaw output"] };
+  }
+
+  const payloads = openclaw.payloads as Array<Record<string, unknown>> | undefined;
+  const agentText = payloads?.[0]?.text as string | undefined;
+
+  // Check 1: Did the agent produce actual text output?
+  if (!agentText || agentText.trim().length < 20) {
+    return { score: 0.1, decision: "reject", comments: ["Agent output is empty or too short"] };
+  }
+  score += 0.1;
+
+  // Check 2: Does it relate to the mission goal?
+  const goalLower = mission.goal.toLowerCase();
+  const textLower = agentText.toLowerCase();
+  const goalKeywords = goalLower.split(/[\s,，。、]+/).filter((w) => w.length >= 2);
+  const matchCount = goalKeywords.filter((kw) => textLower.includes(kw)).length;
+  const relevance = goalKeywords.length > 0 ? matchCount / goalKeywords.length : 0;
+  if (relevance < 0.1) {
+    comments.push("Output has low relevance to mission goal");
+    decision = "revise";
+  } else if (relevance >= 0.3) {
+    score += 0.15;
+    comments.push("Output addresses mission goal");
+  }
+
+  // Check 3: Did it produce an image (via image_generate tool)?
+  // Check for media/image references in the output
+  const hasImageRef = /media|image|图片|生成.*图|\.(png|jpg|webp)/i.test(agentText);
+  const hasMediaUrl = payloads?.some(
+    (p) => p.mediaUrl && String(p.mediaUrl).length > 0,
+  );
+  if (hasMediaUrl) {
+    score += 0.15;
+    comments.push("Artifact contains generated image");
+  } else if (mission.goal.includes("图片") || mission.goal.includes("image")) {
+    // Mission expects an image but agent only produced text
+    const isOnlyTextJson = /^(\```json|\{|\[)/.test(agentText.trim());
+    if (isOnlyTextJson) {
+      comments.push("Mission requires an image but agent returned text/JSON only — revise to generate actual image");
+      decision = "revise";
+      score = Math.min(score, 0.5);
+    } else {
+      comments.push("Mission requires image; agent produced text content without actual image generation");
+      decision = "revise";
+    }
+  } else {
+    score += 0.1;
+  }
+
+  // Check 4: Success criteria from mission
+  if (mission.successMetrics.length > 0) {
+    const metricsHit = mission.successMetrics.filter(
+      (metric) => textLower.includes(metric.toLowerCase().split(/\s/)[0] ?? ""),
+    ).length;
+    if (metricsHit > 0) {
+      score += 0.05;
+      comments.push(`Matches ${metricsHit}/${mission.successMetrics.length} success metrics`);
+    }
+  }
+
+  score = Math.min(Math.max(score, 0), 1);
+
+  if (decision === "approve" && score < 0.5) {
+    decision = "revise";
+  }
+
+  if (decision === "approve") {
+    comments.unshift("Artifact quality check passed");
+  }
+
+  return { score: Math.round(score * 100) / 100, decision, comments };
 }

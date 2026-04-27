@@ -95,7 +95,7 @@ function renderExecSection() {
       ${!hasIncomplete ? '<p style="font-size:13px;color:#5b667a">所有任务已完成</p>' : `
       <label>
         发送给 OpenClaw 的指令
-        <textarea id="run-message" rows="3">请根据当前 Mission 设计一个 harness 学习产物：说明核心概念、拆解视觉结构，并给出可用于 ChatGPT Image 2 的图片生成提示词。请输出简洁 JSON。</textarea>
+        <textarea id="run-message" rows="3">根据当前 Mission 的目标直接生成最终产物。不要输出 JSON 或代码块，直接使用 image_generate 工具生成图片。如果需要先整理知识结构再生成，也请在同一次回复中完成。</textarea>
       </label>
       <button id="run-openclaw" class="primary" type="button" ${runningExec ? "disabled" : ""}>
         ${runningExec ? "⏳ 执行中…" : "▶ 执行当前任务"}
