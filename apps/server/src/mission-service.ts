@@ -15,7 +15,7 @@ import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadAgentSystemConfig, renderTemplate, type AgentSystemConfig, type ConfigAgentSpec } from "./system-config.js";
-import { buildOwnerSystemPrompt, buildConversationMessages, buildSummaryRequest, parseMissionBrief, detectBriefInResponse } from "./owner/index.js";
+import { buildOwnerSystemPrompt, buildConversationMessages, buildSummaryRequest, parseMissionBrief, detectBriefInResponse, extractQuestionWithOptions } from "./owner/index.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -99,6 +99,11 @@ export type AgentMessageType =
   | "execution_failed"
   | "review_completed";
 
+export interface ParsedChoice {
+  label: string;
+  value: string;
+}
+
 export interface AgentMessage {
   id: string;
   missionId: string;
@@ -106,6 +111,7 @@ export interface AgentMessage {
   toAgentId?: string;
   type: AgentMessageType;
   content: string;
+  options?: ParsedChoice[];
   createdAt: string;
 }
 
@@ -168,6 +174,17 @@ export interface MissionServiceOptions {
   llm?: LlmService | undefined;
 }
 
+export type StreamEventListener = (event: {
+  type: "token" | "done";
+  content?: string;
+  messageId?: string;
+}) => void;
+
+export interface StreamSubscription {
+  missionId: string;
+  unsubscribe: () => void;
+}
+
 export class InMemoryMissionService {
   private readonly missions = new Map<string, Mission>();
   private readonly tasks = new Map<string, Task>();
@@ -183,6 +200,7 @@ export class InMemoryMissionService {
   private readonly storageFile: string | undefined;
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
+  private readonly streamListeners = new Map<string, Set<StreamEventListener>>();
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
@@ -205,41 +223,22 @@ export class InMemoryMissionService {
 
     this.missions.set(mission.id, mission);
     this.createOwnerAgent(mission.id);
+    this.persist();
 
     if (this.llm) {
       const systemPrompt = this.ownerSystemPrompt();
       const owner = this.agentByRole(mission.id, "owner");
-      try {
-        const response = await this.llm.call([
-          { role: "system", content: systemPrompt },
-          { role: "user", content: input.goal },
-        ]);
-        this.appendMessage({
-          missionId: mission.id,
-          fromAgentId: owner.id,
-          type: "owner_followup",
-          content: response.content,
-        });
-        this.updateAgent(owner.id, {
-          status: "idle",
-          lastAction: "Analyzed user goal and asked clarifying question",
-        });
-      } catch (error) {
-        console.error("[Owner] LLM call failed in createMission:", error instanceof Error ? error.message : String(error));
-        this.appendMessage({
-          missionId: mission.id,
-          fromAgentId: owner.id,
-          type: "owner_followup",
-          content: ownerBrief.summary,
-        });
-        this.updateAgent(owner.id, {
-          status: "idle",
-          lastAction: "LLM failed, used template fallback",
-        });
-      }
+
+      void this.runOwnerLlmWithStreaming({
+        missionId: mission.id,
+        owner,
+        systemPrompt,
+        userMessage: input.goal,
+        isCreation: true,
+        fallbackContent: ownerBrief.summary,
+      });
     }
 
-    this.persist();
     return mission;
   }
 
@@ -307,6 +306,7 @@ export class InMemoryMissionService {
       status: "thinking",
       lastAction: "Processing user follow-up",
     });
+    this.persist();
 
     if (this.llm) {
       const history = this.agentMessagesForMission(mission.id);
@@ -321,67 +321,14 @@ export class InMemoryMissionService {
         llmMessages = buildConversationMessages(systemPrompt, history, message);
       }
 
-      try {
-        const response = await this.llm.call(llmMessages);
-
-        if (detectBriefInResponse(response.content)) {
-          try {
-            const brief = parseMissionBrief(response.content);
-            const currentMission = this.missions.get(mission.id);
-            if (!currentMission) throw new Error("Mission disappeared during LLM call");
-            const updatedMission: Mission = {
-              ...currentMission,
-              brief,
-            };
-            this.missions.set(updatedMission.id, updatedMission);
-            this.appendMessage({
-              missionId: mission.id,
-              fromAgentId: owner.id,
-              type: "mission_brief",
-              content: response.content,
-            });
-            this.updateAgent(owner.id, {
-              status: "idle",
-              lastAction: "Generated MissionBrief from conversation",
-            });
-          } catch (parseError) {
-            console.error("[Owner] MissionBrief parse failed:", parseError instanceof Error ? parseError.message : String(parseError));
-            this.appendMessage({
-              missionId: mission.id,
-              fromAgentId: owner.id,
-              type: "owner_followup",
-              content: response.content,
-            });
-            this.updateAgent(owner.id, {
-              status: "idle",
-              lastAction: "LLM response received but Brief parsing failed",
-            });
-          }
-        } else {
-          this.appendMessage({
-            missionId: mission.id,
-            fromAgentId: owner.id,
-            type: "owner_followup",
-            content: response.content,
-          });
-          this.updateAgent(owner.id, {
-            status: "idle",
-            lastAction: "Asked follow-up question",
-          });
-        }
-      } catch (error) {
-        console.error("[Owner] LLM call failed in continueMission:", error instanceof Error ? error.message : String(error));
-        this.appendMessage({
-          missionId: mission.id,
-          fromAgentId: owner.id,
-          type: "owner_followup",
-          content: deriveOwnerFollowup(message, this.config),
-        });
-        this.updateAgent(owner.id, {
-          status: "idle",
-          lastAction: "LLM failed, used template fallback",
-        });
-      }
+      void this.runOwnerLlmWithStreaming({
+        missionId: mission.id,
+        owner,
+        systemPrompt,
+        llmMessages,
+        isCreation: false,
+        fallbackContent: deriveOwnerFollowup(message, this.config),
+      });
     } else {
       this.appendMessage({
         missionId: mission.id,
@@ -389,9 +336,9 @@ export class InMemoryMissionService {
         type: "owner_followup",
         content: deriveOwnerFollowup(message, this.config),
       });
+      this.persist();
     }
 
-    this.persist();
     const currentMission = this.missions.get(mission.id);
     if (!currentMission) throw new Error("Mission disappeared");
     return currentMission;
@@ -668,6 +615,39 @@ export class InMemoryMissionService {
     return { ui: this.config.ui };
   }
 
+  subscribeToMissionStream(missionId: string, listener: StreamEventListener): StreamSubscription {
+    if (!this.streamListeners.has(missionId)) {
+      this.streamListeners.set(missionId, new Set());
+    }
+    this.streamListeners.get(missionId)!.add(listener);
+
+    return {
+      missionId,
+      unsubscribe: () => {
+        const listeners = this.streamListeners.get(missionId);
+        if (listeners) {
+          listeners.delete(listener);
+          if (listeners.size === 0) {
+            this.streamListeners.delete(missionId);
+          }
+        }
+      },
+    };
+  }
+
+  private notifyStreamListeners(missionId: string, event: Parameters<StreamEventListener>[0]): void {
+    const listeners = this.streamListeners.get(missionId);
+    if (listeners) {
+      for (const listener of listeners) {
+        try {
+          listener(event);
+        } catch (error) {
+          console.error("[MissionService] Stream listener error:", error);
+        }
+      }
+    }
+  }
+
   private createOwnerAgent(missionId: string): WarRoomAgent {
     const existing = [...this.agents.values()].find((agent) => agent.missionId === missionId && agent.role === "owner");
     if (existing) {
@@ -752,7 +732,7 @@ export class InMemoryMissionService {
     return createdAgents;
   }
 
-  private appendMessage(input: Omit<AgentMessage, "id" | "createdAt">): void {
+  private appendMessage(input: Omit<AgentMessage, "id" | "createdAt"> & { options?: ParsedChoice[] }): void {
     const message: AgentMessage = {
       ...input,
       id: createId("message"),
@@ -838,6 +818,118 @@ export class InMemoryMissionService {
     return toolCall;
   }
 
+  private async runOwnerLlmWithStreaming(input: {
+    missionId: string;
+    owner: WarRoomAgent;
+    systemPrompt: string;
+    userMessage?: string;
+    llmMessages?: { role: "system" | "user" | "assistant"; content: string }[];
+    isCreation: boolean;
+    fallbackContent: string;
+  }): Promise<void> {
+    const { missionId, owner, systemPrompt, userMessage, llmMessages, isCreation, fallbackContent } = input;
+
+    const messages = llmMessages || (userMessage ? [
+      { role: "system" as const, content: systemPrompt },
+      { role: "user" as const, content: userMessage },
+    ] : []);
+
+    let fullContent = "";
+    const messageId = createId("message");
+
+    try {
+      const response = await this.llm!.call(messages, {
+        onStream: (token: string) => {
+          fullContent += token;
+          this.notifyStreamListeners(missionId, {
+            type: "token",
+            content: token,
+          });
+        },
+      });
+
+      fullContent = response.content;
+      this.notifyStreamListeners(missionId, {
+        type: "done",
+        messageId,
+      });
+
+      const choiceResult = extractQuestionWithOptions(fullContent);
+      const hasBrief = detectBriefInResponse(fullContent);
+
+      const messageOptions = choiceResult?.options ? { options: choiceResult.options } : undefined;
+
+      if (hasBrief) {
+        try {
+          const brief = parseMissionBrief(fullContent);
+          const currentMission = this.missions.get(missionId);
+          if (!currentMission) throw new Error("Mission disappeared during LLM call");
+          const updatedMission: Mission = {
+            ...currentMission,
+            brief,
+          };
+          this.missions.set(updatedMission.id, updatedMission);
+          this.appendMessage({
+            missionId,
+            fromAgentId: owner.id,
+            type: "mission_brief",
+            content: fullContent,
+            ...messageOptions,
+          });
+          this.updateAgent(owner.id, {
+            status: "idle",
+            lastAction: "Generated MissionBrief from conversation",
+          });
+        } catch (parseError) {
+          console.error("[Owner] MissionBrief parse failed:", parseError instanceof Error ? parseError.message : String(parseError));
+          this.appendMessage({
+            missionId,
+            fromAgentId: owner.id,
+            type: "owner_followup",
+            content: fullContent,
+            ...messageOptions,
+          });
+          this.updateAgent(owner.id, {
+            status: "idle",
+            lastAction: "LLM response received but Brief parsing failed",
+          });
+        }
+      } else {
+        this.appendMessage({
+          missionId,
+          fromAgentId: owner.id,
+          type: "owner_followup",
+          content: fullContent,
+          ...messageOptions,
+        });
+        this.updateAgent(owner.id, {
+          status: "idle",
+          lastAction: isCreation ? "Analyzed user goal and asked clarifying question" : "Asked follow-up question",
+        });
+      }
+
+      this.persist();
+    } catch (error) {
+      console.error("[Owner] LLM call failed:", error instanceof Error ? error.message : String(error));
+      this.notifyStreamListeners(missionId, {
+        type: "done",
+        messageId,
+      });
+
+      this.appendMessage({
+        missionId,
+        fromAgentId: owner.id,
+        type: "owner_followup",
+        content: fallbackContent,
+      });
+      this.updateAgent(owner.id, {
+        status: "idle",
+        lastAction: "LLM failed, used template fallback",
+      });
+      this.persist();
+    }
+  }
+
   private loadFromFile(): void {
     if (!this.storageFile || !existsSync(this.storageFile)) {
       return;
@@ -858,7 +950,13 @@ export class InMemoryMissionService {
     for (const execution of stored.executions) this.executions.set(execution.id, execution);
     for (const agent of stored.agents) this.agents.set(agent.id, agent);
     for (const relation of stored.agentRelations ?? []) this.agentRelations.set(relation.id, relation);
-    for (const message of stored.agentMessages) this.agentMessages.set(message.id, message);
+    for (const message of stored.agentMessages) {
+      const agentMessage: AgentMessage = {
+        ...message,
+        options: (message as any).options,
+      };
+      this.agentMessages.set(message.id, agentMessage);
+    }
     for (const event of stored.taskEvents) this.taskEvents.set(event.id, event);
     for (const call of stored.toolCalls) this.toolCalls.set(call.id, call);
     for (const decision of stored.decisions) this.decisions.set(decision.id, decision);

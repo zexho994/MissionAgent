@@ -8,6 +8,7 @@ export interface LlmCallOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  onStream?: (token: string) => void;
 }
 
 export interface LlmResponse {
@@ -26,4 +27,10 @@ export interface LlmCallStats {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   lastCallAt?: string | undefined;
+}
+
+export interface LlmStreamChunk {
+  type: "token" | "done";
+  content?: string;
+  messageId?: string;
 }

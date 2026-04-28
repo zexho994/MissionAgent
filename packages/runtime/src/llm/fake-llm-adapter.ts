@@ -13,7 +13,7 @@ export class FakeLlmAdapter implements LlmService {
     this.handler = handler;
   }
 
-  async call(messages: LlmMessage[], _options?: LlmCallOptions): Promise<LlmResponse> {
+  async call(messages: LlmMessage[], options?: LlmCallOptions): Promise<LlmResponse> {
     this.callCount += 1;
     this.lastCallAt = new Date().toISOString();
     this.lastMessages = [...messages];
@@ -24,6 +24,12 @@ export class FakeLlmAdapter implements LlmService {
 
     this.totalPromptTokens += promptTokens;
     this.totalCompletionTokens += completionTokens;
+
+    if (options?.onStream) {
+      for (const char of content) {
+        options.onStream(char);
+      }
+    }
 
     return {
       content,

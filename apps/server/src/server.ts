@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
@@ -50,6 +51,34 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, path: string): Promise<void> {
+  if (path.startsWith("/api/missions/") && path.endsWith("/stream")) {
+    const missionId = path.split("/")[3];
+    if (!missionId) {
+      writeJson(res, 400, { error: "Mission ID required" });
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+
+    const subscription = missions.subscribeToMissionStream(missionId, (event) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (event.type === "done") {
+        res.end();
+      }
+    });
+
+    req.on("close", () => {
+      subscription.unsubscribe();
+    });
+
+    return;
+  }
+
   const body = await readJsonBody(req);
   const response = await handleApiRequest(
     {

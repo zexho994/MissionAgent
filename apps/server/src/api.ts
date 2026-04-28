@@ -17,6 +17,42 @@ export interface ApiDependencies {
   openclaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask">;
 }
 
+export interface SseRequest {
+  method: string;
+  path: string;
+  missionId: string;
+}
+
+export interface SseDependencies {
+  missions: InMemoryMissionService;
+}
+
+export function handleSseConnection(
+  request: SseRequest,
+  deps: SseDependencies,
+  onEvent: (event: { data: string }) => void,
+  onComplete: () => void,
+): () => void {
+  const mission = deps.missions.snapshot().missions.find((m) => m.id === request.missionId);
+  if (!mission) {
+    onEvent({ data: JSON.stringify({ error: "Mission not found" }) });
+    onComplete();
+    return () => {};
+  }
+
+  const subscription = deps.missions.subscribeToMissionStream(request.missionId, (event) => {
+    onEvent({ data: JSON.stringify(event) });
+    if (event.type === "done") {
+      onComplete();
+    }
+  });
+
+  return () => {
+    subscription.unsubscribe();
+    onComplete();
+  };
+}
+
 export async function handleApiRequest(
   request: ApiRequest,
   deps: ApiDependencies,

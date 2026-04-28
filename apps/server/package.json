@@ -14,6 +14,10 @@
   },
   "dependencies": {
     "@digitalagent/core": "workspace:*",
-    "@digitalagent/runtime": "workspace:*"
+    "@digitalagent/runtime": "workspace:*",
+    "dotenv": "^17.4.2"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.5"
   }
 }

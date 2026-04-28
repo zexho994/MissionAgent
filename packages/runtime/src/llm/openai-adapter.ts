@@ -23,6 +23,26 @@ interface OpenAiChatResponse {
   };
 }
 
+interface OpenAiStreamChunk {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: Array<{
+    index: number;
+    delta: {
+      content?: string;
+      role?: string;
+    };
+    finish_reason: string | null;
+  }>;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+}
+
 export class OpenAiLlmAdapter implements LlmService {
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -47,6 +67,8 @@ export class OpenAiLlmAdapter implements LlmService {
   async call(messages: LlmMessage[], options?: LlmCallOptions): Promise<LlmResponse> {
     const model = options?.model || this.defaultModel;
     const timeoutMs = options?.timeoutMs || this.timeoutMs;
+    const shouldStream = options?.onStream !== undefined;
+
     const body = {
       model,
       messages: messages.map((message) => ({
@@ -55,6 +77,7 @@ export class OpenAiLlmAdapter implements LlmService {
       })),
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
+      ...(shouldStream ? { stream: true } : {}),
     };
 
     let lastError: Error | undefined;
@@ -78,6 +101,10 @@ export class OpenAiLlmAdapter implements LlmService {
         if (!response.ok) {
           const errorBody = await response.text().catch(() => "unknown error");
           throw new Error(`LLM API error ${response.status}: ${errorBody}`);
+        }
+
+        if (shouldStream) {
+          return await this.handleStreamingResponse(response, options?.onStream!, model);
         }
 
         const data = (await response.json()) as OpenAiChatResponse;
@@ -118,6 +145,82 @@ export class OpenAiLlmAdapter implements LlmService {
     }
 
     throw lastError || new Error("LLM call failed after retries");
+  }
+
+  private async handleStreamingResponse(
+    response: Response,
+    onStream: (token: string) => void,
+    model: string,
+  ): Promise<LlmResponse> {
+    if (!response.body) {
+      throw new Error("Response body is null");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let content = "";
+    let finishReason = "unknown";
+    let promptTokens = 0;
+    let completionTokens = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed === "data: [DONE]") {
+            continue;
+          }
+
+          if (trimmed.startsWith("data: ")) {
+            try {
+              const jsonStr = trimmed.slice(6);
+              const data = JSON.parse(jsonStr) as OpenAiStreamChunk;
+              const delta = data.choices?.[0]?.delta;
+
+              if (delta?.content) {
+                content += delta.content;
+                onStream(delta.content);
+              }
+
+              if (data.choices?.[0]?.finish_reason) {
+                finishReason = data.choices[0].finish_reason;
+              }
+
+              if (data.usage) {
+                promptTokens = data.usage.prompt_tokens || 0;
+                completionTokens = data.usage.completion_tokens || 0;
+              }
+            } catch (parseError) {
+              console.warn("Failed to parse streaming chunk:", parseError);
+            }
+          }
+        }
+      }
+
+      this.callCount += 1;
+      this.lastCallAt = new Date().toISOString();
+      this.totalPromptTokens += promptTokens;
+      this.totalCompletionTokens += completionTokens;
+
+      return {
+        content,
+        model,
+        usage: {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+        },
+        finishReason,
+      };
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   stats(): LlmCallStats {

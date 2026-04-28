@@ -6,6 +6,8 @@ const state = {
   view: "home",
   warTab: "overview",
   popoverOpen: false,
+  streamingMissionId: undefined,
+  pollingInterval: undefined,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -180,7 +182,7 @@ function renderHome() {
       </div>
     </section>
   `;
-  bindChoiceButtons();
+  setTimeout(bindChoiceButtons, 0);
 }
 
 function renderChatContent(data) {
@@ -213,10 +215,15 @@ function renderChatContent(data) {
       parts.push(renderBriefMessage(data));
     } else {
       parts.push(renderConversationMessage(message));
+      // Add choice buttons after owner_followup messages with options
+      if (message.type === "owner_followup" && message.options && message.options.length > 0) {
+        parts.push(renderChoiceButtons(message.options));
+      }
     }
   }
 
-  if (!data.mission.brief) {
+  const ownerThinking = isOwnerThinking();
+  if (!data.mission.brief && ownerThinking) {
     parts.push(`
       <div class="bubble owner thinking">
         <strong>Owner Agent</strong>
@@ -292,10 +299,31 @@ function renderConfirmPanel(data) {
     `;
   }
 
+  // Check if the latest owner message has options
+  const conversationMessages = data.messages.filter(
+    (message) => message.type === "owner_followup" || message.type === "user_message" || message.type === "mission_brief"
+  );
+  const latestOwnerMessage = [...conversationMessages].reverse().find(
+    (message) => message.type === "owner_followup"
+  );
+
+  if (latestOwnerMessage && latestOwnerMessage.options && latestOwnerMessage.options.length > 0) {
+    return `
+      <strong>选择回复或输入自定义内容</strong>
+      <div class="confirm-grid">
+        ${latestOwnerMessage.options.map((option) => `
+          <button type="button" class="choice-option" data-fill-choice="${esc(option.value)}">${esc(option.label)}</button>
+        `).join("")}
+      </div>
+    `;
+  }
+
   return `
-    <strong>用户确认表单区域</strong>
-    <div class="confirm-grid">
-      ${data.mission.constraints.slice(0, 4).map((item) => `<label><input type="checkbox" checked /> ${esc(item)}</label>`).join("")}
+    <strong>输入你的回复</strong>
+    <div class="confirm-options">
+      <span>你可以继续与 Owner 对话</span>
+      <span>Owner 会根据需要追问细节</span>
+      <span>完成后生成 Mission 团队</span>
     </div>
   `;
 }
@@ -474,6 +502,20 @@ function bindChoiceButtons() {
       $("goal").focus();
     });
   });
+  document.querySelectorAll("[data-fill-choice]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const choiceValue = button.dataset.fillChoice;
+      const mission = currentMission();
+      if (!mission || !choiceValue) return;
+
+      // Fill and auto-submit
+      $("goal").value = choiceValue;
+      const form = $("mission-form");
+      if (form) {
+        form.dispatchEvent(new Event('submit'));
+      }
+    });
+  });
   document.querySelectorAll("[data-open-war-room]").forEach((button) => {
     button.addEventListener("click", async () => {
       const mission = currentMission();
@@ -609,11 +651,19 @@ document.addEventListener("submit", async (event) => {
   state.view = "home";
   state.warTab = "overview";
   renderAll();
+
+  // Start SSE streaming
+  const chatStream = $('chat-stream');
+  if (chatStream) {
+    streamOwnerResponse(result.mission.id, chatStream);
+    startPolling();
+  }
 });
 
 $("home-button").addEventListener("click", () => {
   state.view = "home";
   state.popoverOpen = false;
+  stopPolling();
   renderAll();
 });
 
@@ -622,6 +672,7 @@ $("new-chat-button").addEventListener("click", () => {
   state.draftMode = true;
   state.view = "home";
   state.popoverOpen = false;
+  stopPolling();
   renderAll();
 });
 
@@ -672,6 +723,116 @@ function agentStatusLabel(status) {
 function showTopbarError(error) {
   $("openclaw-status").textContent = error instanceof Error ? error.message : String(error);
   $("openclaw-dot").classList.remove("ok");
+}
+
+async function streamOwnerResponse(missionId, container) {
+  if (state.streamingMissionId === missionId) return;
+
+  state.streamingMissionId = missionId;
+  const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
+
+  const responseBubble = container.querySelector('.owner.thinking');
+  if (!responseBubble) {
+    eventSource.close();
+    state.streamingMissionId = undefined;
+    return;
+  }
+
+  const contentEl = responseBubble.querySelector('p');
+  if (!contentEl) {
+    eventSource.close();
+    state.streamingMissionId = undefined;
+    return;
+  }
+
+  contentEl.innerHTML = '<span class="streaming-cursor">▋</span>';
+
+  eventSource.addEventListener('message', (event) => {
+    try {
+      const data = JSON.parse(event.data);
+
+      if (data.error) {
+        console.error('[SSE] Error:', data.error);
+        eventSource.close();
+        state.streamingMissionId = undefined;
+        return;
+      }
+
+      if (data.type === 'token' && data.content) {
+        const cursor = contentEl.querySelector('.streaming-cursor');
+        const text = contentEl.textContent.replace('▋', '') + data.content;
+        contentEl.innerHTML = esc(text) + '<span class="streaming-cursor">▋</span>';
+        const chatStream = $('chat-stream');
+        if (chatStream) chatStream.scrollTop = chatStream.scrollHeight;
+      }
+
+      if (data.type === 'done') {
+        eventSource.close();
+        state.streamingMissionId = undefined;
+        const cursor = contentEl.querySelector('.streaming-cursor');
+        if (cursor) cursor.remove();
+
+        setTimeout(async () => {
+          await refresh();
+        }, 500);
+      }
+    } catch (error) {
+      console.error('[SSE] Parse error:', error);
+    }
+  });
+
+  eventSource.addEventListener('error', (error) => {
+    console.error('[SSE] Connection error:', error);
+    eventSource.close();
+    state.streamingMissionId = undefined;
+    const cursor = contentEl.querySelector('.streaming-cursor');
+    if (cursor) cursor.remove();
+  });
+}
+
+function startPolling() {
+  if (state.pollingInterval) return;
+
+  state.pollingInterval = setInterval(async () => {
+    try {
+      const snapshot = await api('/api/snapshot');
+      const currentData = scoped();
+      const newSnapshot = {
+        ...snapshot,
+        missions: snapshot.missions.filter(m => !state.selectedMissionId || m.id === state.selectedMissionId || state.snapshot.missions.some(sm => sm.id === m.id)),
+      };
+
+      const hasChanges = JSON.stringify(currentData.messages) !== JSON.stringify(newSnapshot.agentMessages.filter(m => m.missionId === state.selectedMissionId)) ||
+                        JSON.stringify(currentData.agents.map(a => a.status)) !== JSON.stringify(newSnapshot.agents.filter(a => a.missionId === state.selectedMissionId).map(a => a.status));
+
+      if (hasChanges) {
+        state.snapshot = newSnapshot;
+        syncSelectedMission();
+        renderAll();
+      }
+    } catch (error) {
+      console.error('[Polling] Error:', error);
+    }
+  }, 2000);
+}
+
+function stopPolling() {
+  if (state.pollingInterval) {
+    clearInterval(state.pollingInterval);
+    state.pollingInterval = undefined;
+  }
+}
+
+function renderChoiceButtons(options) {
+  if (!options || options.length === 0) return '';
+
+  return `
+    <div class="choice-row" style="margin-top: 12px;">
+      ${options.map(option => `
+        <button type="button" data-fill-choice="${esc(option.value)}">${esc(option.label)}</button>
+      `).join('')}
+    </div>
+  `;
 }
 
 refresh().catch(showTopbarError);
