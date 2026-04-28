@@ -60,6 +60,10 @@ export function parseChoices(text: string): ChoiceParseResult {
     textWithoutChoices: text,
   };
 
+  const hasChoiceKeyword = CHOICE_KEYWORDS.some((kw) =>
+    text.toLowerCase().includes(kw.toLowerCase()),
+  );
+
   // Try each pattern to find the best match
   for (const pattern of CHOICE_PATTERNS) {
     const matches = Array.from(text.matchAll(pattern.regex));
@@ -83,7 +87,17 @@ export function parseChoices(text: string): ChoiceParseResult {
         }
       }
 
-      if (choices.length >= 2) {
+      // Accept choices if there's a keyword hint OR if choices are consecutive
+      // (close together in the text, indicating a deliberate list)
+      const isConsecutive = choices.length >= 2 && (() => {
+        const positions = choiceRanges.map(([start]) => start!);
+        for (let i = 1; i < positions.length; i++) {
+          if (positions[i]! - positions[i - 1]! > 200) return false;
+        }
+        return true;
+      })();
+
+      if (choices.length >= 2 && (hasChoiceKeyword || isConsecutive)) {
         // Remove choices from text
         let textWithoutChoices = text;
         for (const [start, end] of choiceRanges.sort((a, b) => b[0]! - a[0]!)) {
