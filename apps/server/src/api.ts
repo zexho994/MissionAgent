@@ -60,13 +60,13 @@ export async function handleApiRequest(
       if (body.constraints !== undefined) {
         createMissionInput.constraints = expectStringArray(body.constraints, "constraints");
       }
-      const mission = deps.missions.createMission(createMissionInput);
+      const mission = await deps.missions.createMission(createMissionInput);
       return json(201, { mission, snapshot: deps.missions.snapshot() });
     }
 
     if (request.method === "POST" && request.path === "/api/missions/continue") {
       const body = expectObject(request.body);
-      const mission = deps.missions.continueMission({
+      const mission = await deps.missions.continueMission({
         missionId: expectString(body.missionId, "missionId"),
         message: expectString(body.message, "message"),
       });

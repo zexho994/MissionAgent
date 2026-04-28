@@ -87,7 +87,7 @@ describe("handleApiRequest", () => {
 
   it("continues an existing mission instead of creating a new one", async () => {
     const missions = new InMemoryMissionService();
-    const mission = missions.createMission({ goal: "学习 harness 并生成知识图" });
+    const mission = await missions.createMission({ goal: "学习 harness 并生成知识图" });
     missions.activateMission({ missionId: mission.id });
 
     const response = await handleApiRequest(
@@ -119,7 +119,7 @@ describe("handleApiRequest", () => {
         return new Promise(() => {});
       },
     };
-    const mission = missions.createMission({
+    const mission = await missions.createMission({
       goal: "Grow Xiaohongshu account",
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
@@ -168,8 +168,6 @@ describe("handleApiRequest", () => {
       { method: "POST", path: "/api/missions/continue", body: { missionId, message: "目标人群是年轻女性" } },
       { missions, openclaw: fakeOpenClaw() },
     );
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
     const confirmResponse = await handleApiRequest(
       { method: "POST", path: "/api/missions/confirm-brief", body: { missionId } },

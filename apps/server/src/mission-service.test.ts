@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 describe("InMemoryMissionService", () => {
-  it("creates a mission with default success metrics from config when not provided", () => {
+  it("creates a mission with default success metrics from config when not provided", async () => {
     const service = new InMemoryMissionService();
 
-    const mission = service.createMission({
+    const mission = await service.createMission({
       goal: "学习 harness 并生成一张知识图",
     });
 
@@ -23,10 +23,10 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.agentMessages).toHaveLength(0);
   });
 
-  it("creates a mission with user-provided metrics and constraints", () => {
+  it("creates a mission with user-provided metrics and constraints", async () => {
     const service = new InMemoryMissionService();
 
-    const mission = service.createMission({
+    const mission = await service.createMission({
       goal: "Grow Xiaohongshu account to 1000 followers",
       successMetrics: ["followers >= 1000"],
       constraints: ["human approval before publishing"],
@@ -36,10 +36,10 @@ describe("InMemoryMissionService", () => {
     expect(mission.constraints).toEqual(["human approval before publishing"]);
   });
 
-  it("activates a mission to create team, agents, and first task", () => {
+  it("activates a mission to create team, agents, and first task", async () => {
     const service = new InMemoryMissionService();
 
-    const mission = service.createMission({
+    const mission = await service.createMission({
       goal: "Create a harness learning image",
       successMetrics: ["core knowledge map", "image prompt"],
       constraints: ["concise"],
@@ -62,9 +62,9 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.tasks[0]?.title).toBe("Define knowledge structure and first image production plan");
   });
 
-  it("does not re-activate a mission that already has tasks", () => {
+  it("does not re-activate a mission that already has tasks", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({ goal: "Test goal" });
+    const mission = await service.createMission({ goal: "Test goal" });
     service.activateMission({ missionId: mission.id });
     const firstTaskCount = service.snapshot().tasks.length;
 
@@ -73,16 +73,16 @@ describe("InMemoryMissionService", () => {
     expect(service.snapshot().tasks).toHaveLength(firstTaskCount);
   });
 
-  it("keeps war room state isolated between multiple missions", () => {
+  it("keeps war room state isolated between multiple missions", async () => {
     const service = new InMemoryMissionService();
 
-    const first = service.createMission({
+    const first = await service.createMission({
       goal: "First mission",
       successMetrics: ["first metric"],
       constraints: ["first constraint"],
     });
     service.activateMission({ missionId: first.id });
-    const second = service.createMission({
+    const second = await service.createMission({
       goal: "Second mission",
       successMetrics: ["second metric"],
       constraints: ["second constraint"],
@@ -97,9 +97,9 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.tasks.filter((task) => task.missionId === second.id)).toHaveLength(1);
   });
 
-  it("links worker agent activity to tasks, tool calls, and artifacts", () => {
+  it("links worker agent activity to tasks, tool calls, and artifacts", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({ goal: "Create a harness learning image" });
+    const mission = await service.createMission({ goal: "Create a harness learning image" });
     service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
@@ -129,12 +129,12 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.artifacts.some((artifact) => artifact.taskId === task.id)).toBe(true);
   });
 
-  it("persists mission state to a local JSON file and reloads it", () => {
+  it("persists mission state to a local JSON file and reloads it", async () => {
     const dir = mkdtempSync(join(tmpdir(), "digitalagent-store-"));
     try {
       const storageFile = join(dir, "mission-store.json");
       const service = new InMemoryMissionService({ storageFile });
-      const mission = service.createMission({ goal: "学习 harness 并生成知识图" });
+      const mission = await service.createMission({ goal: "学习 harness 并生成知识图" });
       service.activateMission({ missionId: mission.id });
 
       const reloaded = new InMemoryMissionService({ storageFile });
@@ -149,12 +149,12 @@ describe("InMemoryMissionService", () => {
     }
   });
 
-  it("continues an existing mission conversation without creating a new mission", () => {
+  it("continues an existing mission conversation without creating a new mission", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({ goal: "学习 harness 并生成知识图" });
+    const mission = await service.createMission({ goal: "学习 harness 并生成知识图" });
     service.activateMission({ missionId: mission.id });
 
-    service.continueMission({
+    await service.continueMission({
       missionId: mission.id,
       message: "图片风格要更像像素头像",
     });
@@ -165,9 +165,9 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.agentMessages.some((message) => message.type === "owner_followup" && message.content.includes("当前 Mission"))).toBe(true);
   });
 
-  it("submits an execution artifact and creates a review", () => {
+  it("submits an execution artifact and creates a review", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({
+    const mission = await service.createMission({
       goal: "Grow Xiaohongshu account",
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
@@ -201,9 +201,9 @@ describe("InMemoryMissionService", () => {
     expect(service.snapshot().decisions[0]?.decision).toBe("approve");
   });
 
-  it("tracks failed executions without hiding the error", () => {
+  it("tracks failed executions without hiding the error", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({
+    const mission = await service.createMission({
       goal: "Grow Xiaohongshu account",
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
@@ -227,9 +227,9 @@ describe("InMemoryMissionService", () => {
     expect(service.snapshot().agentMessages.at(-1)?.type).toBe("execution_failed");
   });
 
-  it("rejects artifacts with empty or missing OpenClaw output", () => {
+  it("rejects artifacts with empty or missing OpenClaw output", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({
+    const mission = await service.createMission({
       goal: "Generate a marketing image",
       successMetrics: ["image produced"],
       constraints: ["human approval before publishing"],
@@ -254,9 +254,9 @@ describe("InMemoryMissionService", () => {
     expect(service.snapshot().tasks[0]?.status).toBe("failed");
   });
 
-  it("can retry a task after reviewer requests revision", () => {
+  it("can retry a task after reviewer requests revision", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({
+    const mission = await service.createMission({
       goal: "Generate a learning image",
       successMetrics: ["image prompt"],
       constraints: ["concise"],
@@ -296,12 +296,10 @@ describe("InMemoryMissionService", () => {
     const fake = new FakeLlmAdapter(() => "请问你的目标人群是谁？");
     const service = new InMemoryMissionService({ llm: fake });
 
-    const mission = service.createMission({ goal: "运营小红书账号" });
+    const mission = await service.createMission({ goal: "运营小红书账号" });
 
     expect(mission.goal).toBe("运营小红书账号");
     expect(fake.stats().totalCalls).toBe(1);
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
 
     const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
     expect(messages.some((message) => message.type === "owner_followup" && message.content.includes("目标人群"))).toBe(true);
@@ -324,14 +322,12 @@ describe("InMemoryMissionService", () => {
     });
     const service = new InMemoryMissionService({ llm: fake });
 
-    const mission = service.createMission({ goal: "运营小红书账号" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await service.createMission({ goal: "运营小红书账号" });
 
-    service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await service.continueMission({ missionId: service.snapshot().missions[0]!.id, message: "目标人群是年轻女性" });
 
     const snapshot = service.snapshot();
-    const updatedMission = snapshot.missions.find((m) => m.id === mission.id);
+    const updatedMission = snapshot.missions[0];
     expect(updatedMission?.brief).toBeDefined();
     expect(updatedMission?.brief?.goal).toBe("运营小红书账号到1000粉丝");
     expect(updatedMission?.brief?.successMetrics).toEqual(["followers >= 1000"]);
@@ -347,29 +343,68 @@ describe("InMemoryMissionService", () => {
     }));
     const service = new InMemoryMissionService({ llm: fake });
 
-    const mission = service.createMission({ goal: "运营小红书账号" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await service.createMission({ goal: "运营小红书账号" });
 
-    service.continueMission({ missionId: mission.id, message: "补充信息" });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await service.continueMission({ missionId: service.snapshot().missions[0]!.id, message: "补充信息" });
 
-    const withBrief = service.snapshot().missions.find((m) => m.id === mission.id);
+    const withBrief = service.snapshot().missions[0];
     if (!withBrief?.brief) throw new Error("brief should exist");
 
-    const confirmed = service.confirmBrief({ missionId: mission.id });
+    const confirmed = service.confirmBrief({ missionId: withBrief.id });
 
     expect(confirmed.briefConfirmed).toBe(true);
     expect(confirmed.successMetrics).toEqual(["followers >= 1000"]);
     expect(confirmed.constraints).toEqual(["human approval"]);
   });
 
-  it("falls back to template response when LLM is not configured", () => {
+  it("falls back to template response when LLM is not configured", async () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({ goal: "运营小红书账号" });
+    const mission = await service.createMission({ goal: "运营小红书账号" });
 
-    service.continueMission({ missionId: mission.id, message: "补充信息" });
+    await service.continueMission({ missionId: mission.id, message: "补充信息" });
 
     const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
     expect(messages.some((message) => message.type === "owner_followup" && message.content.includes("补充信息"))).toBe(true);
+  });
+
+  it("forces summary request when maxGatheringTurns is reached", async () => {
+    let callCount = 0;
+    const fake = new FakeLlmAdapter(() => {
+      callCount += 1;
+      if (callCount <= 2) return "请补充更多细节";
+      return JSON.stringify({
+        goal: "运营小红书账号",
+        scope: "小红书",
+        constraints: [],
+        successMetrics: ["运营完成"],
+        keyAssumptions: [],
+      });
+    });
+    const service = new InMemoryMissionService({ llm: fake });
+
+    await service.createMission({ goal: "运营小红书账号" });
+    const missionId = service.snapshot().missions[0]!.id;
+
+    await service.continueMission({ missionId, message: "补充1" });
+    await service.continueMission({ missionId, message: "补充2" });
+    await service.continueMission({ missionId, message: "补充3" });
+    await service.continueMission({ missionId, message: "补充4" });
+    await service.continueMission({ missionId, message: "补充5" });
+
+    const snapshot = service.snapshot();
+    expect(snapshot.missions[0]?.brief).toBeDefined();
+  });
+
+  it("falls back to template when LLM call fails", async () => {
+    const failingLlm = {
+      call: async () => { throw new Error("LLM unavailable"); },
+      stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+    };
+    const service = new InMemoryMissionService({ llm: failingLlm as any });
+
+    const mission = await service.createMission({ goal: "运营小红书账号" });
+
+    const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
+    expect(messages.some((message) => message.type === "owner_followup")).toBe(true);
   });
 });

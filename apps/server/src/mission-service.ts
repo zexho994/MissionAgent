@@ -15,7 +15,7 @@ import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadAgentSystemConfig, renderTemplate, type AgentSystemConfig, type ConfigAgentSpec } from "./system-config.js";
-import { buildOwnerSystemPrompt, buildConversationMessages, parseMissionBrief, detectBriefInResponse } from "./owner/index.js";
+import { buildOwnerSystemPrompt, buildConversationMessages, buildSummaryRequest, parseMissionBrief, detectBriefInResponse } from "./owner/index.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -191,7 +191,7 @@ export class InMemoryMissionService {
     this.loadFromFile();
   }
 
-  createMission(input: CreateMissionRequest): Mission {
+  async createMission(input: CreateMissionRequest): Promise<Mission> {
     const ownerBrief = deriveOwnerBrief(input.goal, this.config);
     const mission = createMission({
       goal: input.goal,
@@ -209,10 +209,11 @@ export class InMemoryMissionService {
     if (this.llm) {
       const systemPrompt = this.ownerSystemPrompt();
       const owner = this.agentByRole(mission.id, "owner");
-      this.llm.call([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: input.goal },
-      ]).then((response) => {
+      try {
+        const response = await this.llm.call([
+          { role: "system", content: systemPrompt },
+          { role: "user", content: input.goal },
+        ]);
         this.appendMessage({
           missionId: mission.id,
           fromAgentId: owner.id,
@@ -223,8 +224,8 @@ export class InMemoryMissionService {
           status: "idle",
           lastAction: "Analyzed user goal and asked clarifying question",
         });
-        this.persist();
-      }).catch(() => {
+      } catch (error) {
+        console.error("[Owner] LLM call failed in createMission:", error instanceof Error ? error.message : String(error));
         this.appendMessage({
           missionId: mission.id,
           fromAgentId: owner.id,
@@ -233,10 +234,9 @@ export class InMemoryMissionService {
         });
         this.updateAgent(owner.id, {
           status: "idle",
-          lastAction: "Generated initial mission brief (LLM fallback)",
+          lastAction: "LLM failed, used template fallback",
         });
-        this.persist();
-      });
+      }
     }
 
     this.persist();
@@ -285,7 +285,7 @@ export class InMemoryMissionService {
     return mission;
   }
 
-  continueMission(input: ContinueMissionRequest): Mission {
+  async continueMission(input: ContinueMissionRequest): Promise<Mission> {
     const message = input.message.trim();
     if (!message) {
       throw new Error("Mission continuation message is required");
@@ -311,14 +311,26 @@ export class InMemoryMissionService {
     if (this.llm) {
       const history = this.agentMessagesForMission(mission.id);
       const systemPrompt = this.ownerSystemPrompt();
-      const llmMessages = buildConversationMessages(systemPrompt, history, message);
+      const userTurns = history.filter((msg) => msg.type === "user_message").length;
+      const maxTurns = this.config.owner.prompts?.maxGatheringTurns ?? 5;
 
-      this.llm.call(llmMessages).then((response) => {
+      let llmMessages;
+      if (userTurns >= maxTurns) {
+        llmMessages = buildSummaryRequest(systemPrompt, history);
+      } else {
+        llmMessages = buildConversationMessages(systemPrompt, history, message);
+      }
+
+      try {
+        const response = await this.llm.call(llmMessages);
+
         if (detectBriefInResponse(response.content)) {
           try {
             const brief = parseMissionBrief(response.content);
+            const currentMission = this.missions.get(mission.id);
+            if (!currentMission) throw new Error("Mission disappeared during LLM call");
             const updatedMission: Mission = {
-              ...mission,
+              ...currentMission,
               brief,
             };
             this.missions.set(updatedMission.id, updatedMission);
@@ -332,7 +344,8 @@ export class InMemoryMissionService {
               status: "idle",
               lastAction: "Generated MissionBrief from conversation",
             });
-          } catch {
+          } catch (parseError) {
+            console.error("[Owner] MissionBrief parse failed:", parseError instanceof Error ? parseError.message : String(parseError));
             this.appendMessage({
               missionId: mission.id,
               fromAgentId: owner.id,
@@ -341,7 +354,7 @@ export class InMemoryMissionService {
             });
             this.updateAgent(owner.id, {
               status: "idle",
-              lastAction: "Responded to user follow-up",
+              lastAction: "LLM response received but Brief parsing failed",
             });
           }
         } else {
@@ -356,8 +369,8 @@ export class InMemoryMissionService {
             lastAction: "Asked follow-up question",
           });
         }
-        this.persist();
-      }).catch(() => {
+      } catch (error) {
+        console.error("[Owner] LLM call failed in continueMission:", error instanceof Error ? error.message : String(error));
         this.appendMessage({
           missionId: mission.id,
           fromAgentId: owner.id,
@@ -366,10 +379,9 @@ export class InMemoryMissionService {
         });
         this.updateAgent(owner.id, {
           status: "idle",
-          lastAction: "Follow-up response (LLM fallback)",
+          lastAction: "LLM failed, used template fallback",
         });
-        this.persist();
-      });
+      }
     } else {
       this.appendMessage({
         missionId: mission.id,
@@ -380,7 +392,9 @@ export class InMemoryMissionService {
     }
 
     this.persist();
-    return mission;
+    const currentMission = this.missions.get(mission.id);
+    if (!currentMission) throw new Error("Mission disappeared");
+    return currentMission;
   }
 
   confirmBrief(input: { missionId: string }): Mission {

@@ -502,6 +502,15 @@ function bindChoiceButtons() {
       renderAll();
     });
   });
+  const ownerThinking = isOwnerThinking();
+  const form = $("mission-form");
+  if (form) {
+    const submitBtn = form.querySelector("button[type=submit]");
+    if (submitBtn) {
+      submitBtn.disabled = ownerThinking;
+      submitBtn.textContent = ownerThinking ? "Owner 正在思考..." : (currentMission() ? "补充给 Owner" : "发送给 Owner");
+    }
+  }
 }
 
 function defaultGoal(data) {
@@ -536,6 +545,13 @@ function uiConfig() {
     throw new Error("UI config is not loaded");
   }
   return state.config.ui;
+}
+
+function isOwnerThinking() {
+  const data = scoped();
+  if (!data.mission) return false;
+  const owner = data.agents.find((agent) => agent.role === "owner");
+  return owner?.status === "thinking";
 }
 
 function shortAgentName(name) {
