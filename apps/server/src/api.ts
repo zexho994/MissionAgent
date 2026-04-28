@@ -17,42 +17,6 @@ export interface ApiDependencies {
   openclaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask">;
 }
 
-export interface SseRequest {
-  method: string;
-  path: string;
-  missionId: string;
-}
-
-export interface SseDependencies {
-  missions: InMemoryMissionService;
-}
-
-export function handleSseConnection(
-  request: SseRequest,
-  deps: SseDependencies,
-  onEvent: (event: { data: string }) => void,
-  onComplete: () => void,
-): () => void {
-  const mission = deps.missions.snapshot().missions.find((m) => m.id === request.missionId);
-  if (!mission) {
-    onEvent({ data: JSON.stringify({ error: "Mission not found" }) });
-    onComplete();
-    return () => {};
-  }
-
-  const subscription = deps.missions.subscribeToMissionStream(request.missionId, (event) => {
-    onEvent({ data: JSON.stringify(event) });
-    if (event.type === "done") {
-      onComplete();
-    }
-  });
-
-  return () => {
-    subscription.unsubscribe();
-    onComplete();
-  };
-}
-
 export async function handleApiRequest(
   request: ApiRequest,
   deps: ApiDependencies,
@@ -111,10 +75,47 @@ export async function handleApiRequest(
 
     if (request.method === "POST" && request.path === "/api/missions/activate") {
       const body = expectObject(request.body);
-      const mission = deps.missions.activateMission({
+      const mission = await deps.missions.activateMissionWithHR({
         missionId: expectString(body.missionId, "missionId"),
       });
       return json(200, { mission, snapshot: deps.missions.snapshot() });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/negotiate/start") {
+      const body = expectObject(request.body);
+      const proposal = await deps.missions.startNegotiation({
+        missionId: expectString(body.missionId, "missionId"),
+      });
+      return json(200, { proposal, snapshot: deps.missions.snapshot() });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/negotiate/respond") {
+      const body = expectObject(request.body);
+      const result = await deps.missions.respondToNegotiation({
+        missionId: expectString(body.missionId, "missionId"),
+        feedback: expectString(body.feedback, "feedback"),
+      });
+      return json(200, { ...result, snapshot: deps.missions.snapshot() });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/negotiate/confirm") {
+      const body = expectObject(request.body);
+      const mission = deps.missions.confirmNegotiation({
+        missionId: expectString(body.missionId, "missionId"),
+      });
+      return json(200, { mission, snapshot: deps.missions.snapshot() });
+    }
+
+    if (request.method === "GET" && request.path.startsWith("/api/missions/") && request.path.endsWith("/negotiation")) {
+      const missionId = request.path.split("/")[3];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      const negotiation = deps.missions.getNegotiation({ missionId });
+      if (!negotiation) {
+        return json(404, { error: "No active negotiation for this mission" });
+      }
+      return json(200, { negotiation });
     }
 
     if (request.method === "POST" && request.path === "/api/missions/confirm-brief") {
@@ -191,7 +192,7 @@ function expectString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${field} must be a non-empty string`);
   }
-  return value;
+  return value.trim();
 }
 
 function expectStringArray(value: unknown, field: string): string[] {
