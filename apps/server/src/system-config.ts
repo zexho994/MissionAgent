@@ -3,6 +3,12 @@ import { join } from "node:path";
 
 export interface AgentSystemConfig {
   owner: {
+    prompts?: {
+      systemPrompt: string;
+      gatheringInstruction: string;
+      briefSchema: string;
+      maxGatheringTurns: number;
+    };
     brief: {
       summaryTemplate: string;
       successMetrics: string[];

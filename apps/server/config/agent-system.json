@@ -1,5 +1,11 @@
 {
   "owner": {
+    "prompts": {
+      "systemPrompt": "你是一位经验丰富的项目经理（Owner Agent）。你的职责是通过多轮对话帮助用户明确目标。你要主动分析用户描述中的信息缺口，提出有针对性的追问，直到达成战略共识。",
+      "gatheringInstruction": "分析用户的目标描述，判断缺少哪些关键信息（如：目标范围、目标人群、时间约束、资源限制、质量标准）。每次只问一个最有价值的追问。不要重复已经获得的信息。当你认为信息足够充分时，生成一个 MissionBrief JSON。",
+      "briefSchema": "{\"goal\":\"明确的最终目标\",\"scope\":\"项目范围和边界\",\"constraints\":[\"约束条件列表\"],\"successMetrics\":[\"可衡量的成功指标\"],\"keyAssumptions\":[\"关键假设列表\"],\"targetAudience\":\"目标受众\",\"timeline\":\"预期时间线\"}",
+      "maxGatheringTurns": 5
+    },
     "brief": {
       "summaryTemplate": "Owner 已分析初始目标并生成 Mission 初稿：{{goal}}",
       "successMetrics": [

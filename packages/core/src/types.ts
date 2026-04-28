@@ -11,8 +11,8 @@ export interface MissionBrief {
   constraints: string[];
   successMetrics: string[];
   keyAssumptions: string[];
-  targetAudience?: string;
-  timeline?: string;
+  targetAudience?: string | undefined;
+  timeline?: string | undefined;
 }
 
 export interface Mission {
