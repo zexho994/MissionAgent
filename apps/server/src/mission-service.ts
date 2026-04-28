@@ -14,8 +14,15 @@ import {
 import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { loadAgentSystemConfig, renderTemplate, type AgentSystemConfig, type ConfigAgentSpec } from "./system-config.js";
-import { buildOwnerSystemPrompt, buildConversationMessages, buildSummaryRequest, parseMissionBrief, detectBriefInResponse, extractQuestionWithOptions } from "./owner/index.js";
+import { loadAgentSystemConfig, type AgentSystemConfig } from "./system-config.js";
+import { buildOwnerSystemPrompt, buildConversationMessages, buildSummaryRequest } from "./owner/index.js";
+import type { TeamProposal } from "./hr-agent.js";
+import { NegotiationManager, type NegotiationSummary } from "./negotiation-manager.js";
+import { planMissionTeam, matcherFor, type MissionTeamPlan } from "./team-planning.js";
+import { evaluateArtifactQuality } from "./artifact-evaluation.js";
+import { activateWithHRAgent } from "./hr-activation.js";
+import { ensureTaskRunning, deriveOwnerBrief, deriveOwnerFollowup } from "./mission-helpers.js";
+import { runOwnerLlmStreaming } from "./owner-streaming.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -76,6 +83,11 @@ export interface WarRoomAgent {
   lastAction: string;
   avatarSeed: string;
   sortOrder: number;
+  toolPermissions?: string[];
+  budget?: {
+    maxRuntimeMinutes: number;
+    maxTasks: number;
+  };
 }
 
 export interface AgentRelation {
@@ -201,12 +213,30 @@ export class InMemoryMissionService {
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
   private readonly streamListeners = new Map<string, Set<StreamEventListener>>();
+  private negotiationManager: NegotiationManager | undefined;
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
     this.loadFromFile();
+  }
+
+  private getNegotiationManager(): NegotiationManager {
+    if (!this.llm) {
+      throw new Error("LLM is required for negotiation");
+    }
+    if (!this.negotiationManager) {
+      this.negotiationManager = new NegotiationManager({
+        llm: this.llm,
+        config: this.config,
+        agents: this.agents,
+        agentRelations: this.agentRelations,
+        tasks: this.tasks,
+        agentMessages: this.agentMessages,
+      });
+    }
+    return this.negotiationManager;
   }
 
   async createMission(input: CreateMissionRequest): Promise<Mission> {
@@ -282,6 +312,49 @@ export class InMemoryMissionService {
     this.createMissionTeam(mission.id, initialTask.id, teamPlan);
     this.persist();
     return mission;
+  }
+
+  async activateMissionWithHR(input: ActivateMissionRequest): Promise<Mission> {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
+    if (existingTask) {
+      return mission;
+    }
+
+    if (!this.llm || !mission.brief) {
+      return this.activateMission(input);
+    }
+
+    try {
+      const result = await activateWithHRAgent(mission, this.llm);
+
+      this.tasks.set(result.task.id, result.task);
+
+      for (const agent of result.agents) {
+        this.agents.set(agent.id, agent);
+      }
+      for (const relation of result.relations) {
+        this.agentRelations.set(relation.id, relation);
+      }
+      for (const msg of result.messages) {
+        this.appendMessage(msg);
+      }
+
+      const owner = this.agentByRole(mission.id, "owner");
+      this.updateAgent(owner.id, {
+        status: "idle",
+        lastAction: "Team assembled by HR Agent via LLM",
+      });
+
+      this.persist();
+      return this.missions.get(mission.id)!;
+    } catch (error) {
+      console.error("[MissionService] HR-based activation failed, falling back to keyword:", error instanceof Error ? error.message : String(error));
+      return this.activateMission(input);
+    }
   }
 
   async continueMission(input: ContinueMissionRequest): Promise<Mission> {
@@ -615,6 +688,40 @@ export class InMemoryMissionService {
     return { ui: this.config.ui };
   }
 
+  async startNegotiation(input: { missionId: string }): Promise<TeamProposal> {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const result = await this.getNegotiationManager().startNegotiation(input, mission);
+    this.persist();
+    return result;
+  }
+
+  async respondToNegotiation(input: { missionId: string; feedback: string }): Promise<{ proposal: TeamProposal; summary?: NegotiationSummary }> {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const result = await this.getNegotiationManager().respondToNegotiation(input, mission);
+    this.persist();
+    return result;
+  }
+
+  confirmNegotiation(input: { missionId: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    this.getNegotiationManager().confirmNegotiation(input, mission);
+    this.persist();
+    return this.missions.get(mission.id)!;
+  }
+
+  getNegotiation(input: { missionId: string }): { proposal: TeamProposal; previousFeedback: string[] } | undefined {
+    return this.negotiationManager?.getNegotiation(input);
+  }
+
   subscribeToMissionStream(missionId: string, listener: StreamEventListener): StreamSubscription {
     if (!this.streamListeners.has(missionId)) {
       this.streamListeners.set(missionId, new Set());
@@ -827,107 +934,22 @@ export class InMemoryMissionService {
     isCreation: boolean;
     fallbackContent: string;
   }): Promise<void> {
-    const { missionId, owner, systemPrompt, userMessage, llmMessages, isCreation, fallbackContent } = input;
-
-    const messages = llmMessages || (userMessage ? [
-      { role: "system" as const, content: systemPrompt },
-      { role: "user" as const, content: userMessage },
-    ] : []);
-
-    let fullContent = "";
-    const messageId = createId("message");
-
-    try {
-      const response = await this.llm!.call(messages, {
-        onStream: (token: string) => {
-          fullContent += token;
-          this.notifyStreamListeners(missionId, {
-            type: "token",
-            content: token,
-          });
-        },
-      });
-
-      fullContent = response.content;
-      this.notifyStreamListeners(missionId, {
-        type: "done",
-        messageId,
-      });
-
-      const choiceResult = extractQuestionWithOptions(fullContent);
-      const hasBrief = detectBriefInResponse(fullContent);
-
-      const messageOptions = choiceResult?.options ? { options: choiceResult.options } : undefined;
-
-      if (hasBrief) {
-        try {
-          const brief = parseMissionBrief(fullContent);
-          const currentMission = this.missions.get(missionId);
-          if (!currentMission) throw new Error("Mission disappeared during LLM call");
-          const updatedMission: Mission = {
-            ...currentMission,
-            brief,
-          };
-          this.missions.set(updatedMission.id, updatedMission);
-          this.appendMessage({
-            missionId,
-            fromAgentId: owner.id,
-            type: "mission_brief",
-            content: fullContent,
-            ...messageOptions,
-          });
-          this.updateAgent(owner.id, {
-            status: "idle",
-            lastAction: "Generated MissionBrief from conversation",
-          });
-        } catch (parseError) {
-          console.error("[Owner] MissionBrief parse failed:", parseError instanceof Error ? parseError.message : String(parseError));
-          this.appendMessage({
-            missionId,
-            fromAgentId: owner.id,
-            type: "owner_followup",
-            content: fullContent,
-            ...messageOptions,
-          });
-          this.updateAgent(owner.id, {
-            status: "idle",
-            lastAction: "LLM response received but Brief parsing failed",
-          });
-        }
-      } else {
-        this.appendMessage({
-          missionId,
-          fromAgentId: owner.id,
-          type: "owner_followup",
-          content: fullContent,
-          ...messageOptions,
-        });
-        this.updateAgent(owner.id, {
-          status: "idle",
-          lastAction: isCreation ? "Analyzed user goal and asked clarifying question" : "Asked follow-up question",
-        });
-      }
-
-      this.persist();
-    } catch (error) {
-      console.error("[Owner] LLM call failed:", error instanceof Error ? error.message : String(error));
-      this.notifyStreamListeners(missionId, {
-        type: "done",
-        messageId,
-      });
-
-      this.appendMessage({
-        missionId,
-        fromAgentId: owner.id,
-        type: "owner_followup",
-        content: fallbackContent,
-      });
-      this.updateAgent(owner.id, {
-        status: "idle",
-        lastAction: "LLM failed, used template fallback",
-      });
-      this.persist();
-    }
+    await runOwnerLlmStreaming(this.llm!, {
+      missionId: input.missionId,
+      ownerId: input.owner.id,
+      systemPrompt: input.systemPrompt,
+      userMessage: input.userMessage,
+      llmMessages: input.llmMessages,
+      isCreation: input.isCreation,
+      fallbackContent: input.fallbackContent,
+    }, {
+      getMission: (id) => this.missions.get(id),
+      setMission: (m) => this.missions.set(m.id, m),
+      appendMessage: (msg) => this.appendMessage(msg as any),
+      updateAgent: (id, patch) => this.updateAgent(id, patch as any),
+      notifyStream: (id, event) => this.notifyStreamListeners(id, event as any),
+      persist: () => this.persist(),
+    });
   }
 
   private loadFromFile(): void {
@@ -973,215 +995,4 @@ export class InMemoryMissionService {
     };
     writeFileSync(this.storageFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   }
-}
-
-function ensureTaskRunning(task: Task): Task {
-  if (task.status === "running") {
-    return task;
-  }
-  if (task.status === "revision_needed") {
-    const updated = transitionTask(task, { type: "task.updated" });
-    const queued = transitionTask(updated, { type: "dependencies.met" });
-    return transitionTask(queued, { type: "worker.assigned", agentInstanceId: "openclaw_runner" });
-  }
-  if (task.status !== "draft") {
-    throw new Error(`Task cannot be executed from status: ${task.status}`);
-  }
-
-  const ready = transitionTask(task, { type: "contract.completed" });
-  const queued = transitionTask(ready, { type: "dependencies.met" });
-  return transitionTask(queued, { type: "worker.assigned", agentInstanceId: "openclaw_runner" });
-}
-
-interface MissionTeamPlan {
-  initialTaskTitle: string;
-  initialTaskObjective: string;
-  agents: TeamAgentSpec[];
-  relations: TeamRelationSpec[];
-}
-
-interface TeamAgentSpec extends ConfigAgentSpec {
-  sortOrder: number;
-}
-
-interface TeamRelationSpec {
-  fromRole: string;
-  toRole: string;
-  label: string;
-  status: AgentRelation["status"];
-}
-
-function planMissionTeam(goal: string, config: AgentSystemConfig): MissionTeamPlan {
-  const normalized = goal.toLowerCase();
-  const matchedRules = config.teamPlanner.rules.filter((rule) =>
-    rule.keywords.some((keyword) => normalized.includes(keyword.toLowerCase())),
-  );
-  const matchedRuleIds = new Set(matchedRules.map((rule) => rule.id));
-  const agents: TeamAgentSpec[] = [
-    ...config.teamPlanner.baseAgents.map((agent) => ({ ...agent, sortOrder: 0 })),
-    ...matchedRules.map((rule) => ({ ...rule.agent, sortOrder: 0 })),
-  ];
-
-  if (matchedRules.length === 0) {
-    agents.push({ ...config.teamPlanner.fallbackAgent, sortOrder: 0 });
-  }
-
-  agents.push({ ...config.teamPlanner.reviewAgent, sortOrder: 0 });
-
-  agents.forEach((agent, index) => {
-    agent.sortOrder = index;
-  });
-
-  const relations: TeamRelationSpec[] = [];
-  for (let i = 0; i < agents.length - 1; i += 1) {
-    const from = agents[i];
-    const to = agents[i + 1];
-    if (!from || !to) continue;
-    relations.push({
-      fromRole: from.role,
-      toRole: to.role,
-      label: relationLabel(from.role, to.role, config),
-      status: i === 0 ? "active" : "waiting",
-    });
-  }
-
-  const initialTask = initialTaskFor(matchedRuleIds, config);
-  return {
-    initialTaskTitle: initialTask.title,
-    initialTaskObjective: initialTask.objective,
-    agents,
-    relations,
-  };
-}
-
-function relationLabel(fromRole: string, toRole: string, config: AgentSystemConfig): string {
-  const match = config.teamPlanner.relationLabels.find((candidate) => {
-    if (candidate.fromRole && candidate.fromRole !== fromRole) return false;
-    if (candidate.toRole && candidate.toRole !== toRole) return false;
-    if (candidate.fromRoleIncludes && !fromRole.includes(candidate.fromRoleIncludes)) return false;
-    return Boolean(candidate.fromRole || candidate.toRole || candidate.fromRoleIncludes);
-  });
-  return match?.label ?? config.teamPlanner.relationLabels.at(-1)?.label ?? "relation";
-}
-
-function initialTaskFor(matchedRuleIds: Set<string>, config: AgentSystemConfig): { title: string; objective: string } {
-  const match = config.teamPlanner.initialTasks.find((task) =>
-    task.requires.every((required) => matchedRuleIds.has(required)),
-  );
-  if (!match) {
-    throw new Error("No matching initial task config");
-  }
-  return match;
-}
-
-function matcherFor(parts: string[]): RegExp {
-  return new RegExp(parts.map(escapeRegExp).join("|"), "i");
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function evaluateArtifactQuality(
-  content: Record<string, unknown>,
-  mission: Mission,
-): { score: number; decision: "approve" | "revise" | "reject"; comments: string[] } {
-  const comments: string[] = [];
-  let score = 0.5;
-  let decision: "approve" | "revise" | "reject" = "approve";
-
-  const openclaw = content.openclaw as Record<string, unknown> | undefined;
-  if (!openclaw) {
-    return { score: 0.1, decision: "reject", comments: ["Artifact has no OpenClaw output"] };
-  }
-
-  const payloads = openclaw.payloads as Array<Record<string, unknown>> | undefined;
-  const agentText = payloads?.[0]?.text as string | undefined;
-
-  // Check 1: Did the agent produce actual text output?
-  if (!agentText || agentText.trim().length < 20) {
-    return { score: 0.1, decision: "reject", comments: ["Agent output is empty or too short"] };
-  }
-  score += 0.1;
-
-  // Check 2: Does it relate to the mission goal?
-  const goalLower = mission.goal.toLowerCase();
-  const textLower = agentText.toLowerCase();
-  const goalKeywords = goalLower.split(/[\s,，。、]+/).filter((w) => w.length >= 2);
-  const matchCount = goalKeywords.filter((kw) => textLower.includes(kw)).length;
-  const relevance = goalKeywords.length > 0 ? matchCount / goalKeywords.length : 0;
-  if (relevance < 0.1) {
-    comments.push("Output has low relevance to mission goal");
-    decision = "revise";
-  } else if (relevance >= 0.3) {
-    score += 0.15;
-    comments.push("Output addresses mission goal");
-  }
-
-  // Check 3: Did it produce an image (via image_generate tool)?
-  // Check for media/image references in the output
-  const hasImageRef = /media|image|图片|生成.*图|\.(png|jpg|webp)/i.test(agentText);
-  const hasMediaUrl = payloads?.some(
-    (p) => p.mediaUrl && String(p.mediaUrl).length > 0,
-  );
-  if (hasMediaUrl) {
-    score += 0.15;
-    comments.push("Artifact contains generated image");
-  } else if (mission.goal.includes("图片") || mission.goal.includes("image")) {
-    // Mission expects an image but agent only produced text
-    const isOnlyTextJson = /^(\```json|\{|\[)/.test(agentText.trim());
-    if (isOnlyTextJson) {
-      comments.push("Mission requires an image but agent returned text/JSON only — revise to generate actual image");
-      decision = "revise";
-      score = Math.min(score, 0.5);
-    } else {
-      comments.push("Mission requires image; agent produced text content without actual image generation");
-      decision = "revise";
-    }
-  } else {
-    score += 0.1;
-  }
-
-  // Check 4: Success criteria from mission
-  if (mission.successMetrics.length > 0) {
-    const metricsHit = mission.successMetrics.filter(
-      (metric) => textLower.includes(metric.toLowerCase().split(/\s/)[0] ?? ""),
-    ).length;
-    if (metricsHit > 0) {
-      score += 0.05;
-      comments.push(`Matches ${metricsHit}/${mission.successMetrics.length} success metrics`);
-    }
-  }
-
-  score = Math.min(Math.max(score, 0), 1);
-
-  if (decision === "approve" && score < 0.5) {
-    decision = "revise";
-  }
-
-  if (decision === "approve") {
-    comments.unshift("Artifact quality check passed");
-  }
-
-  return { score: Math.round(score * 100) / 100, decision, comments };
-}
-
-function deriveOwnerBrief(goal: string, config: AgentSystemConfig): {
-  successMetrics: string[];
-  constraints: string[];
-  summary: string;
-} {
-  if (!goal.trim()) {
-    throw new Error("Mission goal is required");
-  }
-
-  return {
-    successMetrics: [...config.owner.brief.successMetrics],
-    constraints: [...config.owner.brief.constraints],
-    summary: renderTemplate(config.owner.brief.summaryTemplate, { goal }),
-  };
-}
-
-function deriveOwnerFollowup(message: string, config: AgentSystemConfig): string {
-  return renderTemplate(config.owner.followup.template, { message });
 }
