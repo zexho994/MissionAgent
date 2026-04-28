@@ -138,7 +138,8 @@ function renderMissionPopover() {
     button.addEventListener("click", () => {
       state.selectedMissionId = button.dataset.selectMission;
       state.draftMode = false;
-      state.view = "home";
+      const hasTasks = state.snapshot.tasks.some((task) => task.missionId === state.selectedMissionId);
+      state.view = hasTasks ? "mission" : "home";
       state.popoverOpen = false;
       renderAll();
     });
