@@ -126,6 +126,36 @@ export async function handleApiRequest(
       return json(200, { mission, snapshot: deps.missions.snapshot() });
     }
 
+    if (request.method === "POST" && request.path === "/api/missions/converse") {
+      const body = expectObject(request.body);
+      const message = await deps.missions.triggerAgentConversation({
+        missionId: expectString(body.missionId, "missionId"),
+        agentId: expectString(body.agentId, "agentId"),
+        message: expectString(body.message, "message"),
+      });
+      return json(200, { message, snapshot: deps.missions.snapshot() });
+    }
+
+    if (request.method === "GET" && request.path.startsWith("/api/missions/threads?")) {
+      const missionId = new URL(request.path, "http://digitalagent.local").searchParams.get("missionId");
+      if (!missionId?.trim()) {
+        return json(400, { error: "missionId query parameter is required" });
+      }
+      return json(200, { threads: deps.missions.listThreads({ missionId }) });
+    }
+
+    if (request.method === "GET" && request.path.startsWith("/api/missions/threads/")) {
+      const threadId = request.path.split("/")[4];
+      if (!threadId) {
+        return json(400, { error: "Thread ID required" });
+      }
+      const result = deps.missions.getThread({ threadId });
+      if (!result) {
+        return json(404, { error: "Thread not found" });
+      }
+      return json(200, result);
+    }
+
     if (request.method === "POST" && request.path === "/api/openclaw/run") {
       const body = expectObject(request.body);
       const missionId = expectString(body.missionId, "missionId");

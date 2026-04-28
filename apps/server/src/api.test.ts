@@ -179,4 +179,50 @@ describe("handleApiRequest", () => {
     expect(confirmed.briefConfirmed).toBe(true);
     expect(confirmed.successMetrics).toEqual(["followers >= 1000"]);
   });
+
+  it("converses with an agent and reads the created thread via the API", async () => {
+    const fake = new FakeLlmAdapter(() => JSON.stringify({
+      message: "我会先整理上下文，再给出下一步建议。",
+      type: "agent_chat",
+      mentionedAgentIds: [],
+      shouldPropagate: false,
+      action: { type: "acknowledge" },
+    }));
+    const missions = new InMemoryMissionService({ llm: fake });
+    const mission = await missions.createMission({ goal: "学习 harness 并生成知识图" });
+    missions.activateMission({ missionId: mission.id });
+    const agent = missions.snapshot().agents.find((candidate) => candidate.role === "researcher");
+    if (!agent) throw new Error("missing agent");
+
+    const converseResponse = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/converse",
+        body: {
+          missionId: mission.id,
+          agentId: agent.id,
+          message: "请说明当前风险",
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(converseResponse.status).toBe(200);
+    const converseBody = converseResponse.body as { message: { threadId: string } };
+    expect(converseBody.message.threadId).toBeTruthy();
+
+    const threadsResponse = await handleApiRequest(
+      { method: "GET", path: `/api/missions/threads?missionId=${mission.id}` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    expect(threadsResponse.status).toBe(200);
+    expect((threadsResponse.body as { threads: unknown[] }).threads).toHaveLength(1);
+
+    const threadResponse = await handleApiRequest(
+      { method: "GET", path: `/api/missions/threads/${converseBody.message.threadId}` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    expect(threadResponse.status).toBe(200);
+    expect((threadResponse.body as { messages: Array<{ content: string }> }).messages.some((message) => message.content.includes("下一步建议"))).toBe(true);
+  });
 });

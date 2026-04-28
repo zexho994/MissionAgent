@@ -34,7 +34,7 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
     if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url.pathname);
+      await handleApi(req, res, `${url.pathname}${url.search}`);
       return;
     }
 
