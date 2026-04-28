@@ -8,24 +8,10 @@ import {
   type RoleSpec,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
+import type { TeamProposal } from "./hr-agent.js";
+import { extractJson } from "./hr-agent.js";
 
-export interface TeamProposal {
-  missionId: string;
-  roles: RoleSpec[];
-  proposedBy: string;
-  totalBudget: {
-    maxRuntimeMinutes: number;
-    maxTasks: number;
-  };
-  estimatedDuration: string;
-  riskAssessment: string[];
-  collaborationPlan: {
-    workflow: string;
-    communicationChannels: string[];
-    decisionMaking: string;
-  };
-  createdAt: Date;
-}
+export type { TeamProposal };
 
 export interface OwnerContext {
   ownerAgentId: string;
@@ -183,6 +169,7 @@ export function createNegotiationService(options: NegotiationServiceOptions) {
 
       return parseProposalResponse(response.content, proposal);
     } catch (error) {
+      console.error("[Negotiation] Build proposal content failed:", error instanceof Error ? error.message : String(error));
       return {
         message: "I propose the following team for your mission",
         proposal,
@@ -206,6 +193,7 @@ export function createNegotiationService(options: NegotiationServiceOptions) {
 
       return parseResponseMessage(response.content, negotiation);
     } catch (error) {
+      console.error("[Negotiation] Generate response failed:", error instanceof Error ? error.message : String(error));
       return createNegotiationMessage({
         senderId: negotiation.initiatorId,
         receiverId: negotiation.participantId,
@@ -337,9 +325,9 @@ function parseProposalResponse(
   originalProposal: TeamProposal,
 ): Record<string, unknown> {
   try {
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    const json = extractJson(content, "object");
+    if (json) {
+      return JSON.parse(json);
     }
   } catch (error) {
     // Fall through to default
@@ -357,9 +345,9 @@ function parseResponseMessage(
   negotiation: Negotiation,
 ): NegotiationMessage {
   try {
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+    const json = extractJson(content, "object");
+    if (json) {
+      const parsed = JSON.parse(json);
       const messageType = parsed.type || "counter_proposal";
 
       return createNegotiationMessage({

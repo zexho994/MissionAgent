@@ -6,34 +6,9 @@ import {
   type TeamContext,
   generateSystemPrompt,
 } from "@digitalagent/core";
+import type { WarRoomAgent, AgentRelation } from "./mission-service.js";
 
-export interface WarRoomAgent {
-  id: string;
-  missionId: string;
-  role: string;
-  name: string;
-  responsibility: string;
-  status: "idle" | "thinking" | "running" | "blocked" | "done";
-  currentTaskId: string | undefined;
-  lastAction: string;
-  avatarSeed: string;
-  sortOrder: number;
-  toolPermissions: string[];
-  budget: {
-    maxRuntimeMinutes: number;
-    maxTasks: number;
-  };
-}
-
-export interface AgentRelation {
-  id: string;
-  missionId: string;
-  fromAgentId: string;
-  toAgentId: string;
-  label: string;
-  status: "active" | "waiting" | "done";
-  createdAt: string;
-}
+export type { WarRoomAgent, AgentRelation };
 
 export interface AgentFactoryOptions {
   defaultAvatarSeed?: string;
@@ -73,7 +48,7 @@ export function createAgentFactory(options: AgentFactoryOptions = {}) {
       sortOrder,
       toolPermissions: [...spec.allowedTools],
       budget: { ...spec.budget },
-    };
+    } satisfies WarRoomAgent;
   }
 
   function generateSystemPromptWrapper(

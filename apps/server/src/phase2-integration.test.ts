@@ -346,8 +346,8 @@ describe("Phase 2 Integration Tests", () => {
       );
 
       expect(agents.length).toBe(2);
-      expect(agents[0]?.budget.maxRuntimeMinutes).toBe(60);
-      expect(agents[1]?.budget.maxRuntimeMinutes).toBe(300);
+      expect(agents[0]?.budget?.maxRuntimeMinutes).toBe(60);
+      expect(agents[1]?.budget?.maxRuntimeMinutes).toBe(300);
 
       const relations = agentFactory.setupRelations(agents);
       expect(relations.length).toBeGreaterThan(0);
