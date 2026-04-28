@@ -5,6 +5,16 @@ export interface MissionBudget {
   maxTokenSpendUsd?: number;
 }
 
+export interface MissionBrief {
+  goal: string;
+  scope: string;
+  constraints: string[];
+  successMetrics: string[];
+  keyAssumptions: string[];
+  targetAudience?: string;
+  timeline?: string;
+}
+
 export interface Mission {
   id: string;
   goal: string;
@@ -13,6 +23,8 @@ export interface Mission {
   status: MissionStatus;
   budget: MissionBudget;
   createdAt: Date;
+  brief?: MissionBrief;
+  briefConfirmed?: boolean;
 }
 
 export interface RoleBudget {
