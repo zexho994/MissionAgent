@@ -3,7 +3,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OpenClawCliAdapter, OpenAiLlmAdapter, type OpenClawCliAdapterOptions } from "@digitalagent/runtime";
+import { OpenClawCliAdapter, createLlmServiceFromEnv, type OpenClawCliAdapterOptions } from "@digitalagent/runtime";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 
@@ -12,13 +12,7 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
 const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data", "mission-store.json");
 
-const llm = process.env.LLM_API_KEY
-  ? new OpenAiLlmAdapter({
-      apiKey: process.env.LLM_API_KEY,
-      baseUrl: process.env.LLM_BASE_URL,
-      defaultModel: process.env.LLM_MODEL,
-    })
-  : undefined;
+const llm = createLlmServiceFromEnv(process.env);
 
 const missions = new InMemoryMissionService({ storageFile: dataFile, llm });
 const openclawOptions: OpenClawCliAdapterOptions = {

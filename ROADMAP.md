@@ -19,20 +19,20 @@
 **目标**: Owner Agent 能像真正的项目经理一样，通过多轮对话理解用户目标，主动追问缺失信息，直到达成战略共识。
 
 ### 1.1 LLM集成基础
-- [ ] 设计通用的LLM调用接口（支持多provider：OpenAI、Claude、GLM）
-- [ ] 实现LLM调用服务，包含重试、超时、token统计
-- [ ] 在MissionService中注入LLM服务依赖
+- [x] 设计通用的LLM调用接口（支持多provider：OpenAI、Claude、GLM）
+- [x] 实现LLM调用服务，包含重试、超时、token统计
+- [x] 在MissionService中注入LLM服务依赖
 
 ### 1.2 Owner多轮对话
-- [ ] 设计对话上下文管理（累积用户补充的信息）
-- [ ] Owner根据目标内容主动生成追问（而非模板填充）
-- [ ] Owner判断信息是否足够进入下一阶段（战略共识判断）
-- [ ] 用户确认环节：Owner输出战略摘要，等待用户确认
+- [x] 设计对话上下文管理（累积用户补充的信息）
+- [x] Owner根据目标内容主动生成追问（而非模板填充）
+- [x] Owner判断信息是否足够进入下一阶段（战略共识判断）
+- [x] 用户确认环节：Owner输出战略摘要，等待用户确认
 
 ### 1.3 战略对齐输出
-- [ ] 定义 `MissionBrief` 结构体（目标、范围、约束、成功指标、关键假设）
-- [ ] Owner将多轮对话结果汇总为结构化MissionBrief
-- [ ] MissionBrief作为后续HR招募的输入
+- [x] 定义 `MissionBrief` 结构体（目标、范围、约束、成功指标、关键假设）
+- [x] Owner将多轮对话结果汇总为结构化MissionBrief
+- [x] MissionBrief作为后续HR招募的输入
 
 **验收标准**: 用户输入"运营一个小红书账号，一个月涨到1000粉丝"，Owner能追问账号现状、内容方向、目标人群等，最终生成结构化的MissionBrief。
 

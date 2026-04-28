@@ -108,6 +108,7 @@ export type AgentMessageType =
   | "user_message"
   | "mission_brief"
   | "owner_followup"
+  | "owner_error"
   | "team_created"
   | "task_plan"
   | "execution_started"
@@ -281,7 +282,6 @@ export class InMemoryMissionService {
         systemPrompt,
         userMessage: input.goal,
         isCreation: true,
-        fallbackContent: ownerBrief.summary,
       });
     }
 
@@ -416,7 +416,6 @@ export class InMemoryMissionService {
         systemPrompt,
         llmMessages,
         isCreation: false,
-        fallbackContent: deriveOwnerFollowup(message, this.config),
       });
     } else {
       this.appendMessage({
@@ -1089,7 +1088,6 @@ export class InMemoryMissionService {
     userMessage?: string;
     llmMessages?: { role: "system" | "user" | "assistant"; content: string }[];
     isCreation: boolean;
-    fallbackContent: string;
   }): Promise<void> {
     await runOwnerLlmStreaming(this.llm!, {
       missionId: input.missionId,
@@ -1098,7 +1096,6 @@ export class InMemoryMissionService {
       userMessage: input.userMessage,
       llmMessages: input.llmMessages,
       isCreation: input.isCreation,
-      fallbackContent: input.fallbackContent,
     }, {
       getMission: (id) => this.missions.get(id),
       setMission: (m) => this.missions.set(m.id, m),

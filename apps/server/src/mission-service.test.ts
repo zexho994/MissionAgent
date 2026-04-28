@@ -395,7 +395,7 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.missions[0]?.brief).toBeDefined();
   });
 
-  it("falls back to template when LLM call fails", async () => {
+  it("blocks Owner instead of using template fallback when configured LLM fails", async () => {
     const failingLlm = {
       call: async () => { throw new Error("LLM unavailable"); },
       stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
@@ -403,9 +403,17 @@ describe("InMemoryMissionService", () => {
     const service = new InMemoryMissionService({ llm: failingLlm as any });
 
     const mission = await service.createMission({ goal: "运营小红书账号" });
+    await Promise.resolve();
 
     const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
-    expect(messages.some((message) => message.type === "owner_followup")).toBe(true);
+    expect(messages.some((message) => message.type === "owner_followup")).toBe(false);
+    expect(messages).toEqual([
+      expect.objectContaining({
+        type: "owner_error",
+        content: expect.stringContaining("Owner LLM failed: LLM unavailable"),
+      }),
+    ]);
+    expect(service.snapshot().agents.find((agent) => agent.role === "owner")?.status).toBe("blocked");
   });
 
   it("triggers agent collaboration reports after execution completes", async () => {

@@ -1,6 +1,6 @@
 import { createId, type Mission } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
-import { parseMissionBrief, detectBriefInResponse, extractQuestionWithOptions } from "./owner/index.js";
+import { extractQuestionWithOptions, parseOwnerDecision } from "./owner/index.js";
 
 export interface OwnerStreamingDeps {
   getMission(missionId: string): Mission | undefined;
@@ -18,7 +18,6 @@ export interface OwnerStreamingInput {
   userMessage: string | undefined;
   llmMessages: { role: "system" | "user" | "assistant"; content: string }[] | undefined;
   isCreation: boolean;
-  fallbackContent: string;
 }
 
 export async function runOwnerLlmStreaming(
@@ -26,7 +25,7 @@ export async function runOwnerLlmStreaming(
   input: OwnerStreamingInput,
   deps: OwnerStreamingDeps,
 ): Promise<void> {
-  const { missionId, ownerId, systemPrompt, userMessage, llmMessages, isCreation, fallbackContent } = input;
+  const { missionId, ownerId, systemPrompt, userMessage, llmMessages, isCreation } = input;
 
   const messages = llmMessages || (userMessage ? [
     { role: "system" as const, content: systemPrompt },
@@ -47,41 +46,38 @@ export async function runOwnerLlmStreaming(
     const finalContent = fullContent || response.content;
     deps.notifyStream(missionId, { type: "done", messageId });
 
-    const choiceResult = extractQuestionWithOptions(finalContent);
-    const hasBrief = detectBriefInResponse(finalContent);
+    const decision = parseOwnerDecision(finalContent);
+    const choiceResult = decision.status === "needs_info"
+      ? undefined
+      : extractQuestionWithOptions(finalContent);
     const messageOptions = choiceResult?.options ? { options: choiceResult.options } : undefined;
 
-    if (hasBrief) {
-      try {
-        const brief = parseMissionBrief(finalContent);
-        const currentMission = deps.getMission(missionId);
-        if (!currentMission) throw new Error("Mission disappeared during LLM call");
-        deps.setMission({ ...currentMission, brief });
-        deps.appendMessage({
-          missionId,
-          fromAgentId: ownerId,
-          type: "mission_brief",
-          content: finalContent,
-          ...messageOptions,
-        });
-        deps.updateAgent(ownerId, {
-          status: "idle",
-          lastAction: "Generated MissionBrief from conversation",
-        });
-      } catch (parseError) {
-        console.error("[Owner] MissionBrief parse failed:", parseError instanceof Error ? parseError.message : String(parseError));
-        deps.appendMessage({
-          missionId,
-          fromAgentId: ownerId,
-          type: "owner_followup",
-          content: finalContent,
-          ...messageOptions,
-        });
-        deps.updateAgent(ownerId, {
-          status: "idle",
-          lastAction: "LLM response received but Brief parsing failed",
-        });
-      }
+    if (decision.status === "ready") {
+      const currentMission = deps.getMission(missionId);
+      if (!currentMission) throw new Error("Mission disappeared during LLM call");
+      deps.setMission({ ...currentMission, brief: decision.brief });
+      deps.appendMessage({
+        missionId,
+        fromAgentId: ownerId,
+        type: "mission_brief",
+        content: finalContent,
+        ...messageOptions,
+      });
+      deps.updateAgent(ownerId, {
+        status: "idle",
+        lastAction: "Generated MissionBrief from conversation",
+      });
+    } else if (decision.status === "needs_info") {
+      deps.appendMessage({
+        missionId,
+        fromAgentId: ownerId,
+        type: "owner_followup",
+        content: decision.question,
+      });
+      deps.updateAgent(ownerId, {
+        status: "idle",
+        lastAction: isCreation ? "Analyzed user goal and asked clarifying question" : "Asked follow-up question",
+      });
     } else {
       deps.appendMessage({
         missionId,
@@ -99,17 +95,18 @@ export async function runOwnerLlmStreaming(
     deps.persist();
   } catch (error) {
     console.error("[Owner] LLM call failed:", error instanceof Error ? error.message : String(error));
+    const errorMessage = `Owner LLM failed: ${error instanceof Error ? error.message : String(error)}`;
     deps.notifyStream(missionId, { type: "done", messageId });
 
     deps.appendMessage({
       missionId,
       fromAgentId: ownerId,
-      type: "owner_followup",
-      content: fallbackContent,
+      type: "owner_error",
+      content: errorMessage,
     });
     deps.updateAgent(ownerId, {
-      status: "idle",
-      lastAction: "LLM failed, used template fallback",
+      status: "blocked",
+      lastAction: errorMessage,
     });
     deps.persist();
   }

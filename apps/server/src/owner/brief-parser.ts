@@ -1,15 +1,40 @@
 import type { MissionBrief } from "@digitalagent/core";
 
-export function detectBriefInResponse(text: string): boolean {
-  const jsonCandidate = extractJsonObject(text);
-  if (!jsonCandidate) return false;
+export type OwnerDecision =
+  | { status: "ready"; brief: MissionBrief }
+  | { status: "needs_info"; question: string }
+  | { status: "followup"; content: string };
 
+export function detectBriefInResponse(text: string): boolean {
+  return parseOwnerDecision(text).status === "ready";
+}
+
+export function parseOwnerDecision(text: string): OwnerDecision {
+  const jsonCandidate = extractJsonObject(text);
+  if (!jsonCandidate) return { status: "followup", content: text };
+
+  let parsed: Record<string, unknown>;
   try {
-    const parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
-    return typeof parsed.goal === "string" && Array.isArray(parsed.successMetrics);
+    parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
   } catch {
-    return false;
+    return { status: "followup", content: text };
   }
+
+  if (parsed.status === "needs_info" && typeof parsed.question === "string" && parsed.question.trim()) {
+    return { status: "needs_info", question: parsed.question.trim() };
+  }
+
+  if (parsed.status === "ready") {
+    const briefCandidate = isRecord(parsed.brief) ? parsed.brief : parsed;
+    const brief = tryParseMissionBriefRecord(briefCandidate);
+    if (brief) return { status: "ready", brief };
+    return { status: "followup", content: text };
+  }
+
+  const brief = tryParseMissionBriefRecord(parsed);
+  if (brief) return { status: "ready", brief };
+
+  return { status: "followup", content: text };
 }
 
 export function parseMissionBrief(text: string): MissionBrief {
@@ -20,6 +45,18 @@ export function parseMissionBrief(text: string): MissionBrief {
 
   const parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
 
+  return parseMissionBriefRecord(parsed);
+}
+
+function tryParseMissionBriefRecord(parsed: Record<string, unknown>): MissionBrief | undefined {
+  try {
+    return parseMissionBriefRecord(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseMissionBriefRecord(parsed: Record<string, unknown>): MissionBrief {
   if (typeof parsed.goal !== "string" || !parsed.goal.trim()) {
     throw new Error("MissionBrief must have a non-empty goal");
   }
@@ -39,6 +76,10 @@ export function parseMissionBrief(text: string): MissionBrief {
     targetAudience: typeof parsed.targetAudience === "string" ? parsed.targetAudience : undefined,
     timeline: typeof parsed.timeline === "string" ? parsed.timeline : undefined,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function extractJsonObject(text: string): string | undefined {
