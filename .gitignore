@@ -4,10 +4,19 @@ dist/
 coverage/
 .openclaw/
 .DS_Store
+.playwright-mcp/
+.superpowers/
 
 # Local generated previews and render scratch space.
 scratch/
 apps/server/data/
+
+# Local verification reports and ad-hoc run artifacts.
+*-TEST-REPORT.md
+TEST-PLAN.md
+test-report.md
+test-*.js
+*-verified.png
 
 # Environment files.
 .env
