@@ -407,4 +407,175 @@ describe("InMemoryMissionService", () => {
     const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
     expect(messages.some((message) => message.type === "owner_followup")).toBe(true);
   });
+
+  describe("LLM Owner conversation edge cases", () => {
+    it("handles empty goal input gracefully", async () => {
+      const service = new InMemoryMissionService();
+
+      await expect(service.createMission({ goal: "" })).rejects.toThrow();
+    });
+
+    it("handles very long goal input without crashing", async () => {
+      const service = new InMemoryMissionService();
+      const longGoal = "a".repeat(10000);
+
+      const mission = await service.createMission({ goal: longGoal });
+      expect(mission.goal).toBe(longGoal);
+    });
+
+    it("handles LLM timeout during conversation", async () => {
+      const timeoutLlm = {
+        call: async () => {
+          return new Promise(() => {}); // Never resolves
+        },
+        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const service = new InMemoryMissionService({ llm: timeoutLlm as any });
+
+      // Should not hang, should use fallback
+      const mission = await service.createMission({ goal: "测试目标" });
+      expect(mission.goal).toBe("测试目标");
+    });
+
+    it("handles malformed LLM JSON responses", async () => {
+      const badJsonLlm = new FakeLlmAdapter(() => '{"goal": "test", "successMetrics": "not an array", "constraints": []}');
+      const service = new InMemoryMissionService({ llm: badJsonLlm });
+
+      await service.createMission({ goal: "测试目标" });
+      await service.continueMission({
+        missionId: service.snapshot().missions[0]!.id,
+        message: "补充信息"
+      });
+
+      // Should not crash, should use fallback
+      const snapshot = service.snapshot();
+      expect(snapshot.missions[0]?.brief).toBeUndefined();
+    });
+
+    it("handles LLM responses that are too long", async () => {
+      const longResponseLlm = new FakeLlmAdapter(() => "x".repeat(100000));
+      const service = new InMemoryMissionService({ llm: longResponseLlm });
+
+      const mission = await service.createMission({ goal: "测试目标" });
+      await service.continueMission({
+        missionId: mission.id,
+        message: "补充信息"
+      });
+
+      // Should handle gracefully without crashing
+      const snapshot = service.snapshot();
+      expect(snapshot.missions).toHaveLength(1);
+    });
+
+    it("continues conversation after brief rejection", async () => {
+      const fake = new FakeLlmAdapter(() => JSON.stringify({
+        goal: "运营小红书账号",
+        scope: "小红书",
+        constraints: [],
+        successMetrics: ["运营完成"],
+        keyAssumptions: [],
+      }));
+      const service = new InMemoryMissionService({ llm: fake });
+
+      await service.createMission({ goal: "运营小红书账号" });
+      const missionId = service.snapshot().missions[0]!.id;
+
+      await service.continueMission({ missionId, message: "补充信息" });
+
+      // Reject the brief by continuing conversation
+      await service.continueMission({ missionId, message: "我想修改一下目标" });
+
+      const snapshot = service.snapshot();
+      expect(snapshot.missions[0]?.briefConfirmed).toBe(false);
+    });
+  });
+
+  describe("Concurrent operations", () => {
+    it("handles multiple concurrent mission creations", async () => {
+      const service = new InMemoryMissionService();
+
+      const promises = [
+        service.createMission({ goal: "Mission 1" }),
+        service.createMission({ goal: "Mission 2" }),
+        service.createMission({ goal: "Mission 3" }),
+      ];
+
+      const missions = await Promise.all(promises);
+      expect(missions).toHaveLength(3);
+      expect(service.snapshot().missions).toHaveLength(3);
+    });
+
+    it("handles concurrent task executions for same mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "测试任务" });
+      service.activateMission({ missionId: mission.id });
+
+      const tasks = service.snapshot().tasks;
+      if (tasks.length === 0) throw new Error("No tasks found");
+
+      const executions = tasks.map(task =>
+        service.startExecution({ missionId: mission.id, taskId: task.id })
+      );
+
+      const results = await Promise.all(executions);
+      expect(results).toHaveLength(tasks.length);
+      expect(results.every(r => r.status === "running")).toBe(true);
+    });
+  });
+
+  describe("Error handling", () => {
+    it("throws on invalid mission ID during activation", () => {
+      const service = new InMemoryMissionService();
+
+      expect(() =>
+        service.activateMission({ missionId: "non-existent-id" })
+      ).toThrow();
+    });
+
+    it("throws on continueMission with invalid mission ID", async () => {
+      const service = new InMemoryMissionService();
+
+      await expect(
+        service.continueMission({ missionId: "invalid-id", message: "test" })
+      ).rejects.toThrow();
+    });
+
+    it("handles execution start for non-existent task", () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "测试" });
+
+      expect(() =>
+        service.startExecution({ missionId: mission.id, taskId: "invalid-task" })
+      ).toThrow();
+    });
+
+    it("handles double submission of same execution", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "测试" });
+      service.activateMission({ missionId: mission.id });
+      const task = service.snapshot().tasks[0];
+      if (!task) throw new Error("No task");
+
+      const execution = service.startExecution({ missionId: mission.id, taskId: task.id });
+
+      service.submitExecutionResult({
+        executionId: execution.id,
+        missionId: mission.id,
+        taskId: task.id,
+        content: { openclaw: { payloads: [{ text: "result" }] } },
+        evidence: ["openclaw:local"],
+      });
+
+      // Second submission should be handled gracefully
+      expect(() =>
+        service.submitExecutionResult({
+          executionId: execution.id,
+          missionId: mission.id,
+          taskId: task.id,
+          content: { openclaw: { payloads: [{ text: "duplicate" }] } },
+          evidence: ["openclaw:local"],
+        })
+      ).not.toThrow();
+    });
+  });
 });
