@@ -197,6 +197,50 @@ h1, h2, p { margin-top: 0; }
   color: #ffffff;
 }
 .bubble.owner { justify-self: start; }
+.bubble.owner.thinking {
+  border-style: dashed;
+  opacity: 0.7;
+}
+.bubble.owner.brief {
+  border-color: #2563eb;
+  border-width: 2px;
+}
+.brief-summary {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.brief-summary div {
+  padding: 6px 0;
+  border-bottom: 1px solid #ecf0f5;
+  font-size: 14px;
+}
+.brief-summary span {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #6b7280;
+  margin-bottom: 2px;
+}
+.brief-metrics,
+.brief-constraints {
+  margin-top: 12px;
+}
+.brief-metrics strong,
+.brief-constraints strong {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+.brief-metrics div,
+.brief-constraints div {
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f0f4ff;
+  margin-bottom: 4px;
+}
 .bubble strong {
   display: block;
   margin-bottom: 8px;

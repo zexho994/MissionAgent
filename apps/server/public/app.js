@@ -196,29 +196,76 @@ function renderChatContent(data) {
     `;
   }
 
-  const ownerMessage = data.messages.find((message) => message.type === "mission_brief");
-  const followups = data.messages.filter((message) => message.type === "user_message" || message.type === "owner_followup");
-  const ownerText = ownerMessage?.content || `Mission 已创建：${data.mission.goal}`;
-  return `
+  const parts = [];
+
+  parts.push(`
     <div class="bubble user">
       <strong>你</strong>
       <p>${esc(data.mission.goal)}</p>
     </div>
-    <div class="bubble owner">
-      <strong>Owner Agent</strong>
-      <p>${esc(ownerText)}</p>
-      <div class="thought-list">
-        ${data.mission.successMetrics.slice(0, 3).map((item, index) => `
-          <div><span>思考节点 ${index + 1}</span>${esc(item)}</div>
-        `).join("")}
+  `);
+
+  const conversationMessages = data.messages.filter(
+    (message) => message.type === "owner_followup" || message.type === "user_message" || message.type === "mission_brief"
+  );
+  for (const message of conversationMessages) {
+    if (message.type === "mission_brief") {
+      parts.push(renderBriefMessage(data));
+    } else {
+      parts.push(renderConversationMessage(message));
+    }
+  }
+
+  if (!data.mission.brief) {
+    parts.push(`
+      <div class="bubble owner thinking">
+        <strong>Owner Agent</strong>
+        <p>${conversationMessages.length === 0 ? "正在分析你的目标..." : "正在思考你的回复..."}</p>
       </div>
-      <div class="choice-row">
-        <button type="button" data-append="更偏向快速产出 demo">快速 demo</button>
-        <button type="button" data-append="更偏向质量和可复盘">质量优先</button>
+    `);
+  }
+
+  if (data.mission.brief && !data.mission.briefConfirmed) {
+    parts.push(`
+      <div class="choice-row" style="margin-top: 12px;">
+        <button type="button" data-confirm-brief>确认 MissionBrief 并继续</button>
+        <button type="button" data-append="我想修改一些内容">需要修改</button>
+      </div>
+    `);
+  }
+
+  if (data.mission.briefConfirmed) {
+    parts.push(`
+      <div class="choice-row" style="margin-top: 12px;">
         <button type="button" data-open-war-room>${data.tasks.length > 0 ? "进入作战室" : "确认并创建作战室"}</button>
       </div>
+    `);
+  }
+
+  return parts.join("");
+}
+
+function renderBriefMessage(data) {
+  const brief = data.mission.brief;
+  if (!brief) return "";
+  return `
+    <div class="bubble owner brief">
+      <strong>Owner Agent · MissionBrief</strong>
+      <div class="brief-summary">
+        <div><span>目标</span>${esc(brief.goal)}</div>
+        <div><span>范围</span>${esc(brief.scope)}</div>
+        ${brief.targetAudience ? `<div><span>目标人群</span>${esc(brief.targetAudience)}</div>` : ""}
+        ${brief.timeline ? `<div><span>时间线</span>${esc(brief.timeline)}</div>` : ""}
+      </div>
+      <div class="brief-metrics">
+        <strong>成功指标</strong>
+        ${brief.successMetrics.map((item) => `<div>${esc(item)}</div>`).join("")}
+      </div>
+      <div class="brief-constraints">
+        <strong>约束</strong>
+        ${brief.constraints.map((item) => `<div>${esc(item)}</div>`).join("")}
+      </div>
     </div>
-    ${followups.map((message) => renderConversationMessage(message)).join("")}
   `;
 }
 
@@ -440,6 +487,18 @@ function bindChoiceButtons() {
       }
       state.view = "mission";
       state.draftMode = false;
+      renderAll();
+    });
+  });
+  document.querySelectorAll("[data-confirm-brief]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const result = await api("/api/missions/confirm-brief", {
+        method: "POST",
+        body: { missionId: mission.id },
+      });
+      state.snapshot = result.snapshot;
       renderAll();
     });
   });
