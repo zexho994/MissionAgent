@@ -7,12 +7,15 @@ import {
   transitionTask,
   type Artifact,
   type Mission,
+  type MissionBrief,
   type Review,
   type Task,
 } from "@digitalagent/core";
+import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadAgentSystemConfig, renderTemplate, type AgentSystemConfig, type ConfigAgentSpec } from "./system-config.js";
+import { buildOwnerSystemPrompt, buildConversationMessages, parseMissionBrief, detectBriefInResponse } from "./owner/index.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -162,6 +165,7 @@ interface StoredMissionSnapshot extends MissionSnapshot {
 export interface MissionServiceOptions {
   storageFile?: string;
   configFile?: string;
+  llm?: LlmService;
 }
 
 export class InMemoryMissionService {
@@ -178,10 +182,12 @@ export class InMemoryMissionService {
   private readonly decisions = new Map<string, DecisionRecord>();
   private readonly storageFile: string | undefined;
   private readonly config: AgentSystemConfig;
+  private readonly llm: LlmService | undefined;
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
     this.config = loadAgentSystemConfig(options.configFile);
+    this.llm = options.llm;
     this.loadFromFile();
   }
 
@@ -199,6 +205,40 @@ export class InMemoryMissionService {
 
     this.missions.set(mission.id, mission);
     this.createOwnerAgent(mission.id);
+
+    if (this.llm) {
+      const systemPrompt = this.ownerSystemPrompt();
+      const owner = this.agentByRole(mission.id, "owner");
+      this.llm.call([
+        { role: "system", content: systemPrompt },
+        { role: "user", content: input.goal },
+      ]).then((response) => {
+        this.appendMessage({
+          missionId: mission.id,
+          fromAgentId: owner.id,
+          type: "owner_followup",
+          content: response.content,
+        });
+        this.updateAgent(owner.id, {
+          status: "idle",
+          lastAction: "Analyzed user goal and asked clarifying question",
+        });
+        this.persist();
+      }).catch(() => {
+        this.appendMessage({
+          missionId: mission.id,
+          fromAgentId: owner.id,
+          type: "owner_followup",
+          content: ownerBrief.summary,
+        });
+        this.updateAgent(owner.id, {
+          status: "idle",
+          lastAction: "Generated initial mission brief (LLM fallback)",
+        });
+        this.persist();
+      });
+    }
+
     this.persist();
     return mission;
   }
@@ -265,16 +305,110 @@ export class InMemoryMissionService {
     });
     this.updateAgent(owner.id, {
       status: "thinking",
-      lastAction: "Updated mission context from user conversation",
+      lastAction: "Processing user follow-up",
     });
-    this.appendMessage({
-      missionId: mission.id,
-      fromAgentId: owner.id,
-      type: "owner_followup",
-      content: deriveOwnerFollowup(message, this.config),
-    });
+
+    if (this.llm) {
+      const history = this.agentMessagesForMission(mission.id);
+      const systemPrompt = this.ownerSystemPrompt();
+      const llmMessages = buildConversationMessages(systemPrompt, history, message);
+
+      this.llm.call(llmMessages).then((response) => {
+        if (detectBriefInResponse(response.content)) {
+          try {
+            const brief = parseMissionBrief(response.content);
+            const updatedMission: Mission = {
+              ...mission,
+              brief,
+            };
+            this.missions.set(updatedMission.id, updatedMission);
+            this.appendMessage({
+              missionId: mission.id,
+              fromAgentId: owner.id,
+              type: "mission_brief",
+              content: response.content,
+            });
+            this.updateAgent(owner.id, {
+              status: "idle",
+              lastAction: "Generated MissionBrief from conversation",
+            });
+          } catch {
+            this.appendMessage({
+              missionId: mission.id,
+              fromAgentId: owner.id,
+              type: "owner_followup",
+              content: response.content,
+            });
+            this.updateAgent(owner.id, {
+              status: "idle",
+              lastAction: "Responded to user follow-up",
+            });
+          }
+        } else {
+          this.appendMessage({
+            missionId: mission.id,
+            fromAgentId: owner.id,
+            type: "owner_followup",
+            content: response.content,
+          });
+          this.updateAgent(owner.id, {
+            status: "idle",
+            lastAction: "Asked follow-up question",
+          });
+        }
+        this.persist();
+      }).catch(() => {
+        this.appendMessage({
+          missionId: mission.id,
+          fromAgentId: owner.id,
+          type: "owner_followup",
+          content: deriveOwnerFollowup(message, this.config),
+        });
+        this.updateAgent(owner.id, {
+          status: "idle",
+          lastAction: "Follow-up response (LLM fallback)",
+        });
+        this.persist();
+      });
+    } else {
+      this.appendMessage({
+        missionId: mission.id,
+        fromAgentId: owner.id,
+        type: "owner_followup",
+        content: deriveOwnerFollowup(message, this.config),
+      });
+    }
+
     this.persist();
     return mission;
+  }
+
+  confirmBrief(input: { missionId: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (!mission.brief) {
+      throw new Error("Mission has no brief to confirm");
+    }
+    if (mission.briefConfirmed) {
+      return mission;
+    }
+
+    const updated: Mission = {
+      ...mission,
+      successMetrics: [...mission.brief.successMetrics],
+      constraints: [...mission.brief.constraints],
+      briefConfirmed: true,
+    };
+    this.missions.set(updated.id, updated);
+    const owner = this.agentByRole(mission.id, "owner");
+    this.updateAgent(owner.id, {
+      status: "idle",
+      lastAction: "MissionBrief confirmed by user",
+    });
+    this.persist();
+    return updated;
   }
 
   startExecution(input: StartExecutionRequest): Execution {
@@ -628,6 +762,20 @@ export class InMemoryMissionService {
       throw new Error(`Agent not found for role: ${role}`);
     }
     return agent;
+  }
+
+  private ownerSystemPrompt(): string {
+    const prompts = this.config.owner.prompts;
+    if (!prompts) {
+      return "You are a project manager. Help clarify the user's goal through conversation.";
+    }
+    return buildOwnerSystemPrompt(prompts.systemPrompt, prompts.gatheringInstruction, prompts.briefSchema);
+  }
+
+  private agentMessagesForMission(missionId: string): AgentMessage[] {
+    return [...this.agentMessages.values()]
+      .filter((message) => message.missionId === missionId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
   private firstAgentWithCapability(missionId: string, capability: "plan" | "execute" | "review"): WarRoomAgent | undefined {

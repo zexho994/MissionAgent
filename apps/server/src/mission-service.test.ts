@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryMissionService } from "./mission-service.js";
+import { FakeLlmAdapter } from "@digitalagent/runtime";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -289,5 +290,86 @@ describe("InMemoryMissionService", () => {
     expect(retry.status).toBe("running");
     expect(service.snapshot().tasks[0]?.status).toBe("running");
     expect(service.snapshot().taskEvents.at(-1)?.type).toBe("execution.started");
+  });
+
+  it("uses LLM to generate initial Owner question when configured", async () => {
+    const fake = new FakeLlmAdapter(() => "请问你的目标人群是谁？");
+    const service = new InMemoryMissionService({ llm: fake });
+
+    const mission = service.createMission({ goal: "运营小红书账号" });
+
+    expect(mission.goal).toBe("运营小红书账号");
+    expect(fake.stats().totalCalls).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
+    expect(messages.some((message) => message.type === "owner_followup" && message.content.includes("目标人群"))).toBe(true);
+  });
+
+  it("uses LLM for multi-turn conversation and generates MissionBrief", async () => {
+    let callCount = 0;
+    const fake = new FakeLlmAdapter(() => {
+      callCount += 1;
+      if (callCount <= 1) return "请问你的目标人群是谁？";
+      return JSON.stringify({
+        goal: "运营小红书账号到1000粉丝",
+        scope: "小红书平台内容运营",
+        constraints: ["human approval before publishing"],
+        successMetrics: ["followers >= 1000"],
+        keyAssumptions: ["existing account"],
+        targetAudience: "年轻女性",
+        timeline: "1个月",
+      });
+    });
+    const service = new InMemoryMissionService({ llm: fake });
+
+    const mission = service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const snapshot = service.snapshot();
+    const updatedMission = snapshot.missions.find((m) => m.id === mission.id);
+    expect(updatedMission?.brief).toBeDefined();
+    expect(updatedMission?.brief?.goal).toBe("运营小红书账号到1000粉丝");
+    expect(updatedMission?.brief?.successMetrics).toEqual(["followers >= 1000"]);
+  });
+
+  it("confirms a MissionBrief and updates mission metrics", async () => {
+    const fake = new FakeLlmAdapter(() => JSON.stringify({
+      goal: "运营小红书账号到1000粉丝",
+      scope: "小红书平台",
+      constraints: ["human approval"],
+      successMetrics: ["followers >= 1000"],
+      keyAssumptions: ["existing account"],
+    }));
+    const service = new InMemoryMissionService({ llm: fake });
+
+    const mission = service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    service.continueMission({ missionId: mission.id, message: "补充信息" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const withBrief = service.snapshot().missions.find((m) => m.id === mission.id);
+    if (!withBrief?.brief) throw new Error("brief should exist");
+
+    const confirmed = service.confirmBrief({ missionId: mission.id });
+
+    expect(confirmed.briefConfirmed).toBe(true);
+    expect(confirmed.successMetrics).toEqual(["followers >= 1000"]);
+    expect(confirmed.constraints).toEqual(["human approval"]);
+  });
+
+  it("falls back to template response when LLM is not configured", () => {
+    const service = new InMemoryMissionService();
+    const mission = service.createMission({ goal: "运营小红书账号" });
+
+    service.continueMission({ missionId: mission.id, message: "补充信息" });
+
+    const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
+    expect(messages.some((message) => message.type === "owner_followup" && message.content.includes("补充信息"))).toBe(true);
   });
 });

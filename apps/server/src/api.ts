@@ -81,6 +81,14 @@ export async function handleApiRequest(
       return json(200, { mission, snapshot: deps.missions.snapshot() });
     }
 
+    if (request.method === "POST" && request.path === "/api/missions/confirm-brief") {
+      const body = expectObject(request.body);
+      const mission = deps.missions.confirmBrief({
+        missionId: expectString(body.missionId, "missionId"),
+      });
+      return json(200, { mission, snapshot: deps.missions.snapshot() });
+    }
+
     if (request.method === "POST" && request.path === "/api/openclaw/run") {
       const body = expectObject(request.body);
       const missionId = expectString(body.missionId, "missionId");

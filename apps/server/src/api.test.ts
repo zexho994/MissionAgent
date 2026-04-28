@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
+import { FakeLlmAdapter } from "@digitalagent/runtime";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
 import type { MissionSnapshot } from "./mission-service.js";
 
@@ -145,5 +146,39 @@ describe("handleApiRequest", () => {
     expect(body.execution.taskId).toBe(task.id);
     expect(body.execution.status).toBe("running");
     expect(missions.snapshot().executions[0]?.status).toBe("running");
+  });
+
+  it("confirms a MissionBrief via the API", async () => {
+    const fake = new FakeLlmAdapter(() => JSON.stringify({
+      goal: "运营小红书账号到1000粉丝",
+      scope: "小红书平台",
+      constraints: ["human approval"],
+      successMetrics: ["followers >= 1000"],
+      keyAssumptions: ["existing account"],
+    }));
+    const missions = new InMemoryMissionService({ llm: fake });
+
+    const createResponse = await handleApiRequest(
+      { method: "POST", path: "/api/missions", body: { goal: "运营小红书账号" } },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    const missionId = (createResponse.body as { mission: { id: string } }).mission.id;
+
+    await handleApiRequest(
+      { method: "POST", path: "/api/missions/continue", body: { missionId, message: "目标人群是年轻女性" } },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const confirmResponse = await handleApiRequest(
+      { method: "POST", path: "/api/missions/confirm-brief", body: { missionId } },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(confirmResponse.status).toBe(200);
+    const confirmed = (confirmResponse.body as { mission: { briefConfirmed: boolean; successMetrics: string[] } }).mission;
+    expect(confirmed.briefConfirmed).toBe(true);
+    expect(confirmed.successMetrics).toEqual(["followers >= 1000"]);
   });
 });
