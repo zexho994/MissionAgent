@@ -23,18 +23,18 @@
         "role": "owner",
         "name": "Owner Agent",
         "responsibility": "负责 Mission 结果、澄清缺失信息，并判断何时需要用户确认。",
-        "status": "thinking",
-        "currentTask": true,
-        "lastAction": "Clarified mission intent",
+        "status": "idle",
+        "currentTask": false,
+        "lastAction": "等待任务分配",
         "avatarSeed": "owner"
       },
       {
         "role": "hr",
         "name": "HR Agent",
         "responsibility": "根据 Mission 设计临时团队、职责和协作关系。",
-        "status": "done",
+        "status": "idle",
         "currentTask": false,
-        "lastAction": "Generated dynamic team plan",
+        "lastAction": "等待任务分配",
         "avatarSeed": "hr"
       }
     ],
@@ -46,9 +46,9 @@
           "role": "researcher",
           "name": "Research Agent",
           "responsibility": "在生产开始前提炼核心知识、资料结构和关键判断点。",
-          "status": "done",
-          "currentTask": true,
-          "lastAction": "Prepared research outline",
+          "status": "idle",
+          "currentTask": false,
+          "lastAction": "等待任务分配",
           "avatarSeed": "researcher"
         }
       },
@@ -61,7 +61,7 @@
           "responsibility": "把目标转成受众、选题、发布节奏和增长策略。",
           "status": "idle",
           "currentTask": false,
-          "lastAction": "Waiting for audience constraints",
+          "lastAction": "等待任务分配",
           "avatarSeed": "content-strategist"
         }
       },
@@ -74,7 +74,7 @@
           "responsibility": "把产品或工程目标拆成模块、接口和实施任务。",
           "status": "idle",
           "currentTask": false,
-          "lastAction": "Waiting for product scope",
+          "lastAction": "等待任务分配",
           "avatarSeed": "system-architect"
         }
       },
@@ -87,7 +87,7 @@
           "responsibility": "生成视觉提示词、图片素材和可审核视觉产出。",
           "status": "idle",
           "currentTask": false,
-          "lastAction": "Waiting for visual direction",
+          "lastAction": "等待任务分配",
           "avatarSeed": "image-creator"
         }
       }
@@ -98,7 +98,7 @@
       "responsibility": "执行第一个具体任务并产出可审核结果。",
       "status": "idle",
       "currentTask": false,
-      "lastAction": "Waiting for task contract",
+      "lastAction": "等待任务分配",
       "avatarSeed": "mission-operator"
     },
     "reviewAgent": {
@@ -107,7 +107,7 @@
       "responsibility": "按照 Mission 成功指标审核产出，并在需要时要求修改。",
       "status": "idle",
       "currentTask": false,
-      "lastAction": "Waiting for artifact",
+      "lastAction": "等待任务分配",
       "avatarSeed": "reviewer"
     },
     "relationLabels": [
