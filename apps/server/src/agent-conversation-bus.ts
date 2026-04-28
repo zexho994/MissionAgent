@@ -245,7 +245,11 @@ export class AgentConversationBus {
 
 function parseAgentConversationResponse(content: string): AgentConversationResponse {
   try {
-    const parsed = JSON.parse(content) as Partial<AgentConversationResponse>;
+    const json = extractJsonObject(content);
+    if (!json) {
+      throw new Error("No JSON object found");
+    }
+    const parsed = JSON.parse(json) as Partial<AgentConversationResponse>;
     if (typeof parsed.message !== "string" || !parsed.message.trim()) {
       throw new Error("message is required");
     }
@@ -272,6 +276,44 @@ function parseAgentConversationResponse(content: string): AgentConversationRespo
       action: { type: "acknowledge" },
     };
   }
+}
+
+function extractJsonObject(content: string): string | undefined {
+  const trimmed = content.trim();
+  if (!trimmed) return undefined;
+
+  const fenced = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/);
+  const candidate = fenced?.[1]?.trim() ?? trimmed;
+  const startIndex = candidate.indexOf("{");
+  if (startIndex === -1) return undefined;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = startIndex; i < candidate.length; i += 1) {
+    const char = candidate[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === "\\" && inString) {
+      escape = true;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return candidate.slice(startIndex, i + 1);
+    }
+  }
+
+  return undefined;
 }
 
 function parseAction(action: unknown): AgentConversationResponse["action"] {

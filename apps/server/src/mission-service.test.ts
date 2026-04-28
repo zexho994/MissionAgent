@@ -478,4 +478,33 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.agentMessages.some((message) => message.type === "user_message" && message.toAgentId === targetAgent.id)).toBe(true);
     expect(snapshot.threads.find((thread) => thread.id === reply.threadId)?.participantAgentIds).toContain(targetAgent.id);
   });
+
+  it("parses fenced JSON agent conversation responses", async () => {
+    const fake = new FakeLlmAdapter(() => [
+      "```json",
+      JSON.stringify({
+        message: "我已识别线程隔离风险，建议先补并发对话测试。",
+        type: "agent_report",
+        mentionedAgentIds: [],
+        shouldPropagate: false,
+        action: { type: "acknowledge" },
+      }, null, 2),
+      "```",
+    ].join("\n"));
+    const service = new InMemoryMissionService({ llm: fake });
+    const mission = await service.createMission({ goal: "Validate agent collaboration threads" });
+    service.activateMission({ missionId: mission.id });
+    const targetAgent = service.snapshot().agents.find((agent) => agent.role !== "owner");
+    if (!targetAgent) throw new Error("missing target agent");
+
+    const reply = await service.triggerAgentConversation({
+      missionId: mission.id,
+      agentId: targetAgent.id,
+      message: "请汇报当前最大风险",
+    });
+
+    expect(reply.type).toBe("agent_report");
+    expect(reply.content).toBe("我已识别线程隔离风险，建议先补并发对话测试。");
+  });
+
 });
