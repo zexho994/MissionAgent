@@ -655,6 +655,86 @@ h1, h2, p { margin-top: 0; }
   color: #4b5565;
 }
 
+.conversation-panel {
+  max-width: 980px;
+}
+.conversation-feed {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+.thread-card {
+  border: 1px solid #d8dee8;
+  border-radius: 14px;
+  background: #ffffff;
+  overflow: hidden;
+}
+.thread-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #ecf0f5;
+  background: #f8fafc;
+  padding: 14px 16px;
+}
+.thread-card header strong,
+.thread-card header span {
+  display: block;
+}
+.thread-card header strong {
+  margin-bottom: 5px;
+  font-size: 15px;
+}
+.thread-card header span,
+.thread-card time {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+.thread-messages {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+.thread-message {
+  border: 1px solid #ecf0f5;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 12px;
+}
+.thread-message > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.thread-message strong {
+  font-size: 13px;
+}
+.thread-message p {
+  margin-bottom: 0;
+  color: #4b5565;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.message-badge {
+  border: 1px solid #bad0f6;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #2563eb;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 900;
+}
+.thread-message mark {
+  border-radius: 4px;
+  background: #dcfce7;
+  color: #166534;
+  padding: 1px 4px;
+}
+
 @media (max-width: 1250px) {
   .relation-summary { display: flex; }
   .agent-network {

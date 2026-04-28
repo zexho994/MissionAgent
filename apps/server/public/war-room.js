@@ -11,6 +11,7 @@ function renderWarRoom() {
       <aside class="war-nav">
         ${warNavButton("overview", "总控看板")}
         ${warNavButton("agents", "Agents")}
+        ${warNavButton("conversations", "协作对话")}
         ${warNavButton("tasks", "任务列表")}
         ${warNavButton("schedule", "定时任务")}
         ${warNavButton("outputs", "产出列表")}
@@ -123,6 +124,9 @@ function renderRelationSummary(data) {
 }
 
 function renderWarTab(data) {
+  if (state.warTab === "conversations") {
+    return renderConversationFeed(data);
+  }
   const map = {
     agents: {
       title: "Agents 看板",
@@ -157,4 +161,76 @@ function renderWarTab(data) {
       </div>
     </div>
   `;
+}
+
+function renderConversationFeed(data) {
+  const threads = [...data.threads].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return `
+    <div class="tab-panel conversation-panel">
+      <h1>协作对话</h1>
+      <p>展示 Agent 之间围绕执行、审核、请求和异常通知产生的上下文线程。</p>
+      <div class="conversation-feed">
+        ${threads.length ? threads.map((thread) => renderConversationThread(data, thread)).join("") : `<div class="empty-state">暂无 Agent 协作对话</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderConversationThread(data, thread) {
+  const messages = data.messages.filter((message) => message.threadId === thread.id);
+  return `
+    <article class="thread-card">
+      <header>
+        <div>
+          <strong>${esc(thread.topic)}</strong>
+          <span>${thread.participantAgentIds.length} 个参与者 · ${thread.status === "active" ? "进行中" : "已结束"}</span>
+        </div>
+        <time>${esc(formatTime(thread.createdAt))}</time>
+      </header>
+      <div class="thread-messages">
+        ${messages.map((message) => renderThreadMessage(data, message)).join("")}
+      </div>
+    </article>
+  `;
+}
+
+function renderThreadMessage(data, message) {
+  const agent = data.agents.find((candidate) => candidate.id === message.fromAgentId);
+  const name = message.fromAgentId === "user" ? "你" : (agent?.name || "Agent");
+  return `
+    <div class="thread-message">
+      <div>
+        <strong>${esc(name)}</strong>
+        <span class="message-badge">${esc(messageTypeLabel(message.type))}</span>
+      </div>
+      <p>${highlightMentions(esc(message.content), data)}</p>
+    </div>
+  `;
+}
+
+function messageTypeLabel(type) {
+  const map = {
+    agent_chat: "对话",
+    agent_report: "汇报",
+    agent_request: "请求",
+    agent_notify: "通知",
+    agent_discussion: "讨论",
+    user_message: "用户",
+  };
+  return map[type] || type;
+}
+
+function highlightMentions(content, data) {
+  let highlighted = content;
+  for (const agent of data.agents) {
+    const shortName = shortAgentName(agent.name);
+    highlighted = highlighted.replaceAll(`@${shortName}`, `<mark>@${esc(shortName)}</mark>`);
+  }
+  return highlighted;
+}
+
+function formatTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
