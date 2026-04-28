@@ -163,9 +163,9 @@ interface StoredMissionSnapshot extends MissionSnapshot {
 }
 
 export interface MissionServiceOptions {
-  storageFile?: string;
-  configFile?: string;
-  llm?: LlmService;
+  storageFile?: string | undefined;
+  configFile?: string | undefined;
+  llm?: LlmService | undefined;
 }
 
 export class InMemoryMissionService {

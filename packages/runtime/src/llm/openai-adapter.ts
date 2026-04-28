@@ -3,8 +3,8 @@ import type { LlmService } from "./llm-service.js";
 
 export interface OpenAiAdapterOptions {
   apiKey: string;
-  baseUrl?: string;
-  defaultModel?: string;
+  baseUrl?: string | undefined;
+  defaultModel?: string | undefined;
   maxRetries?: number;
   timeoutMs?: number;
   fetch?: typeof fetch;
