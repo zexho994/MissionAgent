@@ -7,88 +7,27 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="shell">
-
-      <!-- Top bar -->
-      <div class="topbar">
-        <div class="topbar-left">
-          <span class="eyebrow">DigitalAgent</span>
-          <h1>Mission Harness</h1>
-        </div>
-        <div class="topbar-right">
+    <main class="app-root">
+      <header class="topbar">
+        <button id="home-button" class="brand-button" type="button" aria-label="返回主页面">
+          <span>DigitalAgent</span>
+          <strong>Mission Harness</strong>
+        </button>
+        <div class="topbar-actions">
+          <button id="new-chat-button" class="new-chat-button" type="button">新对话</button>
+          <div class="mission-menu">
+            <button id="mission-button" class="mission-button" type="button" aria-expanded="false">Mission</button>
+            <div id="mission-popover" class="mission-popover" hidden></div>
+          </div>
           <div class="status-pill">
             <span id="openclaw-dot" class="dot"></span>
             <span id="openclaw-status">检测中...</span>
           </div>
-          <button id="refresh" class="secondary" type="button">刷新</button>
+          <button id="refresh" class="icon-button" type="button" aria-label="刷新">刷新</button>
         </div>
-      </div>
+      </header>
 
-      <!-- Pipeline progress -->
-      <div id="pipeline" class="pipeline">
-        <div class="pipeline-step" id="pipe-mission">
-          <div class="step-icon">🎯</div>
-          <div class="step-title">Mission</div>
-          <div class="step-sub">创建目标与约束</div>
-          <span class="arrow">▶</span>
-        </div>
-        <div class="pipeline-step" id="pipe-task">
-          <div class="step-icon">📦</div>
-          <div class="step-title">Task 拆解</div>
-          <div class="step-sub">自动生成初始任务</div>
-          <span class="arrow">▶</span>
-        </div>
-        <div class="pipeline-step" id="pipe-exec">
-          <div class="step-icon">⚡</div>
-          <div class="step-title">执行</div>
-          <div class="step-sub">OpenClaw Agent 运行</div>
-          <span class="arrow">▶</span>
-        </div>
-        <div class="pipeline-step" id="pipe-result">
-          <div class="step-icon">✅</div>
-          <div class="step-title">产物 & 审核</div>
-          <div class="step-sub">Artifact + Review</div>
-        </div>
-      </div>
-
-      <!-- Main content: left sidebar + right detail -->
-      <div class="grid">
-
-        <!-- Left: Mission + Actions -->
-        <div>
-          <!-- Create mission form -->
-          <form id="mission-form" class="panel" style="margin-bottom:18px">
-            <h2>🎯 创建 Mission</h2>
-            <label>
-              目标
-              <textarea id="goal" rows="3">学习 harness：使用 ChatGPT Image 2 生成一张包含核心知识的图片，帮助用户快速了解和学习 harness 的长任务系统设计方法。</textarea>
-            </label>
-            <label>
-              成功指标（逗号分隔）
-              <input id="metrics" value="输出 harness 核心知识结构, 生成图片提示词, 图片适合 3 分钟快速理解" />
-            </label>
-            <label>
-              约束（逗号分隔）
-              <input id="constraints" value="内容简洁通俗, 不堆术语, 先解释 harness 再组织视觉结构" />
-            </label>
-            <button type="submit" class="primary">创建 Mission</button>
-          </form>
-
-          <!-- Current mission card -->
-          <div id="mission-detail"></div>
-
-          <!-- Execute button -->
-          <div id="exec-section"></div>
-        </div>
-
-        <!-- Right: Task flow + Results -->
-        <div>
-          <div id="task-panel"></div>
-          <div id="artifact-panel"></div>
-          <div id="review-panel"></div>
-        </div>
-
-      </div>
+      <section id="app-view" class="app-view"></section>
     </main>
     <script src="/app.js" type="module"></script>
   </body>

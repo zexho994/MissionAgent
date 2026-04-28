@@ -9,7 +9,8 @@ import { InMemoryMissionService } from "./mission-service.js";
 const port = Number(process.env.PORT ?? 3000);
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
-const missions = new InMemoryMissionService();
+const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data", "mission-store.json");
+const missions = new InMemoryMissionService({ storageFile: dataFile });
 const openclawOptions: OpenClawCliAdapterOptions = {
   command: "openclaw",
 };

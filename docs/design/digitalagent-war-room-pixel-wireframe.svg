@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180">
+  <defs>
+    <style>
+      .bg { fill: #f5f6f8; }
+      .screen { fill: #ffffff; stroke: #1f2328; stroke-width: 3; }
+      .panel { fill: #ffffff; stroke: #2d333b; stroke-width: 2.2; }
+      .soft { fill: #f3f5f8; stroke: #c9d0da; stroke-width: 1.5; }
+      .nav-active { fill: #15181d; }
+      .nav-text-active { fill: #ffffff; font: 700 18px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      .nav-text { fill: #343a46; font: 700 18px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      .title { fill: #15181d; font: 800 30px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      .h2 { fill: #15181d; font: 800 24px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      .text { fill: #2a3038; font: 600 17px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      .small { fill: #636b78; font: 500 14px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      .tiny { fill: #6b7280; font: 500 12px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; }
+      .line { stroke: #d8dde5; stroke-width: 2; }
+      .flow { stroke: #64748b; stroke-width: 4; stroke-linecap: round; fill: none; }
+      .flow-active { stroke: #2563eb; stroke-width: 5; stroke-linecap: round; fill: none; }
+      .dash { stroke-dasharray: 10 10; }
+      .relation { fill: #ffffff; stroke: #b8c2d1; stroke-width: 1.4; }
+      .relation-active { fill: #eff6ff; stroke: #8bb5f2; stroke-width: 1.6; }
+      .blue { fill: #eaf2ff; stroke: #9bbaf1; stroke-width: 1.5; }
+      .green { fill: #eaf8ef; stroke: #91d4aa; stroke-width: 1.5; }
+      .amber { fill: #fff6df; stroke: #e2c36e; stroke-width: 1.5; }
+      .pink { fill: #fff0f6; stroke: #efa7c6; stroke-width: 1.5; }
+      .purple { fill: #f3efff; stroke: #baa7ee; stroke-width: 1.5; }
+      .pixel-outline { fill: #1f2328; }
+      .skin { fill: #f2c9a0; }
+      .hair { fill: #24262b; }
+      .owner { fill: #2563eb; }
+      .hr { fill: #16a34a; }
+      .planner { fill: #7c3aed; }
+      .worker { fill: #ea580c; }
+      .reviewer { fill: #db2777; }
+    </style>
+
+    <g id="pixel-agent">
+      <rect x="28" y="0" width="48" height="16" class="hair"/>
+      <rect x="16" y="16" width="72" height="48" class="skin"/>
+      <rect x="32" y="32" width="8" height="8" class="pixel-outline"/>
+      <rect x="64" y="32" width="8" height="8" class="pixel-outline"/>
+      <rect x="40" y="52" width="24" height="6" class="pixel-outline"/>
+      <rect x="24" y="64" width="56" height="64" class="body"/>
+      <rect x="0" y="72" width="24" height="48" class="body"/>
+      <rect x="80" y="72" width="24" height="48" class="body"/>
+      <rect x="30" y="128" width="16" height="44" class="pixel-outline"/>
+      <rect x="58" y="128" width="16" height="44" class="pixel-outline"/>
+    </g>
+  </defs>
+
+  <rect class="bg" width="1800" height="1180"/>
+
+  <text x="70" y="72" class="title">Mission 作战室：像素团队视角</text>
+  <text x="70" y="110" class="small">核心改动：Agent 不再只是卡片，而是任务空间中的“团队成员”；协作流用人物之间的连线表达。</text>
+
+  <rect x="70" y="145" width="1660" height="965" rx="26" class="screen"/>
+  <line x1="70" y1="235" x2="1730" y2="235" class="line"/>
+  <text x="115" y="202" class="h2">Mission / 学习 Harness 并生成知识图</text>
+  <rect x="1345" y="174" width="130" height="42" rx="11" class="panel"/>
+  <text x="1374" y="201" class="text">Mission</text>
+  <circle cx="1518" cy="195" r="7" fill="#16a34a"/>
+  <text x="1535" y="202" class="text">OpenClaw 已连接</text>
+
+  <!-- Sidebar -->
+  <line x1="245" y1="235" x2="245" y2="1110" class="line"/>
+  <rect x="100" y="300" width="115" height="54" rx="12" class="nav-active"/>
+  <text x="122" y="334" class="nav-text-active">总控看板</text>
+  <rect x="100" y="390" width="115" height="54" rx="12" class="soft"/>
+  <text x="128" y="424" class="nav-text">Agents</text>
+  <rect x="100" y="480" width="115" height="54" rx="12" class="soft"/>
+  <text x="122" y="514" class="nav-text">任务列表</text>
+  <rect x="100" y="570" width="115" height="54" rx="12" class="soft"/>
+  <text x="122" y="604" class="nav-text">定时任务</text>
+  <rect x="100" y="660" width="115" height="54" rx="12" class="soft"/>
+  <text x="122" y="694" class="nav-text">产出列表</text>
+
+  <!-- Main war room canvas -->
+  <text x="300" y="295" class="h2">团队协作态势</text>
+  <text x="300" y="326" class="small">默认展示当前 Mission 的团队、交接关系、关键任务和阶段产出。</text>
+
+  <rect x="300" y="360" width="1375" height="575" rx="22" class="soft"/>
+  <text x="330" y="405" class="text">War Room</text>
+  <text x="330" y="432" class="tiny">点击人物进入 Agent 详情；蓝色实线表示当前活跃协作，灰色虚线表示等待中的交接。</text>
+
+  <!-- Flow lines -->
+  <path d="M500 570 C590 500, 685 500, 770 570" class="flow-active"/>
+  <path d="M835 570 C925 500, 1020 500, 1110 570" class="flow"/>
+  <path d="M1165 570 C1250 500, 1340 500, 1425 570" class="flow dash"/>
+  <path d="M500 660 C720 780, 1120 780, 1425 660" class="flow dash"/>
+
+  <rect x="565" y="488" width="145" height="34" rx="17" class="relation-active"/>
+  <text x="588" y="510" class="tiny">招募 / 配置角色</text>
+  <rect x="902" y="488" width="145" height="34" rx="17" class="relation"/>
+  <text x="925" y="510" class="tiny">交付团队配置</text>
+  <rect x="1235" y="488" width="145" height="34" rx="17" class="relation"/>
+  <text x="1258" y="510" class="tiny">下发任务计划</text>
+  <rect x="870" y="765" width="180" height="34" rx="17" class="relation"/>
+  <text x="895" y="787" class="tiny">提交产出审核 / 反馈修正</text>
+
+  <!-- Agent 1 Owner -->
+  <g transform="translate(415 500)">
+    <use href="#pixel-agent"/>
+    <rect x="24" y="64" width="56" height="64" class="owner"/>
+    <rect x="0" y="72" width="24" height="48" class="owner"/>
+    <rect x="80" y="72" width="24" height="48" class="owner"/>
+  </g>
+  <rect x="365" y="695" width="210" height="155" rx="16" class="blue"/>
+  <text x="392" y="730" class="text">Owner Agent</text>
+  <text x="392" y="758" class="small">状态：澄清目标</text>
+  <text x="392" y="790" class="tiny">任务：补齐 Mission 定义</text>
+  <text x="392" y="815" class="tiny">产出：成功标准草案</text>
+
+  <!-- Agent 2 HR -->
+  <g transform="translate(750 500)">
+    <use href="#pixel-agent"/>
+    <rect x="24" y="64" width="56" height="64" class="hr"/>
+    <rect x="0" y="72" width="24" height="48" class="hr"/>
+    <rect x="80" y="72" width="24" height="48" class="hr"/>
+  </g>
+  <rect x="700" y="695" width="210" height="155" rx="16" class="green"/>
+  <text x="733" y="730" class="text">HR Agent</text>
+  <text x="733" y="758" class="small">状态：组建团队</text>
+  <text x="733" y="790" class="tiny">任务：判断需要哪些角色</text>
+  <text x="733" y="815" class="tiny">产出：团队配置</text>
+
+  <!-- Agent 3 Planner -->
+  <g transform="translate(1085 500)">
+    <use href="#pixel-agent"/>
+    <rect x="24" y="64" width="56" height="64" class="planner"/>
+    <rect x="0" y="72" width="24" height="48" class="planner"/>
+    <rect x="80" y="72" width="24" height="48" class="planner"/>
+  </g>
+  <rect x="1035" y="695" width="210" height="155" rx="16" class="purple"/>
+  <text x="1061" y="730" class="text">Planner Agent</text>
+  <text x="1061" y="758" class="small">状态：等待确认</text>
+  <text x="1061" y="790" class="tiny">任务：拆解阶段计划</text>
+  <text x="1061" y="815" class="tiny">产出：任务树</text>
+
+  <!-- Agent 4 Worker -->
+  <g transform="translate(1420 500)">
+    <use href="#pixel-agent"/>
+    <rect x="24" y="64" width="56" height="64" class="worker"/>
+    <rect x="0" y="72" width="24" height="48" class="worker"/>
+    <rect x="80" y="72" width="24" height="48" class="worker"/>
+  </g>
+  <rect x="1370" y="695" width="210" height="155" rx="16" class="amber"/>
+  <text x="1400" y="730" class="text">Worker Agent</text>
+  <text x="1400" y="758" class="small">状态：待执行</text>
+  <text x="1400" y="790" class="tiny">任务：调用工具生成内容</text>
+  <text x="1400" y="815" class="tiny">产出：图片 / 文档</text>
+
+  <!-- Reviewer as lower node -->
+  <g transform="translate(920 805)">
+    <use href="#pixel-agent"/>
+    <rect x="24" y="64" width="56" height="64" class="reviewer"/>
+    <rect x="0" y="72" width="24" height="48" class="reviewer"/>
+    <rect x="80" y="72" width="24" height="48" class="reviewer"/>
+  </g>
+  <rect x="850" y="1000" width="250" height="78" rx="16" class="pink"/>
+  <text x="900" y="1030" class="text">Reviewer Agent</text>
+  <text x="900" y="1058" class="small">检查产出是否符合目标</text>
+
+  <!-- Bottom summary below war room -->
+  <rect x="300" y="970" width="500" height="95" rx="18" class="panel"/>
+  <text x="330" y="1010" class="text">当前关键任务</text>
+  <text x="330" y="1040" class="small">Owner 正在让用户确认：受众、风格、输出格式、执行边界。</text>
+
+  <rect x="1135" y="970" width="540" height="95" rx="18" class="panel"/>
+  <text x="1165" y="1010" class="text">最近产出</text>
+  <text x="1165" y="1040" class="small">Mission Brief 草案、团队角色建议、待确认问题列表。</text>
+</svg>

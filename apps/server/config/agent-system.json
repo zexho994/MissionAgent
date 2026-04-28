@@ -1,0 +1,158 @@
+{
+  "owner": {
+    "brief": {
+      "summaryTemplate": "Owner 已分析初始目标并生成 Mission 初稿：{{goal}}",
+      "successMetrics": [
+        "目标结果已经被 Owner 明确",
+        "Mission 可以被拆成可执行、可审核的任务",
+        "在模糊工作开始前，用户补充信息会被记录"
+      ],
+      "constraints": [
+        "需求不清楚时，先让用户用选择或填写补充",
+        "第一版计划必须足够简单，方便用户审核",
+        "未经用户确认，不对外发布、发送或提交内容"
+      ]
+    },
+    "followup": {
+      "template": "收到补充信息：{{message}}。这条信息已追加到当前 Mission，不会创建新的 Mission。"
+    }
+  },
+  "teamPlanner": {
+    "baseAgents": [
+      {
+        "role": "owner",
+        "name": "Owner Agent",
+        "responsibility": "负责 Mission 结果、澄清缺失信息，并判断何时需要用户确认。",
+        "status": "thinking",
+        "currentTask": true,
+        "lastAction": "Clarified mission intent",
+        "avatarSeed": "owner"
+      },
+      {
+        "role": "hr",
+        "name": "HR Agent",
+        "responsibility": "根据 Mission 设计临时团队、职责和协作关系。",
+        "status": "done",
+        "currentTask": false,
+        "lastAction": "Generated dynamic team plan",
+        "avatarSeed": "hr"
+      }
+    ],
+    "rules": [
+      {
+        "id": "research",
+        "keywords": ["学习", "研究", "harness", "分析", "资料", "竞品", "调研", "research"],
+        "agent": {
+          "role": "researcher",
+          "name": "Research Agent",
+          "responsibility": "在生产开始前提炼核心知识、资料结构和关键判断点。",
+          "status": "done",
+          "currentTask": true,
+          "lastAction": "Prepared research outline",
+          "avatarSeed": "researcher"
+        }
+      },
+      {
+        "id": "social",
+        "keywords": ["小红书", "xiaohongshu", "粉丝", "账号", "内容", "运营", "发布", "社媒", "social"],
+        "agent": {
+          "role": "content_strategist",
+          "name": "Content Strategist Agent",
+          "responsibility": "把目标转成受众、选题、发布节奏和增长策略。",
+          "status": "idle",
+          "currentTask": false,
+          "lastAction": "Waiting for audience constraints",
+          "avatarSeed": "content-strategist"
+        }
+      },
+      {
+        "id": "product",
+        "keywords": ["系统", "产品", "开发", "代码", "页面", "app", "agent", "openclaw", "cli"],
+        "agent": {
+          "role": "system_architect",
+          "name": "System Architect Agent",
+          "responsibility": "把产品或工程目标拆成模块、接口和实施任务。",
+          "status": "idle",
+          "currentTask": false,
+          "lastAction": "Waiting for product scope",
+          "avatarSeed": "system-architect"
+        }
+      },
+      {
+        "id": "image",
+        "keywords": ["image", "图片", "图", "视觉", "海报", "avatar", "头像"],
+        "agent": {
+          "role": "image_creator",
+          "name": "Image Creator Agent",
+          "responsibility": "生成视觉提示词、图片素材和可审核视觉产出。",
+          "status": "idle",
+          "currentTask": false,
+          "lastAction": "Waiting for visual direction",
+          "avatarSeed": "image-creator"
+        }
+      }
+    ],
+    "fallbackAgent": {
+      "role": "mission_operator",
+      "name": "Mission Operator Agent",
+      "responsibility": "执行第一个具体任务并产出可审核结果。",
+      "status": "idle",
+      "currentTask": false,
+      "lastAction": "Waiting for task contract",
+      "avatarSeed": "mission-operator"
+    },
+    "reviewAgent": {
+      "role": "reviewer",
+      "name": "Review Agent",
+      "responsibility": "按照 Mission 成功指标审核产出，并在需要时要求修改。",
+      "status": "idle",
+      "currentTask": false,
+      "lastAction": "Waiting for artifact",
+      "avatarSeed": "reviewer"
+    },
+    "relationLabels": [
+      { "fromRole": "owner", "toRole": "hr", "label": "招募 / 配置团队" },
+      { "fromRole": "hr", "label": "交付角色职责" },
+      { "toRole": "reviewer", "label": "提交产出审核 / 反馈修正" },
+      { "fromRoleIncludes": "research", "label": "交付知识结构" },
+      { "fromRoleIncludes": "strategist", "label": "交付内容策略" },
+      { "fromRoleIncludes": "architect", "label": "交付系统方案" },
+      { "label": "下发任务计划" }
+    ],
+    "initialTasks": [
+      {
+        "requires": ["image", "research"],
+        "title": "Define knowledge structure and first image production plan",
+        "objective": "Create a first-pass plan that turns mission knowledge into a reviewable visual artifact"
+      },
+      {
+        "requires": ["social"],
+        "title": "Define growth strategy and first content operation plan",
+        "objective": "Create a first-pass operating plan with audience, content, cadence, and review points"
+      },
+      {
+        "requires": ["product"],
+        "title": "Define system modules and first implementation plan",
+        "objective": "Create a first-pass engineering plan with modules, risks, and implementation sequence"
+      },
+      {
+        "requires": [],
+        "title": "Define mission team and first execution plan",
+        "objective": "Create a first-pass team plan and execution plan for this mission"
+      }
+    ],
+    "capabilityMatchers": {
+      "plan": ["planner", "strategist", "research", "analyst", "architect"],
+      "execute": ["worker", "creator", "browser", "image", "content", "engineer", "operator", "producer", "research"],
+      "review": ["review", "qa", "critic", "editor", "quality"]
+    }
+  },
+  "ui": {
+    "emptyPrompt": "例如：描述一个你想完成的新 Mission",
+    "starterPrompts": [
+      { "label": "学习知识", "value": "学习 harness，并生成一张知识图" },
+      { "label": "增长任务", "value": "运营一个小红书账号，一个月涨到 1000 粉丝" },
+      { "label": "产品研发", "value": "做一个 24 小时运行的团队协作 agent 系统" }
+    ]
+  }
+}

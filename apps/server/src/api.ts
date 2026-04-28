@@ -41,14 +41,44 @@ export async function handleApiRequest(
       return json(200, deps.missions.snapshot());
     }
 
+    if (request.method === "GET" && request.path === "/api/config") {
+      return json(200, deps.missions.publicConfig());
+    }
+
     if (request.method === "POST" && request.path === "/api/missions") {
       const body = expectObject(request.body);
-      const mission = deps.missions.createMission({
+      const createMissionInput: {
+        goal: string;
+        successMetrics?: string[];
+        constraints?: string[];
+      } = {
         goal: expectString(body.goal, "goal"),
-        successMetrics: expectStringArray(body.successMetrics, "successMetrics"),
-        constraints: expectStringArray(body.constraints, "constraints"),
-      });
+      };
+      if (body.successMetrics !== undefined) {
+        createMissionInput.successMetrics = expectStringArray(body.successMetrics, "successMetrics");
+      }
+      if (body.constraints !== undefined) {
+        createMissionInput.constraints = expectStringArray(body.constraints, "constraints");
+      }
+      const mission = deps.missions.createMission(createMissionInput);
       return json(201, { mission, snapshot: deps.missions.snapshot() });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/continue") {
+      const body = expectObject(request.body);
+      const mission = deps.missions.continueMission({
+        missionId: expectString(body.missionId, "missionId"),
+        message: expectString(body.message, "message"),
+      });
+      return json(200, { mission, snapshot: deps.missions.snapshot() });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/activate") {
+      const body = expectObject(request.body);
+      const mission = deps.missions.activateMission({
+        missionId: expectString(body.missionId, "missionId"),
+      });
+      return json(200, { mission, snapshot: deps.missions.snapshot() });
     }
 
     if (request.method === "POST" && request.path === "/api/openclaw/run") {

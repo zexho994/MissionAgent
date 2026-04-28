@@ -7,6 +7,7 @@ coverage/
 
 # Local generated previews and render scratch space.
 scratch/
+apps/server/data/
 
 # Environment files.
 .env

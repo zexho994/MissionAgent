@@ -60,6 +60,51 @@ describe("handleApiRequest", () => {
     expect(snapshot.tasks).toHaveLength(1);
   });
 
+  it("creates a mission from a goal-only owner chat message", async () => {
+    const missions = new InMemoryMissionService();
+
+    const createResponse = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions",
+        body: {
+          goal: "学习 harness 并生成知识图",
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(createResponse.status).toBe(201);
+    const snapshot = missions.snapshot();
+    expect(snapshot.missions[0]?.successMetrics).toContain("目标结果已经被 Owner 明确");
+    expect(snapshot.agentMessages[0]?.type).toBe("mission_brief");
+  });
+
+  it("continues an existing mission instead of creating a new one", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = missions.createMission({
+      goal: "学习 harness 并生成知识图",
+    });
+
+    const response = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/continue",
+        body: {
+          missionId: mission.id,
+          message: "补充：头像要更像参考图",
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(200);
+    const snapshot = missions.snapshot();
+    expect(snapshot.missions).toHaveLength(1);
+    expect(snapshot.agentMessages.some((message) => message.type === "user_message")).toBe(true);
+    expect(snapshot.agentMessages.some((message) => message.type === "owner_followup")).toBe(true);
+  });
+
   it("starts an OpenClaw task and exposes running execution state immediately", async () => {
     const missions = new InMemoryMissionService();
     const pendingOpenClaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask"> = {
