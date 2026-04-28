@@ -34,7 +34,25 @@ describe("handleApiRequest", () => {
       });
   });
 
-  it("creates a mission and exposes it in the snapshot", async () => {
+  it("creates a mission with default metrics when not provided", async () => {
+    const missions = new InMemoryMissionService();
+
+    const createResponse = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions",
+        body: { goal: "学习 harness 并生成知识图" },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(createResponse.status).toBe(201);
+    const snapshot = missions.snapshot();
+    expect(snapshot.missions).toHaveLength(1);
+    expect(snapshot.missions[0]?.successMetrics).toContain("目标结果已经被 Owner 明确");
+  });
+
+  it("creates a mission with user-provided metrics and activates it", async () => {
     const missions = new InMemoryMissionService();
 
     const createResponse = await handleApiRequest(
@@ -49,42 +67,27 @@ describe("handleApiRequest", () => {
       },
       { missions, openclaw: fakeOpenClaw() },
     );
-    const snapshotResponse = await handleApiRequest(
-      { method: "GET", path: "/api/snapshot" },
-      { missions, openclaw: fakeOpenClaw() },
-    );
 
     expect(createResponse.status).toBe(201);
-    const snapshot = snapshotResponse.body as MissionSnapshot;
-    expect(snapshot.missions).toHaveLength(1);
-    expect(snapshot.tasks).toHaveLength(1);
-  });
+    expect(missions.snapshot().missions[0]?.successMetrics).toEqual(["followers >= 1000"]);
 
-  it("creates a mission from a goal-only owner chat message", async () => {
-    const missions = new InMemoryMissionService();
-
-    const createResponse = await handleApiRequest(
+    const activateResponse = await handleApiRequest(
       {
         method: "POST",
-        path: "/api/missions",
-        body: {
-          goal: "学习 harness 并生成知识图",
-        },
+        path: "/api/missions/activate",
+        body: { missionId: missions.snapshot().missions[0]?.id },
       },
       { missions, openclaw: fakeOpenClaw() },
     );
 
-    expect(createResponse.status).toBe(201);
-    const snapshot = missions.snapshot();
-    expect(snapshot.missions[0]?.successMetrics).toContain("目标结果已经被 Owner 明确");
-    expect(snapshot.agentMessages[0]?.type).toBe("mission_brief");
+    expect(activateResponse.status).toBe(200);
+    expect(missions.snapshot().tasks).toHaveLength(1);
   });
 
   it("continues an existing mission instead of creating a new one", async () => {
     const missions = new InMemoryMissionService();
-    const mission = missions.createMission({
-      goal: "学习 harness 并生成知识图",
-    });
+    const mission = missions.createMission({ goal: "学习 harness 并生成知识图" });
+    missions.activateMission({ missionId: mission.id });
 
     const response = await handleApiRequest(
       {
@@ -120,6 +123,7 @@ describe("handleApiRequest", () => {
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
     });
+    missions.activateMission({ missionId: mission.id });
     const task = missions.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
 

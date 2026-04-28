@@ -5,24 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 describe("InMemoryMissionService", () => {
-  it("creates a mission with an initial owner task", () => {
-    const service = new InMemoryMissionService();
-
-    const mission = service.createMission({
-      goal: "Grow Xiaohongshu account to 1000 followers",
-      successMetrics: ["followers >= 1000"],
-      constraints: ["human approval before publishing"],
-    });
-
-    const snapshot = service.snapshot();
-
-    expect(snapshot.missions).toHaveLength(1);
-    expect(snapshot.tasks).toHaveLength(1);
-    expect(snapshot.tasks[0]?.missionId).toBe(mission.id);
-    expect(snapshot.tasks[0]?.title).toBe("Define growth strategy and first content operation plan");
-  });
-
-  it("lets the owner agent derive success metrics and constraints from a goal-only mission", () => {
+  it("creates a mission with default success metrics from config when not provided", () => {
     const service = new InMemoryMissionService();
 
     const mission = service.createMission({
@@ -31,10 +14,28 @@ describe("InMemoryMissionService", () => {
 
     expect(mission.successMetrics).toContain("目标结果已经被 Owner 明确");
     expect(mission.constraints).toContain("需求不清楚时，先让用户用选择或填写补充");
-    expect(service.snapshot().agentMessages[0]?.content).toContain("学习 harness");
+    const snapshot = service.snapshot();
+    expect(snapshot.missions).toHaveLength(1);
+    expect(snapshot.agents).toHaveLength(1);
+    expect(snapshot.agents[0]?.role).toBe("owner");
+    expect(snapshot.tasks).toHaveLength(0);
+    expect(snapshot.agentMessages).toHaveLength(0);
   });
 
-  it("creates a mission war room with a team, collaboration messages, and task events", () => {
+  it("creates a mission with user-provided metrics and constraints", () => {
+    const service = new InMemoryMissionService();
+
+    const mission = service.createMission({
+      goal: "Grow Xiaohongshu account to 1000 followers",
+      successMetrics: ["followers >= 1000"],
+      constraints: ["human approval before publishing"],
+    });
+
+    expect(mission.successMetrics).toEqual(["followers >= 1000"]);
+    expect(mission.constraints).toEqual(["human approval before publishing"]);
+  });
+
+  it("activates a mission to create team, agents, and first task", () => {
     const service = new InMemoryMissionService();
 
     const mission = service.createMission({
@@ -43,8 +44,9 @@ describe("InMemoryMissionService", () => {
       constraints: ["concise"],
     });
 
-    const snapshot = service.snapshot();
+    service.activateMission({ missionId: mission.id });
 
+    const snapshot = service.snapshot();
     expect(snapshot.agents.map((agent) => agent.role)).toEqual([
       "owner",
       "hr",
@@ -55,12 +57,19 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.agents.every((agent) => agent.missionId === mission.id)).toBe(true);
     expect(snapshot.agentRelations).toHaveLength(snapshot.agents.length - 1);
     expect(snapshot.agentRelations.map((relation) => relation.label)).toContain("提交产出审核 / 反馈修正");
-    expect(snapshot.agentMessages.map((message) => message.type)).toEqual([
-      "mission_brief",
-      "team_created",
-      "task_plan",
-    ]);
-    expect(snapshot.taskEvents.map((event) => event.type)).toContain("task.created");
+    expect(snapshot.tasks).toHaveLength(1);
+    expect(snapshot.tasks[0]?.title).toBe("Define knowledge structure and first image production plan");
+  });
+
+  it("does not re-activate a mission that already has tasks", () => {
+    const service = new InMemoryMissionService();
+    const mission = service.createMission({ goal: "Test goal" });
+    service.activateMission({ missionId: mission.id });
+    const firstTaskCount = service.snapshot().tasks.length;
+
+    service.activateMission({ missionId: mission.id });
+
+    expect(service.snapshot().tasks).toHaveLength(firstTaskCount);
   });
 
   it("keeps war room state isolated between multiple missions", () => {
@@ -71,27 +80,26 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["first metric"],
       constraints: ["first constraint"],
     });
+    service.activateMission({ missionId: first.id });
     const second = service.createMission({
       goal: "Second mission",
       successMetrics: ["second metric"],
       constraints: ["second constraint"],
     });
+    service.activateMission({ missionId: second.id });
 
     const snapshot = service.snapshot();
-
     expect(snapshot.missions).toHaveLength(2);
     expect(snapshot.agents.filter((agent) => agent.missionId === first.id).length).toBeGreaterThanOrEqual(4);
     expect(snapshot.agents.filter((agent) => agent.missionId === second.id).length).toBeGreaterThanOrEqual(4);
     expect(snapshot.tasks.filter((task) => task.missionId === first.id)).toHaveLength(1);
     expect(snapshot.tasks.filter((task) => task.missionId === second.id)).toHaveLength(1);
-    expect(snapshot.agentMessages.every((message) => message.missionId === first.id || message.missionId === second.id)).toBe(true);
   });
 
   it("links worker agent activity to tasks, tool calls, and artifacts", () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({
-      goal: "Create a harness learning image",
-    });
+    const mission = service.createMission({ goal: "Create a harness learning image" });
+    service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
@@ -125,9 +133,8 @@ describe("InMemoryMissionService", () => {
     try {
       const storageFile = join(dir, "mission-store.json");
       const service = new InMemoryMissionService({ storageFile });
-      const mission = service.createMission({
-        goal: "学习 harness 并生成知识图",
-      });
+      const mission = service.createMission({ goal: "学习 harness 并生成知识图" });
+      service.activateMission({ missionId: mission.id });
 
       const reloaded = new InMemoryMissionService({ storageFile });
       const snapshot = reloaded.snapshot();
@@ -143,9 +150,8 @@ describe("InMemoryMissionService", () => {
 
   it("continues an existing mission conversation without creating a new mission", () => {
     const service = new InMemoryMissionService();
-    const mission = service.createMission({
-      goal: "学习 harness 并生成知识图",
-    });
+    const mission = service.createMission({ goal: "学习 harness 并生成知识图" });
+    service.activateMission({ missionId: mission.id });
 
     service.continueMission({
       missionId: mission.id,
@@ -165,6 +171,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
     });
+    service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
@@ -200,6 +207,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
     });
+    service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
@@ -225,6 +233,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["image produced"],
       constraints: ["human approval before publishing"],
     });
+    service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
@@ -251,6 +260,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["image prompt"],
       constraints: ["concise"],
     });
+    service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const firstExecution = service.startExecution({

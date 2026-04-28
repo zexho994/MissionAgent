@@ -198,13 +198,7 @@ export class InMemoryMissionService {
     });
 
     this.missions.set(mission.id, mission);
-    const owner = this.createOwnerAgent(mission.id);
-    this.appendMessage({
-      missionId: mission.id,
-      fromAgentId: owner.id,
-      type: "mission_brief",
-      content: ownerBrief.summary,
-    });
+    this.createOwnerAgent(mission.id);
     this.persist();
     return mission;
   }
@@ -246,28 +240,7 @@ export class InMemoryMissionService {
     });
 
     this.tasks.set(initialTask.id, initialTask);
-    const team = this.createMissionTeam(mission.id, initialTask.id, teamPlan);
-    const hr = this.agentByRole(mission.id, "hr");
-    const firstProducer = this.firstAgentWithCapability(mission.id, "plan") ?? this.firstNonOrchestratorAgent(mission.id) ?? hr;
-    this.appendMessage({
-      missionId: mission.id,
-      fromAgentId: hr.id,
-      type: "team_created",
-      content: `Created mission team: ${team.map((agent) => agent.name).join(", ")}.`,
-    });
-    this.appendMessage({
-      missionId: mission.id,
-      fromAgentId: firstProducer.id,
-      type: "task_plan",
-      content: `Planned first task: ${initialTask.title}`,
-    });
-    this.appendTaskEvent({
-      missionId: mission.id,
-      taskId: initialTask.id,
-      actorAgentId: firstProducer.id,
-      type: "task.created",
-      summary: "Initial execution-plan task created from Mission contract.",
-    });
+    this.createMissionTeam(mission.id, initialTask.id, teamPlan);
     this.persist();
     return mission;
   }
