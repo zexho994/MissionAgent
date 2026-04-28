@@ -70,6 +70,7 @@ export function createHRAgent(options: HRAgentOptions) {
         missionGoal: brief.goal,
       } as MissionAnalysis;
     } catch (error) {
+      console.error("[HR Agent] receiveMissionBrief failed, using fallback:", error instanceof Error ? error.message : String(error));
       const fallback = fallbackMissionAnalysis(brief);
       return {
         ...fallback,
@@ -102,6 +103,7 @@ export function createHRAgent(options: HRAgentOptions) {
 
       return roleSpecs;
     } catch (error) {
+      console.error("[HR Agent] generateRoleSpecs failed, using fallback:", error instanceof Error ? error.message : String(error));
       return fallbackRoleSpecs(missionId, analysis);
     }
   }
@@ -110,7 +112,11 @@ export function createHRAgent(options: HRAgentOptions) {
     missionId: string,
     roleSpecs: RoleSpec[],
   ): Promise<TeamProposal> {
-    const totalBudget = roleSpecs.reduce(
+    const enforcedSpecs = roleSpecs.length > maxTeamSize
+      ? roleSpecs.slice(0, maxTeamSize)
+      : roleSpecs;
+
+    const totalBudget = enforcedSpecs.reduce(
       (acc, spec) => ({
         maxRuntimeMinutes: acc.maxRuntimeMinutes + spec.budget.maxRuntimeMinutes,
         maxTasks: acc.maxTasks + spec.budget.maxTasks,
@@ -119,12 +125,12 @@ export function createHRAgent(options: HRAgentOptions) {
     );
 
     const estimatedDuration = estimateDuration(totalBudget.maxRuntimeMinutes);
-    const riskAssessment = assessRisks(roleSpecs);
-    const collaborationPlan = designCollaborationPlan(roleSpecs);
+    const riskAssessment = assessRisks(enforcedSpecs);
+    const collaborationPlan = designCollaborationPlan(enforcedSpecs);
 
     return {
       missionId,
-      roles: roleSpecs,
+      roles: enforcedSpecs,
       proposedBy: `hr_${createId("agent")}`,
       totalBudget,
       estimatedDuration,
@@ -150,6 +156,7 @@ export function createHRAgent(options: HRAgentOptions) {
 
       return parseNegotiationResponse(response.content, missionId, initialSpec);
     } catch (error) {
+      console.error("[HR Agent] negotiateRoleSpec failed, using fallback:", error instanceof Error ? error.message : String(error));
       return fallbackNegotiation(initialSpec, ownerFeedback);
     }
   }
@@ -245,12 +252,12 @@ function buildNegotiationPrompt(spec: RoleSpec, feedback: string): string {
 
 function parseMissionAnalysis(content: string): Omit<MissionAnalysis, "missionGoal"> & { missionGoal?: string } {
   try {
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const json = extractJson(content, "object");
+    if (!json) {
       throw new Error("No JSON found in response");
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(json);
 
     return {
       requiredCapabilities: parsed.requiredCapabilities || [],
@@ -260,6 +267,7 @@ function parseMissionAnalysis(content: string): Omit<MissionAnalysis, "missionGo
       riskFactors: parsed.riskFactors || [],
     };
   } catch (error) {
+    console.error("[HR Agent] Mission analysis parse failed:", error instanceof Error ? error.message : String(error));
     return {
       requiredCapabilities: ["general"],
       estimatedTeamSize: 2,
@@ -272,12 +280,12 @@ function parseMissionAnalysis(content: string): Omit<MissionAnalysis, "missionGo
 
 function parseRoleSpecs(content: string, missionId: string): RoleSpec[] {
   try {
-    const jsonMatch = content.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
+    const json = extractJson(content, "array");
+    if (!json) {
       throw new Error("No array found in response");
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(json);
 
     return parsed.map((spec: Omit<RoleSpec, "id" | "inputContract" | "outputContract"> & { inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown> }) => ({
       ...spec,
@@ -286,6 +294,7 @@ function parseRoleSpecs(content: string, missionId: string): RoleSpec[] {
       outputContract: spec.outputContract || {},
     }));
   } catch (error) {
+    console.error("[HR Agent] Role specs parse failed:", error instanceof Error ? error.message : String(error));
     return [];
   }
 }
@@ -296,33 +305,41 @@ function parseNegotiationResponse(
   originalSpec: RoleSpec,
 ): RoleSpec | RoleSpec[] {
   try {
-    const arrayMatch = content.match(/\[[\s\S]*\]/);
-    const objectMatch = content.match(/\{[\s\S]*\}/);
+    const trimmed = content.trim();
 
-    if (arrayMatch) {
-      const parsed = JSON.parse(arrayMatch[0]);
-      if (Array.isArray(parsed)) {
-        return parsed.map((spec) => ({
-          ...spec,
-          id: createId("role"),
-          inputContract: spec.inputContract || {},
-          outputContract: spec.outputContract || {},
-        }));
+    // If content starts with [, it's explicitly an array response
+    if (trimmed.startsWith("[")) {
+      const arrayJson = extractJson(content, "array");
+      if (arrayJson) {
+        const parsed = JSON.parse(arrayJson);
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.name) {
+          return parsed.map((spec) => ({
+            ...spec,
+            id: createId("role"),
+            inputContract: spec.inputContract || {},
+            outputContract: spec.outputContract || {},
+          }));
+        }
       }
     }
 
-    if (objectMatch) {
-      const parsed = JSON.parse(objectMatch[0]);
-      return {
-        ...parsed,
-        id: createId("role"),
-        inputContract: parsed.inputContract || {},
-        outputContract: parsed.outputContract || {},
-      };
+    // Otherwise try object — single revised role
+    const objectJson = extractJson(content, "object");
+    if (objectJson) {
+      const parsed = JSON.parse(objectJson);
+      if (parsed.name || parsed.purpose) {
+        return {
+          ...parsed,
+          id: createId("role"),
+          inputContract: parsed.inputContract || {},
+          outputContract: parsed.outputContract || {},
+        };
+      }
     }
 
     return originalSpec;
   } catch (error) {
+    console.error("[HR Agent] Negotiation response parse failed:", error instanceof Error ? error.message : String(error));
     return originalSpec;
   }
 }
@@ -471,4 +488,33 @@ function designCollaborationPlan(roleSpecs: RoleSpec[]) {
     communicationChannels,
     decisionMaking,
   };
+}
+
+export function extractJson(content: string, type: "object" | "array"): string | undefined {
+  const opener = type === "object" ? "{" : "[";
+  const closer = type === "object" ? "}" : "]";
+
+  let depth = 0;
+  let start = -1;
+
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === opener && (i === 0 || content[i - 1] !== "\\")) {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (content[i] === closer && (i === 0 || content[i - 1] !== "\\")) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const candidate = content.slice(start, i + 1);
+        try {
+          JSON.parse(candidate);
+          return candidate;
+        } catch {
+          start = -1;
+          continue;
+        }
+      }
+    }
+  }
+
+  return undefined;
 }
