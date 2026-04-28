@@ -197,6 +197,7 @@ function renderChatContent(data) {
 
   const ownerMessage = data.messages.find((message) => message.type === "mission_brief");
   const followups = data.messages.filter((message) => message.type === "user_message" || message.type === "owner_followup");
+  const ownerText = ownerMessage?.content || `Mission 已创建：${data.mission.goal}`;
   return `
     <div class="bubble user">
       <strong>你</strong>
@@ -204,7 +205,7 @@ function renderChatContent(data) {
     </div>
     <div class="bubble owner">
       <strong>Owner Agent</strong>
-      <p>${esc(ownerMessage?.content || "我已经生成 Mission 初稿，并组建临时团队。")}</p>
+      <p>${esc(ownerText)}</p>
       <div class="thought-list">
         ${data.mission.successMetrics.slice(0, 3).map((item, index) => `
           <div><span>思考节点 ${index + 1}</span>${esc(item)}</div>
@@ -391,8 +392,8 @@ function renderWarTab(data) {
     },
     schedule: {
       title: "定时任务",
-      intro: "后续用于展示 24 小时运行中的定时复盘、巡检、发布等任务。",
-      items: ["暂无定时任务。Owner 会在需要持续运行时创建。"],
+      intro: "展示 24 小时运行中的定时复盘、巡检、发布等任务。",
+      items: [],
     },
     outputs: {
       title: "产出列表",
