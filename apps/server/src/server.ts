@@ -58,21 +58,36 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
       return;
     }
 
+    const snapshot = missions.snapshot();
+    const missionExists = snapshot.missions.some((m) => m.id === missionId);
+    if (!missionExists) {
+      writeJson(res, 404, { error: "Mission not found" });
+      return;
+    }
+
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
+      "X-Content-Type-Options": "nosniff",
     });
+
+    const timeout = setTimeout(() => {
+      res.write(`data: ${JSON.stringify({ type: "done", reason: "timeout" })}\n\n`);
+      res.end();
+    }, 5 * 60 * 1000);
 
     const subscription = missions.subscribeToMissionStream(missionId, (event) => {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
       if (event.type === "done") {
+        clearTimeout(timeout);
         res.end();
       }
     });
 
     req.on("close", () => {
+      clearTimeout(timeout);
       subscription.unsubscribe();
     });
 
