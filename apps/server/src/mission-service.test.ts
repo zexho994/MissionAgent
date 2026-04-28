@@ -407,4 +407,75 @@ describe("InMemoryMissionService", () => {
     const messages = service.snapshot().agentMessages.filter((message) => message.missionId === mission.id);
     expect(messages.some((message) => message.type === "owner_followup")).toBe(true);
   });
+
+  it("triggers agent collaboration reports after execution completes", async () => {
+    const fake = new FakeLlmAdapter(() => JSON.stringify({
+      message: "我已复盘执行产出：互动数据有下降风险，建议内容策划调整选题。",
+      type: "agent_report",
+      mentionedAgentIds: [],
+      shouldPropagate: false,
+      action: { type: "acknowledge" },
+    }));
+    const service = new InMemoryMissionService({ llm: fake });
+    const mission = await service.createMission({
+      goal: "运营一个小红书账号，一个月涨到1000粉丝",
+      successMetrics: ["followers >= 1000"],
+      constraints: ["human approval before publishing"],
+    });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks[0];
+    if (!task) throw new Error("missing task");
+    const execution = service.startExecution({ missionId: mission.id, taskId: task.id });
+
+    service.submitExecutionResult({
+      executionId: execution.id,
+      missionId: mission.id,
+      taskId: task.id,
+      content: {
+        openclaw: {
+          payloads: [{ text: "Xiaohongshu account growth plan: daily review generated successfully" }],
+        },
+      },
+      evidence: ["openclaw:local"],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const snapshot = service.snapshot();
+    const report = snapshot.agentMessages.find((message) => message.type === "agent_report");
+    expect(report?.content).toContain("互动数据有下降风险");
+    expect(report?.threadId).toBeDefined();
+    expect(snapshot.threads).toContainEqual(expect.objectContaining({
+      id: report?.threadId,
+      missionId: mission.id,
+      status: "resolved",
+    }));
+  });
+
+  it("lets users trigger a conversation with a specific agent", async () => {
+    const fake = new FakeLlmAdapter(() => JSON.stringify({
+      message: "我会根据当前 Mission 产出一个简短行动建议。",
+      type: "agent_chat",
+      mentionedAgentIds: [],
+      shouldPropagate: false,
+      action: { type: "acknowledge" },
+    }));
+    const service = new InMemoryMissionService({ llm: fake });
+    const mission = await service.createMission({ goal: "Create a harness learning image" });
+    service.activateMission({ missionId: mission.id });
+    const targetAgent = service.snapshot().agents.find((agent) => agent.role === "researcher");
+    if (!targetAgent) throw new Error("missing target agent");
+
+    const reply = await service.triggerAgentConversation({
+      missionId: mission.id,
+      agentId: targetAgent.id,
+      message: "请汇报你当前看到的关键风险",
+    });
+
+    const snapshot = service.snapshot();
+    expect(reply.type).toBe("agent_chat");
+    expect(reply.content).toContain("简短行动建议");
+    expect(reply.threadId).toBeDefined();
+    expect(snapshot.agentMessages.some((message) => message.type === "user_message" && message.toAgentId === targetAgent.id)).toBe(true);
+    expect(snapshot.threads.find((thread) => thread.id === reply.threadId)?.participantAgentIds).toContain(targetAgent.id);
+  });
 });

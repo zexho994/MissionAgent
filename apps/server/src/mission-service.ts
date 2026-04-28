@@ -23,6 +23,10 @@ import { evaluateArtifactQuality } from "./artifact-evaluation.js";
 import { activateWithHRAgent } from "./hr-activation.js";
 import { ensureTaskRunning, deriveOwnerBrief, deriveOwnerFollowup } from "./mission-helpers.js";
 import { runOwnerLlmStreaming } from "./owner-streaming.js";
+import { AgentConversationBus } from "./agent-conversation-bus.js";
+import { AgentPersonaRegistry } from "./agent-personas.js";
+import { ContextRetriever } from "./context-retriever.js";
+import type { BusEvent, ConversationThread } from "./agent-conversation-types.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -109,7 +113,12 @@ export type AgentMessageType =
   | "execution_started"
   | "execution_completed"
   | "execution_failed"
-  | "review_completed";
+  | "review_completed"
+  | "agent_chat"
+  | "agent_report"
+  | "agent_request"
+  | "agent_notify"
+  | "agent_discussion";
 
 export interface ParsedChoice {
   label: string;
@@ -124,6 +133,10 @@ export interface AgentMessage {
   type: AgentMessageType;
   content: string;
   options?: ParsedChoice[];
+  threadId?: string;
+  replyToId?: string;
+  mentionedAgentIds?: string[];
+  metadata?: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -171,6 +184,7 @@ export interface MissionSnapshot {
   agents: WarRoomAgent[];
   agentRelations: AgentRelation[];
   agentMessages: AgentMessage[];
+  threads: ConversationThread[];
   taskEvents: WarRoomTaskEvent[];
   toolCalls: ToolCallRecord[];
   decisions: DecisionRecord[];
@@ -206,6 +220,7 @@ export class InMemoryMissionService {
   private readonly agents = new Map<string, WarRoomAgent>();
   private readonly agentRelations = new Map<string, AgentRelation>();
   private readonly agentMessages = new Map<string, AgentMessage>();
+  private readonly threads = new Map<string, ConversationThread>();
   private readonly taskEvents = new Map<string, WarRoomTaskEvent>();
   private readonly toolCalls = new Map<string, ToolCallRecord>();
   private readonly decisions = new Map<string, DecisionRecord>();
@@ -214,6 +229,7 @@ export class InMemoryMissionService {
   private readonly llm: LlmService | undefined;
   private readonly streamListeners = new Map<string, Set<StreamEventListener>>();
   private negotiationManager: NegotiationManager | undefined;
+  private conversationBus: AgentConversationBus | undefined;
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
@@ -618,6 +634,12 @@ export class InMemoryMissionService {
     });
 
     this.persist();
+    void this.dispatchToBus({
+      type: "execution_completed",
+      agentId: worker.id,
+      taskId: task.id,
+      artifactId: artifact.id,
+    }, mission.id);
     return { artifact, review };
   }
 
@@ -665,6 +687,12 @@ export class InMemoryMissionService {
       summary: input.error,
     });
     this.persist();
+    void this.dispatchToBus({
+      type: "execution_failed",
+      agentId: worker.id,
+      taskId: execution.taskId,
+      error: input.error,
+    }, execution.missionId);
     return failed;
   }
 
@@ -678,6 +706,7 @@ export class InMemoryMissionService {
       agents: [...this.agents.values()].sort((a, b) => a.sortOrder - b.sortOrder),
       agentRelations: [...this.agentRelations.values()],
       agentMessages: [...this.agentMessages.values()],
+      threads: [...this.threads.values()],
       taskEvents: [...this.taskEvents.values()],
       toolCalls: [...this.toolCalls.values()],
       decisions: [...this.decisions.values()],
@@ -720,6 +749,68 @@ export class InMemoryMissionService {
 
   getNegotiation(input: { missionId: string }): { proposal: TeamProposal; previousFeedback: string[] } | undefined {
     return this.negotiationManager?.getNegotiation(input);
+  }
+
+  async triggerAgentConversation(input: {
+    missionId: string;
+    agentId: string;
+    message: string;
+  }): Promise<AgentMessage> {
+    const content = input.message.trim();
+    if (!content) {
+      throw new Error("Agent conversation message is required");
+    }
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const agent = this.agents.get(input.agentId);
+    if (!agent || agent.missionId !== mission.id) {
+      throw new Error(`Agent not found in mission: ${input.agentId}`);
+    }
+    if (!this.llm) {
+      throw new Error("LLM is required for agent conversation");
+    }
+
+    const thread = this.createThread({
+      missionId: mission.id,
+      topic: "User-triggered agent conversation",
+      participantAgentIds: ["user", agent.id],
+      status: "active",
+    });
+    this.appendMessage({
+      missionId: mission.id,
+      fromAgentId: "user",
+      toAgentId: agent.id,
+      type: "user_message",
+      content,
+      threadId: thread.id,
+    });
+    const reply = await this.getConversationBus().dispatchEvent({
+      missionId: mission.id,
+      event: { type: "user_message", content, agentId: agent.id },
+      threadId: thread.id,
+    });
+    if (!reply) {
+      throw new Error(`Agent conversation produced no reply: ${agent.id}`);
+    }
+    this.persist();
+    return reply;
+  }
+
+  listThreads(input: { missionId: string }): ConversationThread[] {
+    return [...this.threads.values()]
+      .filter((thread) => thread.missionId === input.missionId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  getThread(input: { threadId: string }): { thread: ConversationThread; messages: AgentMessage[] } | undefined {
+    const thread = this.threads.get(input.threadId);
+    if (!thread) return undefined;
+    return {
+      thread,
+      messages: this.agentMessagesForMission(thread.missionId).filter((message) => message.threadId === thread.id),
+    };
   }
 
   subscribeToMissionStream(missionId: string, listener: StreamEventListener): StreamSubscription {
@@ -839,13 +930,79 @@ export class InMemoryMissionService {
     return createdAgents;
   }
 
-  private appendMessage(input: Omit<AgentMessage, "id" | "createdAt"> & { options?: ParsedChoice[] }): void {
+  private getConversationBus(): AgentConversationBus {
+    if (!this.llm) {
+      throw new Error("LLM is required for agent conversation");
+    }
+    if (!this.conversationBus) {
+      this.conversationBus = new AgentConversationBus({
+        llm: this.llm,
+        personas: new AgentPersonaRegistry(this.config.agentCollaboration?.personas),
+        contextRetriever: new ContextRetriever(() => this.snapshot()),
+        getSnapshot: () => this.snapshot(),
+        appendMessage: (message) => {
+          const appended = this.appendMessage(message);
+          this.persist();
+          return appended;
+        },
+        createThread: (thread) => {
+          const created = this.createThread(thread);
+          this.persist();
+          return created;
+        },
+        resolveThread: (threadId) => {
+          this.resolveThread(threadId);
+          this.persist();
+        },
+        updateAgent: (id, patch) => this.updateAgent(id, patch),
+        maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
+        cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
+      });
+    }
+    return this.conversationBus;
+  }
+
+  private async dispatchToBus(event: BusEvent, missionId: string): Promise<void> {
+    if (!this.llm) {
+      return;
+    }
+    try {
+      await this.getConversationBus().dispatchEvent({ missionId, event });
+    } catch (error) {
+      console.error("[MissionService] Agent conversation dispatch failed:", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  private createThread(input: Omit<ConversationThread, "id" | "createdAt">): ConversationThread {
+    const thread: ConversationThread = {
+      ...input,
+      id: createId("thread"),
+      createdAt: new Date().toISOString(),
+    };
+    this.threads.set(thread.id, thread);
+    return thread;
+  }
+
+  private resolveThread(threadId: string): void {
+    const thread = this.threads.get(threadId);
+    if (!thread || thread.status !== "active") {
+      return;
+    }
+    this.threads.set(thread.id, {
+      ...thread,
+      status: "resolved",
+      resolvedAt: new Date().toISOString(),
+    });
+  }
+
+  private appendMessage(input: Omit<AgentMessage, "id" | "createdAt"> & { options?: ParsedChoice[] }): AgentMessage {
     const message: AgentMessage = {
       ...input,
       id: createId("message"),
       createdAt: new Date().toISOString(),
     };
     this.agentMessages.set(message.id, message);
+    return message;
   }
 
   private appendTaskEvent(input: Omit<WarRoomTaskEvent, "id" | "createdAt">): void {
@@ -979,6 +1136,7 @@ export class InMemoryMissionService {
       };
       this.agentMessages.set(message.id, agentMessage);
     }
+    for (const thread of stored.threads ?? []) this.threads.set(thread.id, thread);
     for (const event of stored.taskEvents) this.taskEvents.set(event.id, event);
     for (const call of stored.toolCalls) this.toolCalls.set(call.id, call);
     for (const decision of stored.decisions) this.decisions.set(decision.id, decision);

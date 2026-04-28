@@ -40,6 +40,18 @@ export interface AgentSystemConfig {
     }>;
     capabilityMatchers: Record<"plan" | "execute" | "review", string[]>;
   };
+  agentCollaboration?: {
+    maxConversationDepth: number;
+    cooldownMs: number;
+    contextTokenBudget: number;
+    personas?: Record<string, {
+      role: string;
+      systemPrompt: string;
+      communicationStyle: string;
+      responseGuidelines: string;
+      availableActions: string[];
+    }>;
+  };
   ui: {
     emptyPrompt: string;
     starterPrompts: Array<{ label: string; value: string }>;
