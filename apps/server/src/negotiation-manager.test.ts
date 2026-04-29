@@ -241,5 +241,39 @@ describe("NegotiationManager", () => {
       expect(hrAgent?.status).toBe("done");
       expect([...deps.tasks.values()]).toHaveLength(1);
     });
+
+    it("should propagate toolPermissions from RoleSpec to worker agents", async () => {
+      const manager = new NegotiationManager(deps);
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+
+      manager.confirmNegotiation({ missionId: mission.id }, mission);
+
+      const worker = [...deps.agents.values()].find(
+        (a) => a.missionId === mission.id && a.role !== "owner" && a.role !== "hr",
+      );
+      expect(worker?.toolPermissions).toBeDefined();
+      expect(worker?.toolPermissions?.length).toBeGreaterThan(0);
+    });
+
+    it("should use consistent HR agent ID across all negotiation messages", async () => {
+      const manager = new NegotiationManager(deps);
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+      const hrAgent = [...deps.agents.values()].find(
+        (a) => a.missionId === mission.id && a.role === "hr",
+      );
+      const hrId = hrAgent?.id;
+      expect(hrId).toBeDefined();
+
+      manager.confirmNegotiation({ missionId: mission.id }, mission);
+
+      const hrMessages = [...deps.agentMessages.values()].filter(
+        (m) => m.missionId === mission.id && m.fromAgentId === hrId,
+      );
+      expect(hrMessages.length).toBeGreaterThanOrEqual(2);
+      const allHrMessages = [...deps.agentMessages.values()].filter(
+        (m) => m.missionId === mission.id && m.fromAgentId?.startsWith("agent_hr"),
+      );
+      expect(allHrMessages).toHaveLength(0);
+    });
   });
 });

@@ -30,7 +30,7 @@ export class NegotiationManager {
   private readonly tasks: Map<string, import("@digitalagent/core").Task>;
   private readonly agentMessages: Map<string, AgentMessage>;
   private readonly maxRounds: number;
-  private readonly activeNegotiations = new Map<string, { proposal: TeamProposal; ownerContext: OwnerContext; roundCount: number }>();
+  private readonly activeNegotiations = new Map<string, { proposal: TeamProposal; ownerContext: OwnerContext; roundCount: number; hrAgentId: string }>();
 
   constructor(options: NegotiationManagerOptions) {
     this.llm = options.llm;
@@ -46,6 +46,21 @@ export class NegotiationManager {
     if (!mission.brief) {
       throw new Error("Mission must have a brief before negotiation");
     }
+
+    const hrAgentId = createId("agent");
+    const hrAgentRecord: WarRoomAgent = {
+      id: hrAgentId,
+      missionId: mission.id,
+      role: "hr",
+      name: "HR Agent",
+      responsibility: "Team assembly and agent coordination",
+      status: "running",
+      currentTaskId: undefined,
+      lastAction: "Analyzing MissionBrief and proposing team",
+      avatarSeed: "hr",
+      sortOrder: 99,
+    };
+    this.agents.set(hrAgentId, hrAgentRecord);
 
     const hrAgent = createHRAgent({ llm: this.llm });
     const analysis = await hrAgent.receiveMissionBrief(mission.brief);
@@ -65,11 +80,11 @@ export class NegotiationManager {
       previousFeedback: [],
     };
 
-    this.activeNegotiations.set(mission.id, { proposal, ownerContext, roundCount: 0 });
+    this.activeNegotiations.set(mission.id, { proposal, ownerContext, roundCount: 0, hrAgentId });
 
     this.appendMessage({
       missionId: mission.id,
-      fromAgentId: `hr_${mission.id}`,
+      fromAgentId: hrAgentId,
       toAgentId: owner.id,
       type: "team_created",
       content: `HR Agent proposes a team of ${proposal.roles.length} members. Estimated duration: ${proposal.estimatedDuration}. Risks: ${proposal.riskAssessment.join(", ")}.`,
@@ -84,7 +99,7 @@ export class NegotiationManager {
       throw new Error("No active negotiation for this mission. Start one first.");
     }
 
-    const { proposal, ownerContext, roundCount } = stored;
+    const { proposal, ownerContext, roundCount, hrAgentId } = stored;
     const newRoundCount = roundCount + 1;
 
     const owner = this.agentByRole(mission.id, "owner");
@@ -102,11 +117,12 @@ export class NegotiationManager {
         proposal,
         ownerContext: { ...ownerContext, previousFeedback: [...ownerContext.previousFeedback, input.feedback] },
         roundCount: newRoundCount,
+        hrAgentId,
       });
 
       this.appendMessage({
         missionId: mission.id,
-        fromAgentId: `hr_${mission.id}`,
+        fromAgentId: hrAgentId,
         toAgentId: owner.id,
         type: "negotiation_escalated",
         content: `Negotiation could not reach agreement after ${newRoundCount} rounds. User intervention required. Last proposal had ${proposal.roles.length} roles.`,
@@ -128,7 +144,7 @@ export class NegotiationManager {
       previousFeedback: [...ownerContext.previousFeedback, input.feedback],
     };
 
-    this.activeNegotiations.set(mission.id, { proposal: revisedProposal, ownerContext: updatedContext, roundCount: newRoundCount });
+    this.activeNegotiations.set(mission.id, { proposal: revisedProposal, ownerContext: updatedContext, roundCount: newRoundCount, hrAgentId });
 
     this.appendMessage({
       missionId: mission.id,
@@ -138,7 +154,7 @@ export class NegotiationManager {
     });
     this.appendMessage({
       missionId: mission.id,
-      fromAgentId: `hr_${mission.id}`,
+      fromAgentId: hrAgentId,
       toAgentId: owner.id,
       type: "team_created",
       content: `HR Agent revised the team proposal based on your feedback. New team of ${revisedProposal.roles.length} members. ${revisedProposal.riskAssessment.length > 0 ? `Risks: ${revisedProposal.riskAssessment.join(", ")}` : "No major risks identified."}`,
@@ -153,7 +169,7 @@ export class NegotiationManager {
       throw new Error("No active negotiation for this mission");
     }
 
-    const { proposal } = stored;
+    const { proposal, hrAgentId } = stored;
     this.activeNegotiations.delete(mission.id);
 
     const agentFactory = createAgentFactory();
@@ -183,31 +199,27 @@ export class NegotiationManager {
       approvalRequired: false,
     });
 
-    const hrAgentRecord: WarRoomAgent = {
-      id: createId("agent"),
-      missionId: mission.id,
-      role: "hr",
-      name: "HR Agent",
-      responsibility: "Team assembly and agent coordination",
-      status: "done",
-      currentTaskId: undefined,
-      lastAction: "Team confirmed via negotiation",
-      avatarSeed: "hr",
-      sortOrder: agents.length + 1,
-    };
+    const existingHr = this.agents.get(hrAgentId);
+    if (existingHr) {
+      this.agents.set(hrAgentId, {
+        ...existingHr,
+        status: "done",
+        lastAction: "Team confirmed via negotiation",
+        sortOrder: agents.length + 1,
+      });
+    }
 
     this.tasks.set(initialTask.id, initialTask);
     for (const agent of agents) {
       this.agents.set(agent.id, agent);
     }
-    this.agents.set(hrAgentRecord.id, hrAgentRecord);
     for (const relation of relations) {
       this.agentRelations.set(relation.id, relation);
     }
 
     this.appendMessage({
       missionId: mission.id,
-      fromAgentId: hrAgentRecord.id,
+      fromAgentId: hrAgentId,
       type: "team_created",
       content: `Team confirmed! ${agents.length} agents deployed. Starting execution.`,
     });
