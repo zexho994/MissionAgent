@@ -7,6 +7,7 @@ import type {
   ConversationThread,
 } from "./agent-conversation-types.js";
 import type { AgentMessage, AgentMessageType, MissionSnapshot, WarRoomAgent } from "./mission-service.js";
+import { findSuperiors } from "./agent-hierarchy.js";
 
 const CONVERSATION_TYPES = new Set<AgentMessageType>([
   "agent_chat",
@@ -171,6 +172,7 @@ export class AgentConversationBus {
           `Event: ${JSON.stringify(input.event)}`,
           `Shared context: ${JSON.stringify(context)}`,
           `Thread history:\n${threadMessages || "(none)"}`,
+          knowledgeSummary(context),
           "Respond with one JSON object only: {\"message\":\"...\",\"type\":\"agent_chat|agent_report|agent_request|agent_notify|agent_discussion\",\"mentionedAgentIds\":[],\"shouldPropagate\":false,\"action\":{\"type\":\"acknowledge\"}}",
         ].join("\n\n"),
       },
@@ -201,6 +203,11 @@ export class AgentConversationBus {
         return uniqueAgents(event.mentionedAgentIds.map((id) => byId.get(id)));
       case "user_message":
         return uniqueAgents([byId.get(event.agentId)]);
+      case "periodic_report": {
+        const superiors = findSuperiors(event.fromAgentId, snapshot.agentRelations, agents);
+        if (superiors.length > 0) return superiors;
+        return uniqueAgents([owner]);
+      }
     }
   }
 
@@ -220,6 +227,8 @@ export class AgentConversationBus {
         return "Agent notification";
       case "user_message":
         return "User-triggered agent conversation";
+      case "periodic_report":
+        return "Periodic status report";
     }
   }
 
@@ -243,7 +252,7 @@ export class AgentConversationBus {
   }
 }
 
-function parseAgentConversationResponse(content: string): AgentConversationResponse {
+export function parseAgentConversationResponse(content: string): AgentConversationResponse {
   try {
     const json = extractJsonObject(content);
     if (!json) {
@@ -322,7 +331,7 @@ function parseAction(action: unknown): AgentConversationResponse["action"] {
   }
   const value = action as Record<string, unknown>;
   const type = value.type;
-  if (type !== "request_info" && type !== "notify_owner" && type !== "escalate" && type !== "acknowledge") {
+  if (type !== "request_info" && type !== "notify_owner" && type !== "escalate" && type !== "acknowledge" && type !== "report_to_superior") {
     return { type: "acknowledge" };
   }
   const parsed: NonNullable<AgentConversationResponse["action"]> = { type };
@@ -339,4 +348,10 @@ function uniqueAgents(agents: Array<WarRoomAgent | undefined>): WarRoomAgent[] {
     if (agent) byId.set(agent.id, agent);
   }
   return [...byId.values()];
+}
+
+function knowledgeSummary(context: import("./agent-conversation-types.js").ContextSnippet[]): string {
+  const knowledge = context.filter((snippet) => snippet.source === "knowledge");
+  if (knowledge.length === 0) return "";
+  return `Mission knowledge base:\n${knowledge.map((snippet) => `- ${snippet.summary}`).join("\n")}`;
 }

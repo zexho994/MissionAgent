@@ -1,6 +1,7 @@
 import type { Artifact, Mission, Task } from "@digitalagent/core";
 import type { AgentMessage, WarRoomAgent } from "./mission-service.js";
 import type { ContextSnippet } from "./agent-conversation-types.js";
+import type { KnowledgeEntry } from "./knowledge-base.js";
 
 export interface ContextRetrieverSnapshot {
   missions: Mission[];
@@ -8,6 +9,7 @@ export interface ContextRetrieverSnapshot {
   artifacts: Artifact[];
   agents: WarRoomAgent[];
   agentMessages: AgentMessage[];
+  knowledgeEntries: KnowledgeEntry[];
 }
 
 export class ContextRetriever {
@@ -78,6 +80,18 @@ export class ContextRetriever {
         createdAt: message.createdAt,
       }));
     snippets.push(...messageSnippets);
+
+    const knowledgeSnippets = snapshot.knowledgeEntries
+      .filter((entry) => entry.missionId === input.missionId)
+      .slice(-8)
+      .map((entry): ContextSnippet => ({
+        source: "knowledge",
+        sourceId: entry.id,
+        summary: `${entry.key}: ${entry.value}`,
+        relevance: 0.75,
+        createdAt: entry.createdAt,
+      }));
+    snippets.push(...knowledgeSnippets);
 
     return snippets
       .sort((a, b) => b.relevance - a.relevance || b.createdAt.localeCompare(a.createdAt))

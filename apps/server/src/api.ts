@@ -168,6 +168,25 @@ export async function handleApiRequest(
       return json(200, result);
     }
 
+    if (request.method === "GET" && request.path.startsWith("/api/missions/knowledge?")) {
+      const missionId = new URL(request.path, "http://digitalagent.local").searchParams.get("missionId");
+      if (!missionId?.trim()) {
+        return json(400, { error: "missionId query parameter is required" });
+      }
+      return json(200, { entries: deps.missions.listKnowledge({ missionId }) });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/knowledge") {
+      const body = expectObject(request.body);
+      const entry = deps.missions.setKnowledge({
+        missionId: expectString(body.missionId, "missionId"),
+        key: expectString(body.key, "key"),
+        value: expectString(body.value, "value"),
+        agentId: expectString(body.agentId, "agentId"),
+      });
+      return json(201, { entry, snapshot: deps.missions.snapshot() });
+    }
+
     if (request.method === "POST" && request.path === "/api/openclaw/run") {
       const body = expectObject(request.body);
       const missionId = expectString(body.missionId, "missionId");

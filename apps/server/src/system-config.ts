@@ -52,6 +52,11 @@ export interface AgentSystemConfig {
       availableActions: string[];
     }>;
   };
+  agentAutonomy?: {
+    tickIntervalMs?: number;
+    maxConcurrentEvals?: number;
+    reportFrequencyTicks?: number;
+  };
   ui: {
     emptyPrompt: string;
     starterPrompts: Array<{ label: string; value: string }>;

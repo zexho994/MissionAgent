@@ -49,11 +49,11 @@ function makeTestDeps() {
   const agentRelations = new Map<string, AgentRelation>();
   const tasks = new Map<string, import("@digitalagent/core").Task>();
   const agentMessages = new Map<string, AgentMessage>();
-  const config: AgentSystemConfig = {
+  const config = {
     rules: [],
     agentSpecs: [],
     uiStrings: { teamPlannerDescription: "", initialTask: { title: "", objective: "" } },
-  };
+  } as unknown as AgentSystemConfig;
 
   return { llm, config, agents, agentRelations, tasks, agentMessages };
 }

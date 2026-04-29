@@ -27,6 +27,8 @@ import { AgentConversationBus } from "./agent-conversation-bus.js";
 import { AgentPersonaRegistry } from "./agent-personas.js";
 import { ContextRetriever } from "./context-retriever.js";
 import type { BusEvent, ConversationThread } from "./agent-conversation-types.js";
+import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
+import { AgentAutonomyService } from "./agent-autonomy.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -119,7 +121,8 @@ export type AgentMessageType =
   | "agent_report"
   | "agent_request"
   | "agent_notify"
-  | "agent_discussion";
+  | "agent_discussion"
+  | "negotiation_escalated";
 
 export interface ParsedChoice {
   label: string;
@@ -189,6 +192,7 @@ export interface MissionSnapshot {
   taskEvents: WarRoomTaskEvent[];
   toolCalls: ToolCallRecord[];
   decisions: DecisionRecord[];
+  knowledgeEntries: KnowledgeEntry[];
 }
 
 interface StoredMissionSnapshot extends MissionSnapshot {
@@ -225,12 +229,14 @@ export class InMemoryMissionService {
   private readonly taskEvents = new Map<string, WarRoomTaskEvent>();
   private readonly toolCalls = new Map<string, ToolCallRecord>();
   private readonly decisions = new Map<string, DecisionRecord>();
+  private readonly knowledgeEntries = new Map<string, KnowledgeEntry>();
   private readonly storageFile: string | undefined;
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
   private readonly streamListeners = new Map<string, Set<StreamEventListener>>();
   private negotiationManager: NegotiationManager | undefined;
   private conversationBus: AgentConversationBus | undefined;
+  private autonomyService: AgentAutonomyService | undefined;
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
@@ -332,6 +338,9 @@ export class InMemoryMissionService {
 
     this.tasks.set(initialTask.id, initialTask);
     this.createMissionTeam(mission.id, initialTask.id, teamPlan);
+    if (this.llm) {
+      this.getAutonomyService().startLoop(mission.id);
+    }
     this.persist();
     return mission;
   }
@@ -735,6 +744,7 @@ export class InMemoryMissionService {
       taskEvents: [...this.taskEvents.values()],
       toolCalls: [...this.toolCalls.values()],
       decisions: [...this.decisions.values()],
+      knowledgeEntries: [...this.knowledgeEntries.values()],
     };
   }
 
@@ -768,12 +778,57 @@ export class InMemoryMissionService {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
     this.getNegotiationManager().confirmNegotiation(input, mission);
+    if (this.llm) {
+      this.getAutonomyService().startLoop(mission.id);
+    }
     this.persist();
     return this.missions.get(mission.id)!;
   }
 
   getNegotiation(input: { missionId: string }): { proposal: TeamProposal; previousFeedback: string[] } | undefined {
     return this.negotiationManager?.getNegotiation(input);
+  }
+
+  setKnowledge(input: { missionId: string; key: string; value: string; agentId: string }): KnowledgeEntry {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const existing = [...this.knowledgeEntries.values()].find(
+      (entry) => entry.missionId === input.missionId && entry.key === input.key,
+    );
+    if (existing) {
+      const updated: KnowledgeEntry = {
+        ...existing,
+        value: input.value,
+        sourceAgentId: input.agentId,
+        createdAt: new Date().toISOString(),
+      };
+      this.knowledgeEntries.set(updated.id, updated);
+      this.persist();
+      return updated;
+    }
+    const entry = createKnowledgeEntry({
+      missionId: input.missionId,
+      key: input.key,
+      value: input.value,
+      sourceAgentId: input.agentId,
+    });
+    this.knowledgeEntries.set(entry.id, entry);
+    this.persist();
+    return entry;
+  }
+
+  getKnowledge(input: { missionId: string; key: string }): KnowledgeEntry | undefined {
+    return [...this.knowledgeEntries.values()].find(
+      (entry) => entry.missionId === input.missionId && entry.key === input.key,
+    );
+  }
+
+  listKnowledge(input: { missionId: string }): KnowledgeEntry[] {
+    return [...this.knowledgeEntries.values()]
+      .filter((entry) => entry.missionId === input.missionId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
   async triggerAgentConversation(input: {
@@ -999,6 +1054,35 @@ export class InMemoryMissionService {
     return this.conversationBus;
   }
 
+  private getAutonomyService(): AgentAutonomyService {
+    if (!this.llm) {
+      throw new Error("LLM is required for agent autonomy");
+    }
+    if (!this.autonomyService) {
+      const bus = this.getConversationBus();
+      this.autonomyService = new AgentAutonomyService({
+        config: {
+          tickIntervalMs: this.config.agentAutonomy?.tickIntervalMs ?? 60_000,
+          maxConcurrentEvals: this.config.agentAutonomy?.maxConcurrentEvals ?? 3,
+          reportFrequencyTicks: this.config.agentAutonomy?.reportFrequencyTicks ?? 5,
+        },
+        llm: this.llm,
+        personas: new AgentPersonaRegistry(this.config.agentCollaboration?.personas),
+        contextRetriever: new ContextRetriever(() => this.snapshot()),
+        getSnapshot: () => this.snapshot(),
+        dispatchEvent: async (input) => { await bus.dispatchEvent(input); },
+        appendMessage: (msg) => {
+          const appended = this.appendMessage(msg);
+          this.persist();
+          return appended;
+        },
+        updateAgent: (id, patch) => this.updateAgent(id, patch),
+        maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
+      });
+    }
+    return this.autonomyService;
+  }
+
   private async dispatchToBus(event: BusEvent, missionId: string): Promise<void> {
     if (!this.llm) {
       return;
@@ -1175,6 +1259,7 @@ export class InMemoryMissionService {
     for (const event of stored.taskEvents) this.taskEvents.set(event.id, event);
     for (const call of stored.toolCalls) this.toolCalls.set(call.id, call);
     for (const decision of stored.decisions) this.decisions.set(decision.id, decision);
+    for (const entry of stored.knowledgeEntries ?? []) this.knowledgeEntries.set(entry.id, entry);
   }
 
   private persist(): void {

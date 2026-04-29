@@ -642,4 +642,77 @@ describe("InMemoryMissionService", () => {
     });
   });
 
+  describe("knowledge base", () => {
+    it("should set and get knowledge entries for a mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+
+      const entry = service.setKnowledge({
+        missionId: mission.id,
+        key: "daily_metrics",
+        value: JSON.stringify({ followers: 500 }),
+        agentId: "agent_analyst",
+      });
+
+      expect(entry.missionId).toBe(mission.id);
+      expect(entry.key).toBe("daily_metrics");
+
+      const retrieved = service.getKnowledge({ missionId: mission.id, key: "daily_metrics" });
+      expect(retrieved).toBeDefined();
+      expect(retrieved?.value).toBe(JSON.stringify({ followers: 500 }));
+    });
+
+    it("should update existing entry when key already exists", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+
+      service.setKnowledge({
+        missionId: mission.id,
+        key: "metrics",
+        value: "v1",
+        agentId: "a1",
+      });
+      const updated = service.setKnowledge({
+        missionId: mission.id,
+        key: "metrics",
+        value: "v2",
+        agentId: "a2",
+      });
+
+      expect(updated.value).toBe("v2");
+      expect(updated.sourceAgentId).toBe("a2");
+      expect(service.listKnowledge({ missionId: mission.id })).toHaveLength(1);
+    });
+
+    it("should list knowledge entries for a mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+
+      service.setKnowledge({ missionId: mission.id, key: "k1", value: "v1", agentId: "a1" });
+      service.setKnowledge({ missionId: mission.id, key: "k2", value: "v2", agentId: "a1" });
+
+      const entries = service.listKnowledge({ missionId: mission.id });
+      expect(entries).toHaveLength(2);
+      expect(entries.map((e) => e.key)).toEqual(["k1", "k2"]);
+    });
+
+    it("should include knowledge entries in snapshot", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+
+      service.setKnowledge({ missionId: mission.id, key: "k1", value: "v1", agentId: "a1" });
+
+      const snapshot = service.snapshot();
+      expect(snapshot.knowledgeEntries).toHaveLength(1);
+      expect(snapshot.knowledgeEntries[0]?.key).toBe("k1");
+    });
+
+    it("should throw when setting knowledge for non-existent mission", async () => {
+      const service = new InMemoryMissionService();
+      expect(() =>
+        service.setKnowledge({ missionId: "nope", key: "k", value: "v", agentId: "a" }),
+      ).toThrow("Mission not found");
+    });
+  });
+
 });

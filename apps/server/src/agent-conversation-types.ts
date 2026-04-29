@@ -18,7 +18,8 @@ export type BusEvent =
   | { type: "review_revision_needed"; agentId: string; taskId: string; comments: string[] }
   | { type: "agent_request"; fromAgentId: string; toAgentId: string; content: string }
   | { type: "agent_notify"; fromAgentId: string; content: string; mentionedAgentIds: string[] }
-  | { type: "user_message"; content: string; agentId: string };
+  | { type: "user_message"; content: string; agentId: string }
+  | { type: "periodic_report"; fromAgentId: string; content: string; taskId?: string };
 
 export interface AgentConversationResponse {
   message: string;
@@ -26,14 +27,14 @@ export interface AgentConversationResponse {
   mentionedAgentIds?: string[];
   shouldPropagate: boolean;
   action?: {
-    type: "request_info" | "notify_owner" | "escalate" | "acknowledge";
+    type: "request_info" | "notify_owner" | "escalate" | "acknowledge" | "report_to_superior";
     targetAgentId?: string;
     payload?: Record<string, unknown>;
   };
 }
 
 export interface ContextSnippet {
-  source: "artifact" | "message" | "task" | "mission";
+  source: "artifact" | "message" | "task" | "mission" | "knowledge";
   sourceId: string;
   summary: string;
   relevance: number;
