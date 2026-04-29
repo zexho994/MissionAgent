@@ -26,6 +26,23 @@ function successResponse(content: string) {
   };
 }
 
+function streamingResponse(chunks: string[]): Response {
+  return {
+    ok: true,
+    status: 200,
+    body: new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    }),
+    text: async () => "",
+  } as Response;
+}
+
 describe("OpenAiLlmAdapter", () => {
   it("calls the OpenAI-compatible endpoint and returns parsed response", async () => {
     const adapter = new OpenAiLlmAdapter({
@@ -134,5 +151,29 @@ describe("OpenAiLlmAdapter", () => {
     const body = JSON.parse(String(capturedInit?.body));
     expect(body.model).toBe("gpt-4");
     expect(body.messages).toEqual([{ role: "user", content: "test" }]);
+  });
+
+  it("streams content when SSE JSON lines are split across network chunks", async () => {
+    const adapter = new OpenAiLlmAdapter({
+      apiKey: "test-key",
+      fetch: async () => streamingResponse([
+        'data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":"Hel',
+        'lo"},"finish_reason":null}]}\n\n',
+        'data: {"id":"2","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}\n\n',
+        'data: {"id":"3","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n',
+        "data: [DONE]\n\n",
+      ]),
+    });
+    const streamed: string[] = [];
+
+    const response = await adapter.call(
+      [{ role: "user", content: "stream test" }],
+      { onStream: (token) => streamed.push(token) },
+    );
+
+    expect(streamed).toEqual(["Hello", " world"]);
+    expect(response.content).toBe("Hello world");
+    expect(response.finishReason).toBe("stop");
+    expect(response.usage.totalTokens).toBe(5);
   });
 });

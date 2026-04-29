@@ -158,6 +158,7 @@ export class OpenAiLlmAdapter implements LlmService {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
+    let buffer = "";
     let content = "";
     let finishReason = "unknown";
     let promptTokens = 0;
@@ -168,39 +169,27 @@ export class OpenAiLlmAdapter implements LlmService {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed === "data: [DONE]") {
-            continue;
-          }
-
-          if (trimmed.startsWith("data: ")) {
-            try {
-              const jsonStr = trimmed.slice(6);
-              const data = JSON.parse(jsonStr) as OpenAiStreamChunk;
-              const delta = data.choices?.[0]?.delta;
-
-              if (delta?.content) {
-                content += delta.content;
-                onStream(delta.content);
-              }
-
-              if (data.choices?.[0]?.finish_reason) {
-                finishReason = data.choices[0].finish_reason;
-              }
-
-              if (data.usage) {
-                promptTokens = data.usage.prompt_tokens || 0;
-                completionTokens = data.usage.completion_tokens || 0;
-              }
-            } catch (parseError) {
-              console.warn("Failed to parse streaming chunk:", parseError);
-            }
-          }
+        buffer += decoder.decode(value, { stream: true });
+        let lineEnd = buffer.indexOf("\n");
+        while (lineEnd !== -1) {
+          const line = buffer.slice(0, lineEnd);
+          buffer = buffer.slice(lineEnd + 1);
+          const result = this.handleStreamingLine(line, onStream);
+          if (result.content) content += result.content;
+          if (result.finishReason) finishReason = result.finishReason;
+          if (result.promptTokens !== undefined) promptTokens = result.promptTokens;
+          if (result.completionTokens !== undefined) completionTokens = result.completionTokens;
+          lineEnd = buffer.indexOf("\n");
         }
+      }
+
+      buffer += decoder.decode();
+      if (buffer.trim()) {
+        const result = this.handleStreamingLine(buffer, onStream);
+        if (result.content) content += result.content;
+        if (result.finishReason) finishReason = result.finishReason;
+        if (result.promptTokens !== undefined) promptTokens = result.promptTokens;
+        if (result.completionTokens !== undefined) completionTokens = result.completionTokens;
       }
 
       this.callCount += 1;
@@ -220,6 +209,51 @@ export class OpenAiLlmAdapter implements LlmService {
       };
     } finally {
       reader.releaseLock();
+    }
+  }
+
+  private handleStreamingLine(
+    line: string,
+    onStream: (token: string) => void,
+  ): {
+    content?: string;
+    finishReason?: string;
+    promptTokens?: number;
+    completionTokens?: number;
+  } {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed === "data: [DONE]" || !trimmed.startsWith("data: ")) {
+      return {};
+    }
+
+    try {
+      const data = JSON.parse(trimmed.slice(6)) as OpenAiStreamChunk;
+      const delta = data.choices?.[0]?.delta;
+      const result: {
+        content?: string;
+        finishReason?: string;
+        promptTokens?: number;
+        completionTokens?: number;
+      } = {};
+
+      if (delta?.content) {
+        result.content = delta.content;
+        onStream(delta.content);
+      }
+
+      if (data.choices?.[0]?.finish_reason) {
+        result.finishReason = data.choices[0].finish_reason;
+      }
+
+      if (data.usage) {
+        result.promptTokens = data.usage.prompt_tokens || 0;
+        result.completionTokens = data.usage.completion_tokens || 0;
+      }
+
+      return result;
+    } catch (parseError) {
+      console.warn("Failed to parse streaming chunk:", parseError);
+      return {};
     }
   }
 
