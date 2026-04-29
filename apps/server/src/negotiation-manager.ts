@@ -19,6 +19,7 @@ export interface NegotiationManagerOptions {
   agentRelations: Map<string, AgentRelation>;
   tasks: Map<string, import("@digitalagent/core").Task>;
   agentMessages: Map<string, AgentMessage>;
+  maxRounds?: number;
 }
 
 export class NegotiationManager {
@@ -28,7 +29,8 @@ export class NegotiationManager {
   private readonly agentRelations: Map<string, AgentRelation>;
   private readonly tasks: Map<string, import("@digitalagent/core").Task>;
   private readonly agentMessages: Map<string, AgentMessage>;
-  private readonly activeNegotiations = new Map<string, { proposal: TeamProposal; ownerContext: OwnerContext }>();
+  private readonly maxRounds: number;
+  private readonly activeNegotiations = new Map<string, { proposal: TeamProposal; ownerContext: OwnerContext; roundCount: number }>();
 
   constructor(options: NegotiationManagerOptions) {
     this.llm = options.llm;
@@ -37,6 +39,7 @@ export class NegotiationManager {
     this.agentRelations = options.agentRelations;
     this.tasks = options.tasks;
     this.agentMessages = options.agentMessages;
+    this.maxRounds = options.maxRounds ?? 3;
   }
 
   async startNegotiation(input: { missionId: string }, mission: Mission): Promise<TeamProposal> {
@@ -62,7 +65,7 @@ export class NegotiationManager {
       previousFeedback: [],
     };
 
-    this.activeNegotiations.set(mission.id, { proposal, ownerContext });
+    this.activeNegotiations.set(mission.id, { proposal, ownerContext, roundCount: 0 });
 
     this.appendMessage({
       missionId: mission.id,
@@ -81,7 +84,37 @@ export class NegotiationManager {
       throw new Error("No active negotiation for this mission. Start one first.");
     }
 
-    const { proposal, ownerContext } = stored;
+    const { proposal, ownerContext, roundCount } = stored;
+    const newRoundCount = roundCount + 1;
+
+    const owner = this.agentByRole(mission.id, "owner");
+
+    if (newRoundCount >= this.maxRounds) {
+      const summary: NegotiationSummary = {
+        outcome: "escalated",
+        roundsCompleted: newRoundCount,
+        failureReason: `Negotiation reached max rounds (${this.maxRounds}) without agreement — user intervention required`,
+        keyDecisions: [`Escalated after ${newRoundCount} rounds`],
+        alternatives: [proposal],
+      };
+
+      this.activeNegotiations.set(mission.id, {
+        proposal,
+        ownerContext: { ...ownerContext, previousFeedback: [...ownerContext.previousFeedback, input.feedback] },
+        roundCount: newRoundCount,
+      });
+
+      this.appendMessage({
+        missionId: mission.id,
+        fromAgentId: `hr_${mission.id}`,
+        toAgentId: owner.id,
+        type: "negotiation_escalated",
+        content: `Negotiation could not reach agreement after ${newRoundCount} rounds. User intervention required. Last proposal had ${proposal.roles.length} roles.`,
+      });
+
+      return { proposal, summary };
+    }
+
     const hrAgent = createHRAgent({ llm: this.llm });
 
     const revisedSpecs = await Promise.all(
@@ -95,9 +128,8 @@ export class NegotiationManager {
       previousFeedback: [...ownerContext.previousFeedback, input.feedback],
     };
 
-    this.activeNegotiations.set(mission.id, { proposal: revisedProposal, ownerContext: updatedContext });
+    this.activeNegotiations.set(mission.id, { proposal: revisedProposal, ownerContext: updatedContext, roundCount: newRoundCount });
 
-    const owner = this.agentByRole(mission.id, "owner");
     this.appendMessage({
       missionId: mission.id,
       fromAgentId: owner.id,
