@@ -43,21 +43,21 @@
 **目标**: HR Agent能根据MissionBrief分析岗位需求，动态生成RoleSpec，与Owner谈判直到达成共识，然后创建团队成员。
 
 ### 2.1 HR岗位需求分析
-- [ ] HR接收MissionBrief，分析需要哪些角色
-- [ ] HR生成每个角色的RoleSpec（职责、能力要求、工具权限、预算）
-- [ ] 替换当前的关键词匹配逻辑（`planMissionTeam` → LLM驱动）
+- [x] HR接收MissionBrief，分析需要哪些角色（`activateMissionWithHR()` 已实现，但尚未设为默认路径）
+- [x] HR生成每个角色的RoleSpec（职责、能力要求、工具权限、预算）（`generateRoleSpecs()` 已实现）
+- [x] 替换当前的关键词匹配逻辑（`planMissionTeam` → LLM驱动）（`activateMissionWithHR()` 已设为默认路径，走谈判流程）
 
 ### 2.2 HR与Owner谈判循环
-- [ ] 设计Agent间多轮对话协议（request → respond → negotiate → agree）
-- [ ] HR向Owner提出团队方案，Owner审核并提出修改意见
-- [ ] 谈判循环：双方可以多轮协商直到达成一致
-- [ ] 谈判失败时的升级机制（请求用户介入）
+- [x] 设计Agent间多轮对话协议（request → respond → negotiate → agree）（`NegotiationRound` 支持多轮）
+- [x] HR向Owner提出团队方案，Owner审核并提出修改意见（`proposeTeamPlan()` / `respondToNegotiation()`）
+- [x] 谈判循环：双方可以多轮协商直到达成一致
+- [x] 谈判失败时的升级机制（请求用户介入）（`NegotiationManager` maxRounds + 自动升级）
 
 ### 2.3 动态Agent创建
-- [ ] 根据协商结果动态创建WarRoomAgent（不再依赖config rules）
-- [ ] 为每个Agent生成个性化的system prompt
-- [ ] 建立Agent间的协作关系（AgentRelation）
-- [ ] HR向每个Agent"交代"岗位职责和任务上下文
+- [x] 根据协商结果动态创建WarRoomAgent（`agent-factory.ts` 的 `createAgentFromSpec()`）
+- [x] 为每个Agent生成个性化的system prompt（`buildSystemPrompt()`）
+- [x] 建立Agent间的协作关系（AgentRelation）
+- [x] HR向每个Agent"交代"岗位职责和任务上下文（onboarding 流程）
 
 **验收标准**: 用户确认MissionBrief后，HR能分析出需要数据分析师、内容策划、文案写手等角色，并与Owner就团队构成达成一致，然后自动创建团队。
 
