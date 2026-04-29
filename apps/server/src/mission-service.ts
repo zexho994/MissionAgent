@@ -1143,7 +1143,7 @@ export class InMemoryMissionService {
         },
         updateAgent: (id, patch) => this.updateAgent(id, patch),
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
-        maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 3,
+        maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 5,
         cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
       });
     }

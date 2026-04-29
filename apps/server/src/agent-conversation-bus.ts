@@ -73,7 +73,7 @@ export class AgentConversationBus {
     let roundTargets = [...initialTargets];
 
     for (let round = 0; round < this.deps.maxDiscussionRounds && roundTargets.length > 0; round++) {
-      let roundHadPropagation = false;
+      const nextRoundTargets: WarRoomAgent[] = [];
 
       for (const target of roundTargets) {
         if (responded.has(target.id)) continue;
@@ -112,11 +112,7 @@ export class AgentConversationBus {
           this.recordCooldown(input.event, target.id);
 
           const propagated = this.propagationTargets(response, responded, agentById);
-          if (propagated.length > 0) {
-            roundTargets = propagated;
-            roundHadPropagation = true;
-            break;
-          }
+          nextRoundTargets.push(...propagated);
         } catch (error) {
           lastMessage = this.deps.appendMessage({
             missionId: input.missionId,
@@ -133,8 +129,9 @@ export class AgentConversationBus {
         }
       }
 
-      lastRoundPropagated = roundHadPropagation;
-      if (!roundHadPropagation) break;
+      lastRoundPropagated = nextRoundTargets.length > 0;
+      if (!lastRoundPropagated) break;
+      roundTargets = nextRoundTargets;
     }
 
     if (!lastRoundPropagated) {

@@ -65,11 +65,6 @@ export class AgentAutonomyService {
     }
   }
 
-  /** Clear activity tracking for an agent (e.g., on mission cleanup) */
-  resetAgent(agentId: string): void {
-    this.lastActivityCount.delete(agentId);
-  }
-
   stopAll(): void {
     for (const missionId of [...this.loops.keys()]) {
       this.stopLoop(missionId);
@@ -102,25 +97,33 @@ export class AgentAutonomyService {
     for (const agent of agents) {
       if (this.activeEvals >= this.deps.config.maxConcurrentEvals) break;
       const isReportTick = tickCount % this.deps.config.reportFrequencyTicks === 0;
-      if (!isReportTick && !this.hasNewActivity(snapshot, agent.id)) {
+      if (!isReportTick && !this.hasNewActivity(snapshot, missionId, agent.id)) {
         continue;
       }
       await this.evaluateAgent(missionId, agent, tickCount);
     }
   }
 
-  private hasNewActivity(snapshot: MissionSnapshot, agentId: string): boolean {
+  private hasNewActivity(snapshot: MissionSnapshot, missionId: string, agentId: string): boolean {
     if (!this.lastActivityCount.has(agentId)) return true;
+    const missionTaskIds = new Set(
+      snapshot.tasks.filter((t) => t.missionId === missionId).map((t) => t.id),
+    );
+    const missionArtifactCount = snapshot.artifacts.filter((a) => missionTaskIds.has(a.taskId)).length;
     const relevantMessageCount = snapshot.agentMessages.filter(
       (m) => m.fromAgentId === agentId || m.mentionedAgentIds?.includes(agentId),
-    ).length + snapshot.artifacts.length;
+    ).length + missionArtifactCount;
     return relevantMessageCount > (this.lastActivityCount.get(agentId) ?? 0);
   }
 
-  private recordActivity(snapshot: MissionSnapshot, agentId: string): void {
+  private recordActivity(snapshot: MissionSnapshot, missionId: string, agentId: string): void {
+    const missionTaskIds = new Set(
+      snapshot.tasks.filter((t) => t.missionId === missionId).map((t) => t.id),
+    );
+    const missionArtifactCount = snapshot.artifacts.filter((a) => missionTaskIds.has(a.taskId)).length;
     const count = snapshot.agentMessages.filter(
       (m) => m.fromAgentId === agentId || m.mentionedAgentIds?.includes(agentId),
-    ).length + snapshot.artifacts.length;
+    ).length + missionArtifactCount;
     this.lastActivityCount.set(agentId, count);
   }
 
@@ -200,7 +203,7 @@ export class AgentAutonomyService {
         status: "idle",
         lastAction: "Completed self-evaluation",
       });
-      this.recordActivity(this.deps.getSnapshot(), agent.id);
+      this.recordActivity(this.deps.getSnapshot(), missionId, agent.id);
     } catch (error) {
       this.deps.updateAgent(agent.id, {
         status: "idle",

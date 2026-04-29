@@ -99,7 +99,7 @@ function makeBusDeps(overrides?: {
     },
     updateAgent: (id, patch) => { agentUpdates.push({ id, patch }); },
     maxConversationDepth: 5,
-    maxDiscussionRounds: 3,
+    maxDiscussionRounds: 5,
     cooldownMs: 0,
   });
 

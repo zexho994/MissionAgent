@@ -247,4 +247,90 @@ describe("AgentAutonomyService", () => {
 
     expect(service.isRunning("mission_1")).toBe(false);
   });
+
+  it("should skip agent on non-report tick when no new activity", async () => {
+    const { deps } = makeTestDeps();
+    deps.config.reportFrequencyTicks = 10;
+
+    let llmCalls = 0;
+    deps.llm = {
+      call: async () => {
+        llmCalls += 1;
+        return {
+          content: JSON.stringify({ message: "nothing new", type: "agent_chat", shouldPropagate: false, action: { type: "acknowledge" } }),
+          model: "test",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      },
+      stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+    };
+
+    let tickCallback: (() => Promise<void>) | undefined;
+    const timer = {
+      setInterval: (cb: () => void, _ms: number) => {
+        tickCallback = cb as () => Promise<void>;
+        return { clear: () => {} };
+      },
+    };
+    const service = new AgentAutonomyService(deps, timer);
+
+    service.startLoop("mission_1");
+
+    // Tick 1: agents evaluated (no prior activity count)
+    await tickCallback!();
+    const callsAfterFirstTick = llmCalls;
+    expect(callsAfterFirstTick).toBeGreaterThan(0);
+
+    // Tick 2: non-report tick, no new messages/artifacts → agents skipped
+    await tickCallback!();
+    expect(llmCalls).toBe(callsAfterFirstTick);
+  });
+
+  it("should evaluate agent on non-report tick when new activity exists", async () => {
+    const { deps, appendedMessages } = makeTestDeps();
+    deps.config.reportFrequencyTicks = 10;
+
+    let llmCalls = 0;
+    deps.llm = {
+      call: async () => {
+        llmCalls += 1;
+        return {
+          content: JSON.stringify({ message: "seen new activity", type: "agent_chat", shouldPropagate: false, action: { type: "acknowledge" } }),
+          model: "test",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      },
+      stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+    };
+
+    let tickCallback: (() => Promise<void>) | undefined;
+    const timer = {
+      setInterval: (cb: () => void, _ms: number) => {
+        tickCallback = cb as () => Promise<void>;
+        return { clear: () => {} };
+      },
+    };
+    const service = new AgentAutonomyService(deps, timer);
+
+    service.startLoop("mission_1");
+
+    // Tick 1: establishes baseline activity count
+    await tickCallback!();
+    const callsAfterFirstTick = llmCalls;
+    expect(callsAfterFirstTick).toBeGreaterThan(0);
+
+    // Simulate new activity: a message mentioning agent_1
+    const snapshot = deps.getSnapshot();
+    const prevMessages = snapshot.agentMessages;
+    snapshot.agentMessages = [
+      ...prevMessages,
+      { id: "msg_new", missionId: "mission_1", fromAgentId: "owner_1", type: "agent_notify", content: "new data", mentionedAgentIds: ["agent_1"], createdAt: new Date().toISOString() } as any,
+    ];
+
+    // Tick 2: non-report tick, but agent_1 has new activity → should be evaluated
+    await tickCallback!();
+    expect(llmCalls).toBeGreaterThan(callsAfterFirstTick);
+  });
 });
