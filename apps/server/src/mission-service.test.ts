@@ -305,6 +305,20 @@ describe("InMemoryMissionService", () => {
     expect(messages.some((message) => message.type === "owner_followup" && message.content.includes("目标人群"))).toBe(true);
   });
 
+  it("marks Owner as thinking before returning the first LLM-backed mission snapshot", async () => {
+    const pendingLlm = {
+      call: () => new Promise<never>(() => {}),
+      stats: () => ({ totalCalls: 1, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+    };
+    const service = new InMemoryMissionService({ llm: pendingLlm });
+
+    const mission = await service.createMission({ goal: "运营小红书账号" });
+
+    const owner = service.snapshot().agents.find((agent) => agent.missionId === mission.id && agent.role === "owner");
+    expect(owner?.status).toBe("thinking");
+    expect(owner?.lastAction).toBe("Processing initial user goal");
+  });
+
   it("uses LLM for multi-turn conversation and generates MissionBrief", async () => {
     let callCount = 0;
     const fake = new FakeLlmAdapter(() => {

@@ -270,11 +270,15 @@ export class InMemoryMissionService {
 
     this.missions.set(mission.id, mission);
     this.createOwnerAgent(mission.id);
-    this.persist();
 
     if (this.llm) {
       const systemPrompt = this.ownerSystemPrompt();
       const owner = this.agentByRole(mission.id, "owner");
+      this.updateAgent(owner.id, {
+        status: "thinking",
+        lastAction: "Processing initial user goal",
+      });
+      this.persist();
 
       void this.runOwnerLlmWithStreaming({
         missionId: mission.id,
@@ -283,6 +287,8 @@ export class InMemoryMissionService {
         userMessage: input.goal,
         isCreation: true,
       });
+    } else {
+      this.persist();
     }
 
     return mission;
