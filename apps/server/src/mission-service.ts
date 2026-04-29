@@ -20,7 +20,7 @@ import type { TeamProposal } from "./hr-agent.js";
 import { NegotiationManager, type NegotiationSummary } from "./negotiation-manager.js";
 import { planMissionTeam, matcherFor, type MissionTeamPlan } from "./team-planning.js";
 import { evaluateArtifactQuality } from "./artifact-evaluation.js";
-import { activateWithHRAgent } from "./hr-activation.js";
+
 import { ensureTaskRunning, deriveOwnerBrief, deriveOwnerFollowup } from "./mission-helpers.js";
 import { runOwnerLlmStreaming } from "./owner-streaming.js";
 import { AgentConversationBus } from "./agent-conversation-bus.js";
@@ -383,42 +383,12 @@ export class InMemoryMissionService {
     }
 
     try {
-      const result = await activateWithHRAgent(mission, this.llm);
-
-      this.tasks.set(result.task.id, result.task);
-
-      const idMap = new Map<string, string>();
-      for (const agent of result.agents) {
-        const existing = [...this.agents.values()].find(
-          (candidate) => candidate.missionId === mission.id && candidate.role === agent.role,
-        );
-        if (existing) {
-          this.agents.set(existing.id, { ...agent, id: existing.id });
-          idMap.set(agent.id, existing.id);
-        } else {
-          this.agents.set(agent.id, agent);
-          idMap.set(agent.id, agent.id);
-        }
-      }
-      for (const relation of result.relations) {
-        this.agentRelations.set(relation.id, {
-          ...relation,
-          fromAgentId: idMap.get(relation.fromAgentId) ?? relation.fromAgentId,
-          toAgentId: idMap.get(relation.toAgentId) ?? relation.toAgentId,
-        });
-      }
-      for (const msg of result.messages) {
-        this.appendMessage({
-          ...msg,
-          fromAgentId: idMap.get(msg.fromAgentId) ?? msg.fromAgentId,
-          ...(msg.toAgentId ? { toAgentId: idMap.get(msg.toAgentId) ?? msg.toAgentId } : {}),
-        });
-      }
+      await this.getNegotiationManager().startNegotiation(input, mission);
 
       const owner = this.agentByRole(mission.id, "owner");
       this.updateAgent(owner.id, {
         status: "idle",
-        lastAction: "Team assembled by HR Agent via LLM",
+        lastAction: "Reviewing HR team proposal",
       });
 
       this.persist();

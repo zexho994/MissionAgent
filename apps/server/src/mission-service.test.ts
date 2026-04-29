@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 import { InMemoryMissionService } from "./mission-service.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -545,6 +545,101 @@ describe("InMemoryMissionService", () => {
 
     expect(reply.type).toBe("agent_report");
     expect(reply.content).toBe("我已识别线程隔离风险，建议先补并发对话测试。");
+  });
+
+  describe("HR-driven activation with negotiation", () => {
+    let callCount: number;
+    let fake: FakeLlmAdapter;
+
+    beforeEach(() => {
+      callCount = 0;
+      fake = new FakeLlmAdapter((messages) => {
+        callCount += 1;
+        const lastMsg = messages[messages.length - 1]?.content ?? "";
+        // Owner conversation: return brief JSON
+        if (lastMsg.includes("补充信息") || lastMsg.includes("目标人群")) {
+          return JSON.stringify({
+            goal: "运营小红书账号到1000粉丝",
+            scope: "小红书平台",
+            constraints: ["human approval"],
+            successMetrics: ["followers >= 1000"],
+            keyAssumptions: ["existing account"],
+          });
+        }
+        // HR agent: mission analysis
+        if (callCount <= 3) {
+          return JSON.stringify({
+            requiredCapabilities: ["content_creation", "data_analysis"],
+            estimatedTeamSize: 2,
+            priorityRoles: ["data_analyst"],
+            complexity: "medium",
+            riskFactors: [],
+          });
+        }
+        // HR agent: role specs
+        return JSON.stringify([{
+          name: "DataAnalyst",
+          purpose: "Analyze mission metrics",
+          responsibilities: ["Track KPIs", "Generate reports"],
+          allowedTools: ["web_search", "data_analyzer"],
+          successCriteria: ["KPIs tracked daily"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+        }]);
+      });
+    });
+
+    it("starts negotiation when activating with HR and brief confirmed", async () => {
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await service.createMission({
+        goal: "运营小红书账号到1000粉丝",
+        successMetrics: ["followers >= 1000"],
+        constraints: ["1 month"],
+      });
+      await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      service.confirmBrief({ missionId: mission.id });
+
+      await service.activateMissionWithHR({ missionId: mission.id });
+
+      const snapshot = service.snapshot();
+      expect(snapshot.tasks).toHaveLength(0);
+      const negotiation = service.getNegotiation({ missionId: mission.id });
+      expect(negotiation).toBeDefined();
+      expect(negotiation!.proposal.roles.length).toBeGreaterThan(0);
+    });
+
+    it("creates team after confirming negotiation", async () => {
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await service.createMission({
+        goal: "运营小红书账号到1000粉丝",
+        successMetrics: ["followers >= 1000"],
+        constraints: ["1 month"],
+      });
+      await service.continueMission({ missionId: mission.id, message: "补充信息" });
+      service.confirmBrief({ missionId: mission.id });
+      await service.activateMissionWithHR({ missionId: mission.id });
+
+      service.confirmNegotiation({ missionId: mission.id });
+
+      const snapshot = service.snapshot();
+      expect(snapshot.agents.filter((a) => a.missionId === mission.id).length).toBeGreaterThanOrEqual(2);
+      expect(snapshot.tasks).toHaveLength(1);
+    });
+
+    it("falls back to keyword matching when no brief is confirmed", async () => {
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await service.createMission({
+        goal: "Create a harness learning image",
+        successMetrics: ["image prompt"],
+        constraints: ["concise"],
+      });
+
+      await service.activateMissionWithHR({ missionId: mission.id });
+
+      const snapshot = service.snapshot();
+      expect(snapshot.agents.filter((a) => a.missionId === mission.id).length).toBeGreaterThanOrEqual(3);
+      expect(snapshot.tasks).toHaveLength(1);
+      expect(service.getNegotiation({ missionId: mission.id })).toBeUndefined();
+    });
   });
 
 });
