@@ -85,6 +85,38 @@ describe("handleApiRequest", () => {
     expect(missions.snapshot().tasks).toHaveLength(1);
   });
 
+  it("starts mission activation asynchronously so the UI can show HR recruiting", async () => {
+    const missions = new InMemoryMissionService();
+    const createResponse = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions",
+        body: {
+          goal: "Grow GitHub account to two 1k-star repos",
+          successMetrics: ["two repos over 1000 stars"],
+          constraints: ["one month"],
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    const missionId = (createResponse.body as { mission: { id: string } }).mission.id;
+
+    const response = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/activate-async",
+        body: { missionId },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(202);
+    const snapshot = (response.body as { snapshot: MissionSnapshot }).snapshot;
+    const hr = snapshot.agents.find((agent) => agent.missionId === missionId && agent.role === "hr");
+    expect(hr?.status).toBe("running");
+    expect(snapshot.tasks.filter((task) => task.missionId === missionId)).toHaveLength(0);
+  });
+
   it("continues an existing mission instead of creating a new one", async () => {
     const missions = new InMemoryMissionService();
     const mission = await missions.createMission({ goal: "学习 harness 并生成知识图" });

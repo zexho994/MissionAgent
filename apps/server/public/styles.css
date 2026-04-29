@@ -459,6 +459,21 @@ h1, h2, p { margin-top: 0; }
   row-gap: 34px;
   align-items: start;
 }
+.activation-empty {
+  grid-column: 1 / -1;
+  max-width: 360px;
+  border: 1px solid #bad0f6;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 18px;
+}
+.activation-empty strong {
+  display: block;
+  margin-bottom: 8px;
+}
+.activation-empty p {
+  color: #596273;
+}
 .agent-node {
   position: relative;
   z-index: 2;

@@ -81,6 +81,18 @@ export async function handleApiRequest(
       return json(200, { mission, snapshot: deps.missions.snapshot() });
     }
 
+    if (request.method === "POST" && request.path === "/api/missions/activate-async") {
+      const body = expectObject(request.body);
+      const missionId = expectString(body.missionId, "missionId");
+      const mission = deps.missions.beginMissionActivation({ missionId });
+      setTimeout(() => {
+        void deps.missions.activateMissionWithHR({ missionId }).catch((error: unknown) => {
+          console.error("[API] Async mission activation failed:", error instanceof Error ? error.message : String(error));
+        });
+      }, 0);
+      return json(202, { mission, snapshot: deps.missions.snapshot() });
+    }
+
     if (request.method === "POST" && request.path === "/api/missions/negotiate/start") {
       const body = expectObject(request.body);
       const proposal = await deps.missions.startNegotiation({

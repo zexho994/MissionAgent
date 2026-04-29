@@ -336,6 +336,38 @@ export class InMemoryMissionService {
     return mission;
   }
 
+  beginMissionActivation(input: ActivateMissionRequest): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
+    if (existingTask) {
+      return mission;
+    }
+
+    const hr = this.createBaseAgent(mission.id, "hr", {
+      status: "running",
+      lastAction: "正在分析 MissionBrief 并招募团队",
+    });
+    const alreadyAnnounced = [...this.agentMessages.values()].some(
+      (message) => message.missionId === mission.id
+        && message.fromAgentId === hr.id
+        && message.type === "team_created"
+        && message.content.includes("正在分析 MissionBrief"),
+    );
+    if (!alreadyAnnounced) {
+      this.appendMessage({
+        missionId: mission.id,
+        fromAgentId: hr.id,
+        type: "team_created",
+        content: "HR Agent 正在分析 MissionBrief、拆解需要的角色，并招募 Mission 团队。",
+      });
+    }
+    this.persist();
+    return mission;
+  }
+
   async activateMissionWithHR(input: ActivateMissionRequest): Promise<Mission> {
     const mission = this.missions.get(input.missionId);
     if (!mission) {
@@ -355,14 +387,32 @@ export class InMemoryMissionService {
 
       this.tasks.set(result.task.id, result.task);
 
+      const idMap = new Map<string, string>();
       for (const agent of result.agents) {
-        this.agents.set(agent.id, agent);
+        const existing = [...this.agents.values()].find(
+          (candidate) => candidate.missionId === mission.id && candidate.role === agent.role,
+        );
+        if (existing) {
+          this.agents.set(existing.id, { ...agent, id: existing.id });
+          idMap.set(agent.id, existing.id);
+        } else {
+          this.agents.set(agent.id, agent);
+          idMap.set(agent.id, agent.id);
+        }
       }
       for (const relation of result.relations) {
-        this.agentRelations.set(relation.id, relation);
+        this.agentRelations.set(relation.id, {
+          ...relation,
+          fromAgentId: idMap.get(relation.fromAgentId) ?? relation.fromAgentId,
+          toAgentId: idMap.get(relation.toAgentId) ?? relation.toAgentId,
+        });
       }
       for (const msg of result.messages) {
-        this.appendMessage(msg);
+        this.appendMessage({
+          ...msg,
+          fromAgentId: idMap.get(msg.fromAgentId) ?? msg.fromAgentId,
+          ...(msg.toAgentId ? { toAgentId: idMap.get(msg.toAgentId) ?? msg.toAgentId } : {}),
+        });
       }
 
       const owner = this.agentByRole(mission.id, "owner");
@@ -852,28 +902,35 @@ export class InMemoryMissionService {
   }
 
   private createOwnerAgent(missionId: string): WarRoomAgent {
-    const existing = [...this.agents.values()].find((agent) => agent.missionId === missionId && agent.role === "owner");
+    return this.createBaseAgent(missionId, "owner");
+  }
+
+  private createBaseAgent(missionId: string, role: string, patch: Partial<WarRoomAgent> = {}): WarRoomAgent {
+    const existing = [...this.agents.values()].find((agent) => agent.missionId === missionId && agent.role === role);
     if (existing) {
-      return existing;
+      const updated = { ...existing, ...patch };
+      this.agents.set(updated.id, updated);
+      return updated;
     }
-    const ownerSpec = this.config.teamPlanner.baseAgents.find((agent) => agent.role === "owner");
-    if (!ownerSpec) {
-      throw new Error("Owner agent config is required");
+    const spec = this.config.teamPlanner.baseAgents.find((agent) => agent.role === role);
+    if (!spec) {
+      throw new Error(`${role} agent config is required`);
     }
-    const owner: WarRoomAgent = {
+    const agent: WarRoomAgent = {
       id: createId("agent"),
       missionId,
-      role: ownerSpec.role,
-      name: ownerSpec.name,
-      responsibility: ownerSpec.responsibility,
-      status: ownerSpec.status,
+      role: spec.role,
+      name: spec.name,
+      responsibility: spec.responsibility,
+      status: spec.status,
       currentTaskId: undefined,
-      lastAction: ownerSpec.lastAction,
-      avatarSeed: ownerSpec.avatarSeed,
-      sortOrder: 0,
+      lastAction: spec.lastAction,
+      avatarSeed: spec.avatarSeed,
+      sortOrder: this.config.teamPlanner.baseAgents.findIndex((candidate) => candidate.role === role),
+      ...patch,
     };
-    this.agents.set(owner.id, owner);
-    return owner;
+    this.agents.set(agent.id, agent);
+    return agent;
   }
 
   private createMissionTeam(missionId: string, firstTaskId: string, plan: MissionTeamPlan): WarRoomAgent[] {
@@ -889,7 +946,12 @@ export class InMemoryMissionService {
       if (existing) {
         const updated = {
           ...existing,
+          name: spec.name,
+          responsibility: spec.responsibility,
+          status: spec.status,
           currentTaskId: spec.currentTask ? firstTaskId : existing.currentTaskId,
+          lastAction: spec.lastAction,
+          avatarSeed: spec.avatarSeed,
           sortOrder: spec.sortOrder,
         };
         this.agents.set(updated.id, updated);

@@ -70,6 +70,14 @@ function renderWarOverview(data) {
 
 function renderAgentNetwork(data) {
   const agents = [...data.agents].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  if (agents.length === 0) {
+    return `
+      <div class="activation-empty">
+        <strong>正在进入 Mission</strong>
+        <p>等待 HR 接收 MissionBrief。</p>
+      </div>
+    `;
+  }
   return agents.map((agent, index) => {
     const relation = data.relations.find((item) => item.fromAgentId === agent.id);
     const nextAgent = relation ? agents.find((candidate) => candidate.id === relation.toAgentId) : undefined;

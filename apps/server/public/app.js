@@ -369,11 +369,19 @@ function bindChoiceButtons() {
       const mission = currentMission();
       if (!mission) return;
       if (scoped().tasks.length === 0) {
-        const result = await api("/api/missions/activate", {
+        const activation = api("/api/missions/activate-async", {
           method: "POST",
           body: { missionId: mission.id },
         });
+        state.view = "mission";
+        state.draftMode = false;
+        state.warTab = "overview";
+        renderAll();
+        startPolling();
+        const result = await activation;
         state.snapshot = result.snapshot;
+        renderAll();
+        return;
       }
       state.view = "mission";
       state.draftMode = false;
@@ -449,6 +457,9 @@ function shortAgentName(name) {
 }
 
 function nextTaskText(data) {
+  if (data.tasks.length === 0 && data.agents.some((agent) => agent.role === "hr" && agent.status === "running")) {
+    return "HR 正在分析 MissionBrief 并招募团队。";
+  }
   const runningTask = data.tasks.find((task) => task.status === "running");
   if (runningTask) return runningTask.title;
   const revisionTask = data.tasks.find((task) => task.status === "revision_needed");
@@ -457,6 +468,8 @@ function nextTaskText(data) {
 }
 
 function latestOutputText(data) {
+  const hrMessage = [...data.messages].reverse().find((message) => message.type === "team_created");
+  if (hrMessage) return hrMessage.content;
   const review = data.reviews.at(-1);
   if (review) return `${review.decision}: ${review.comments[0] || "已完成审核"}`;
   const artifact = data.artifacts.at(-1);

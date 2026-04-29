@@ -62,6 +62,24 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.tasks[0]?.title).toBe("Define knowledge structure and first image production plan");
   });
 
+  it("marks HR as recruiting before activation work completes", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({
+      goal: "Grow a GitHub account",
+      successMetrics: ["two repos over 1000 stars"],
+      constraints: ["one month"],
+    });
+
+    service.beginMissionActivation({ missionId: mission.id });
+
+    const snapshot = service.snapshot();
+    const hr = snapshot.agents.find((agent) => agent.missionId === mission.id && agent.role === "hr");
+    expect(hr?.status).toBe("running");
+    expect(hr?.lastAction).toContain("招募团队");
+    expect(snapshot.tasks.filter((task) => task.missionId === mission.id)).toHaveLength(0);
+    expect(snapshot.agentMessages.some((message) => message.missionId === mission.id && message.content.includes("正在分析 MissionBrief"))).toBe(true);
+  });
+
   it("does not re-activate a mission that already has tasks", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Test goal" });
