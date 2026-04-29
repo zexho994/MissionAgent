@@ -15,6 +15,7 @@ const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data",
 const llm = createLlmServiceFromEnv(process.env);
 
 const missions = new InMemoryMissionService({ storageFile: dataFile, llm });
+missions.restoreSchedulers();
 const openclawOptions: OpenClawCliAdapterOptions = {
   command: "openclaw",
 };

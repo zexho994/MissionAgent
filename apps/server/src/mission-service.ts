@@ -9,6 +9,7 @@ import {
   type Mission,
   type MissionBrief,
   type Review,
+  type ScheduleRule,
   type Task,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
@@ -29,6 +30,7 @@ import { ContextRetriever } from "./context-retriever.js";
 import type { BusEvent, ConversationThread } from "./agent-conversation-types.js";
 import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
 import { AgentAutonomyService } from "./agent-autonomy.js";
+import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -237,13 +239,22 @@ export class InMemoryMissionService {
   private negotiationManager: NegotiationManager | undefined;
   private conversationBus: AgentConversationBus | undefined;
   private autonomyService: AgentAutonomyService | undefined;
+  private readonly schedulers = new Map<string, MissionScheduler>();
   private readonly personas: AgentPersonaRegistry;
+  private readonly contextRetriever: ContextRetriever;
+
+  private static readonly realClock: SchedulerClock = {
+    now: () => new Date(),
+    setInterval: (handler, ms) => globalThis.setInterval(handler, ms),
+    clearInterval: (handle) => globalThis.clearInterval(handle as NodeJS.Timeout),
+  };
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
     this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
+    this.contextRetriever = new ContextRetriever(() => this.snapshot());
     this.loadFromFile();
   }
 
@@ -257,6 +268,7 @@ export class InMemoryMissionService {
         config: this.config,
         agents: this.agents,
         agentRelations: this.agentRelations,
+        missions: this.missions,
         tasks: this.tasks,
         agentMessages: this.agentMessages,
       });
@@ -342,6 +354,9 @@ export class InMemoryMissionService {
     this.createMissionTeam(mission.id, initialTask.id, teamPlan);
     if (this.llm) {
       this.getAutonomyService().startLoop(mission.id);
+    }
+    if (mission.scheduleRules.length > 0) {
+      this.getOrCreateScheduler(mission.id).start(mission.scheduleRules);
     }
     this.persist();
     return mission;
@@ -676,6 +691,7 @@ export class InMemoryMissionService {
       taskId: task.id,
       artifactId: artifact.id,
     }, mission.id);
+    void this.evaluateScheduleConditions(mission, resultTask, input.content);
     return { artifact, review };
   }
 
@@ -783,8 +799,85 @@ export class InMemoryMissionService {
     if (this.llm) {
       this.getAutonomyService().startLoop(mission.id);
     }
+    const updated = this.missions.get(mission.id);
+    if (updated && updated.scheduleRules.length > 0) {
+      this.getOrCreateScheduler(updated.id).start(updated.scheduleRules);
+    }
     this.persist();
     return this.missions.get(mission.id)!;
+  }
+
+  addScheduleRule(missionId: string, rule: ScheduleRule): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updated: Mission = {
+      ...mission,
+      scheduleRules: [...mission.scheduleRules, rule],
+    };
+    this.missions.set(updated.id, updated);
+    this.getOrCreateScheduler(missionId).addRule(rule);
+    this.persist();
+  }
+
+  removeScheduleRule(missionId: string, ruleId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updated: Mission = {
+      ...mission,
+      scheduleRules: mission.scheduleRules.filter((rule) => rule.id !== ruleId),
+    };
+    this.missions.set(updated.id, updated);
+    this.schedulers.get(missionId)?.removeRule(ruleId);
+    this.persist();
+  }
+
+  updateScheduleRule(missionId: string, ruleId: string, patch: Partial<ScheduleRule>): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updated: Mission = {
+      ...mission,
+      scheduleRules: mission.scheduleRules.map((rule) =>
+        rule.id === ruleId ? { ...rule, ...patch } : rule,
+      ),
+    };
+    this.missions.set(updated.id, updated);
+    this.schedulers.get(missionId)?.updateRule(ruleId, patch);
+    this.persist();
+  }
+
+  getScheduleRules(missionId: string): ScheduleRule[] {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    return [...mission.scheduleRules];
+  }
+
+  triggerScheduleRule(missionId: string, ruleId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const rule = mission.scheduleRules.find((candidate) => candidate.id === ruleId);
+    if (!rule) {
+      throw new Error(`Schedule rule not found: ${ruleId}`);
+    }
+    this.createTaskFromScheduleRule(mission, rule);
+    this.persist();
+  }
+
+  restoreSchedulers(): void {
+    for (const mission of this.missions.values()) {
+      if (mission.status === "active" && mission.scheduleRules.length > 0) {
+        this.getOrCreateScheduler(mission.id).start(mission.scheduleRules);
+      }
+    }
   }
 
   getNegotiation(input: { missionId: string }): { proposal: TeamProposal; previousFeedback: string[] } | undefined {
@@ -1032,7 +1125,7 @@ export class InMemoryMissionService {
       this.conversationBus = new AgentConversationBus({
         llm: this.llm,
         personas: this.personas,
-        contextRetriever: new ContextRetriever(() => this.snapshot()),
+        contextRetriever: this.contextRetriever,
         getSnapshot: () => this.snapshot(),
         appendMessage: (message) => {
           const appended = this.appendMessage(message);
@@ -1071,7 +1164,7 @@ export class InMemoryMissionService {
         },
         llm: this.llm,
         personas: this.personas,
-        contextRetriever: new ContextRetriever(() => this.snapshot()),
+        contextRetriever: this.contextRetriever,
         getSnapshot: () => this.snapshot(),
         dispatchEvent: async (input) => { await bus.dispatchEvent(input); },
         appendMessage: (msg) => {
@@ -1095,6 +1188,168 @@ export class InMemoryMissionService {
     } catch (error) {
       console.error("[MissionService] Agent conversation dispatch failed:", error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private getOrCreateScheduler(missionId: string): MissionScheduler {
+    let scheduler = this.schedulers.get(missionId);
+    if (scheduler) {
+      return scheduler;
+    }
+
+    const deps: SchedulerDeps = {
+      clock: InMemoryMissionService.realClock,
+      missionId,
+      findAgentByRole: (role) => {
+        const agent = [...this.agents.values()].find(
+          (candidate) => candidate.missionId === missionId && candidate.role === role,
+        );
+        return agent ? { id: agent.id, role: agent.role } : undefined;
+      },
+      countIncompleteTasksForRule: (ruleId) => {
+        const rule = this.missions.get(missionId)?.scheduleRules.find((candidate) => candidate.id === ruleId);
+        if (!rule) return 0;
+        return [...this.tasks.values()].filter(
+          (task) =>
+            task.missionId === missionId &&
+            task.title === rule.taskTemplate.title &&
+            task.status !== "completed" &&
+            task.status !== "failed" &&
+            task.status !== "cancelled",
+        ).length;
+      },
+      createTaskFromTemplate: (_ruleId, template, agentId) => {
+        const mission = this.missions.get(missionId);
+        if (!mission) throw new Error(`Mission not found: ${missionId}`);
+        const task = createTask({
+          missionId,
+          title: template.title,
+          dependencies: [],
+          contract: template.contract,
+          approvalRequired: false,
+        });
+        const assigned = { ...task, assigneeAgentId: agentId };
+        this.tasks.set(assigned.id, assigned);
+        this.appendMessage({
+          missionId,
+          fromAgentId: "system",
+          type: "task_plan",
+          content: `Scheduled task "${template.title}" assigned.`,
+        });
+        this.persist();
+        return assigned;
+      },
+      assignTask: (taskId, agentId) => {
+        const task = this.tasks.get(taskId);
+        if (!task) {
+          throw new Error(`Task not found: ${taskId}`);
+        }
+        this.tasks.set(taskId, { ...task, assigneeAgentId: agentId });
+      },
+      notifyOwner: (message) => {
+        const owner = [...this.agents.values()].find(
+          (candidate) => candidate.missionId === missionId && candidate.role === "owner",
+        );
+        if (!owner) return;
+        this.appendMessage({
+          missionId,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: message,
+        });
+        this.persist();
+      },
+      evaluateCondition: async (prompt, context) => this.evaluateConditionWithLlm(prompt, context),
+    };
+
+    scheduler = new MissionScheduler(deps);
+    this.schedulers.set(missionId, scheduler);
+    return scheduler;
+  }
+
+  private createTaskFromScheduleRule(mission: Mission, rule: ScheduleRule): void {
+    const agent = [...this.agents.values()].find(
+      (candidate) => candidate.missionId === mission.id && candidate.role === rule.taskTemplate.assigneeRole,
+    );
+    if (!agent) {
+      const owner = [...this.agents.values()].find(
+        (candidate) => candidate.missionId === mission.id && candidate.role === "owner",
+      );
+      if (owner) {
+        this.appendMessage({
+          missionId: mission.id,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: `Schedule rule "${rule.name}" skipped: no agent for role "${rule.taskTemplate.assigneeRole}"`,
+        });
+      }
+      return;
+    }
+
+    const task = createTask({
+      missionId: mission.id,
+      title: rule.taskTemplate.title,
+      dependencies: [],
+      contract: rule.taskTemplate.contract,
+      approvalRequired: false,
+    });
+    const assigned = { ...task, assigneeAgentId: agent.id };
+    this.tasks.set(assigned.id, assigned);
+    this.appendMessage({
+      missionId: mission.id,
+      fromAgentId: "system",
+      type: "task_plan",
+      content: `Scheduled task "${rule.taskTemplate.title}" assigned to ${agent.name}.`,
+    });
+  }
+
+  private async evaluateScheduleConditions(
+    mission: Mission,
+    completedTask: Task,
+    artifactContent: Record<string, unknown>,
+  ): Promise<void> {
+    const scheduler = this.schedulers.get(mission.id);
+    if (!scheduler) return;
+    if (!mission.scheduleRules.some((rule) => rule.enabled && rule.trigger.type === "condition")) return;
+
+    const assignee = completedTask.assigneeAgentId
+      ? this.agents.get(completedTask.assigneeAgentId)
+      : undefined;
+
+    await scheduler.evaluateConditions({
+      completedTaskAssigneeRole: assignee?.role ?? "",
+      artifactContent: JSON.stringify(artifactContent),
+      missionGoal: mission.goal,
+    });
+  }
+
+  private async evaluateConditionWithLlm(
+    prompt: string,
+    context: { artifactContent: string; missionGoal: string },
+  ): Promise<boolean> {
+    if (!this.llm) {
+      return false;
+    }
+    const response = await this.llm.call([
+      {
+        role: "system",
+        content: "Evaluate whether a scheduled condition is satisfied. Respond with only true or false.",
+      },
+      {
+        role: "user",
+        content: [
+          `Mission goal: ${context.missionGoal}`,
+          `Condition: ${prompt}`,
+          `Artifact content: ${context.artifactContent}`,
+          "Is the condition satisfied?",
+        ].join("\n"),
+      },
+    ]);
+    const normalized = response.content.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+    throw new Error(`Condition evaluation returned non-boolean response: ${response.content}`);
   }
 
   private createThread(input: Omit<ConversationThread, "id" | "createdAt">): ConversationThread {
@@ -1244,7 +1499,13 @@ export class InMemoryMissionService {
     if (stored.schemaVersion !== 1) {
       throw new Error(`Unsupported mission store schema version: ${String(stored.schemaVersion)}`);
     }
-    for (const mission of stored.missions) this.missions.set(mission.id, { ...mission, createdAt: new Date(mission.createdAt) });
+    for (const mission of stored.missions) {
+      this.missions.set(mission.id, {
+        ...mission,
+        createdAt: new Date(mission.createdAt),
+        scheduleRules: (mission as Mission & { scheduleRules?: ScheduleRule[] }).scheduleRules ?? [],
+      });
+    }
     for (const task of stored.tasks) this.tasks.set(task.id, task);
     for (const artifact of stored.artifacts) this.artifacts.set(artifact.id, { ...artifact, createdAt: new Date(artifact.createdAt) });
     for (const review of stored.reviews) this.reviews.set(review.id, { ...review, createdAt: new Date(review.createdAt) });

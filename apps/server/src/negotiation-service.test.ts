@@ -62,6 +62,7 @@ describe("NegotiationService", () => {
         communicationChannels: ["Direct messages"],
         decisionMaking: "Consensus",
       },
+      schedulePlan: [],
       createdAt: new Date(),
     };
 

@@ -16,6 +16,17 @@ export interface MissionAnalysis {
   riskFactors: string[];
 }
 
+export interface SchedulePlanItem {
+  name: string;
+  cronExpression?: string;
+  assigneeRole: string;
+  taskDescription: string;
+  justification: string;
+  conditionDescription?: string;
+  conditionSourceRole?: string;
+  conditionEvaluatePrompt?: string;
+}
+
 export interface TeamProposal {
   missionId: string;
   roles: RoleSpec[];
@@ -31,6 +42,7 @@ export interface TeamProposal {
     communicationChannels: string[];
     decisionMaking: string;
   };
+  schedulePlan: SchedulePlanItem[];
   createdAt: Date;
 }
 
@@ -136,6 +148,7 @@ export function createHRAgent(options: HRAgentOptions) {
       estimatedDuration,
       riskAssessment,
       collaborationPlan,
+      schedulePlan: [],
       createdAt: new Date(),
     };
   }
@@ -178,6 +191,11 @@ function buildHRAgentSystemPrompt(): string {
     "- Success criteria are measurable",
     "- Tool permissions are appropriate",
     "- Budget allocation is realistic",
+    "",
+    "When proposing teams, also suggest a work rhythm:",
+    "- Recommend periodic tasks based on the mission goal and roles",
+    "- Consider each role's responsibilities when scheduling recurring work",
+    "- If anomaly detection is needed, describe the trigger condition and responder",
     "",
     "Respond with structured JSON that can be parsed directly.",
   ].join("\n");

@@ -25,6 +25,7 @@ export interface Mission {
   createdAt: Date;
   brief?: MissionBrief;
   briefConfirmed?: boolean;
+  scheduleRules: ScheduleRule[];
 }
 
 export interface RoleBudget {
@@ -132,3 +133,36 @@ export type TaskEvent =
   | { type: "task.failed"; reason: string }
   | { type: "task.retry" }
   | { type: "task.cancelled" };
+
+// --- Schedule Types ---
+
+export interface CronTrigger {
+  type: "cron";
+  expression: string;
+  timezone: string;
+}
+
+export interface ConditionTrigger {
+  type: "condition";
+  description: string;
+  sourceAgentRole: string;
+  evaluatePrompt: string;
+}
+
+export type ScheduleTrigger = CronTrigger | ConditionTrigger;
+
+export interface ScheduleRule {
+  id: string;
+  name: string;
+  missionId: string;
+  enabled: boolean;
+  trigger: ScheduleTrigger;
+  taskTemplate: {
+    title: string;
+    contract: TaskContract;
+    assigneeRole: string;
+    priority: "low" | "normal" | "high";
+  };
+  maxConcurrent: number;
+  metadata: Record<string, unknown>;
+}

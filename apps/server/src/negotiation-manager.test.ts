@@ -47,6 +47,7 @@ function makeTestDeps() {
 
   const agents = new Map<string, WarRoomAgent>();
   const agentRelations = new Map<string, AgentRelation>();
+  const missions = new Map<string, Mission>();
   const tasks = new Map<string, import("@digitalagent/core").Task>();
   const agentMessages = new Map<string, AgentMessage>();
   const config = {
@@ -55,7 +56,7 @@ function makeTestDeps() {
     uiStrings: { teamPlannerDescription: "", initialTask: { title: "", objective: "" } },
   } as unknown as AgentSystemConfig;
 
-  return { llm, config, agents, agentRelations, tasks, agentMessages };
+  return { llm, config, agents, agentRelations, missions, tasks, agentMessages };
 }
 
 function makeMissionWithBrief(): Mission {
@@ -100,6 +101,7 @@ describe("NegotiationManager", () => {
   beforeEach(() => {
     deps = makeTestDeps();
     mission = makeMissionWithBrief();
+    deps.missions.set(mission.id, mission);
     addOwner(deps.agents, mission.id);
   });
 

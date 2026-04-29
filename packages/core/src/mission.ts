@@ -32,5 +32,6 @@ export function createMission(input: CreateMissionInput): Mission {
         : { maxTokenSpendUsd: input.budget.maxTokenSpendUsd }),
     },
     createdAt: new Date(),
+    scheduleRules: [],
   };
 }

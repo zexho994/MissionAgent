@@ -258,3 +258,151 @@ describe("handleApiRequest", () => {
     expect((threadResponse.body as { messages: Array<{ content: string }> }).messages.some((message) => message.content.includes("下一步建议"))).toBe(true);
   });
 });
+
+describe("schedule API endpoints", () => {
+  async function createMissionViaApi(missions: InMemoryMissionService): Promise<string> {
+    const createResp = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions",
+        body: {
+          goal: "Test mission",
+          successMetrics: ["test metric"],
+          constraints: ["test constraint"],
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    return (createResp.body as { mission: { id: string } }).mission.id;
+  }
+
+  async function addScheduleRule(missions: InMemoryMissionService, missionId: string): Promise<string> {
+    const addResp = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/schedule`,
+        body: {
+          name: "Daily check",
+          trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+          taskTemplate: {
+            title: "Check data",
+            contract: {
+              objective: "Check data",
+              input: {},
+              outputSchema: {},
+              successCriteria: ["Report generated"],
+            },
+            assigneeRole: "data-analyst",
+            priority: "normal",
+          },
+          maxConcurrent: 1,
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    expect(addResp.status).toBe(201);
+    return (addResp.body as { rule: { id: string } }).rule.id;
+  }
+
+  it("GET /api/missions/:id/schedule returns schedule rules", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+
+    const resp = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${missionId}/schedule` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(200);
+    expect((resp.body as { rules: unknown[] }).rules).toEqual([]);
+  });
+
+  it("POST /api/missions/:id/schedule adds a schedule rule", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+
+    const ruleId = await addScheduleRule(missions, missionId);
+
+    expect(ruleId).toMatch(/^schedule_/);
+  });
+
+  it("POST /api/missions/:id/schedule returns 400 for missing mission", async () => {
+    const missions = new InMemoryMissionService();
+    const resp = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/nonexistent/schedule",
+        body: {
+          name: "Daily check",
+          trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+          taskTemplate: {
+            title: "Check data",
+            contract: {
+              objective: "Check data",
+              input: {},
+              outputSchema: {},
+              successCriteria: ["Report generated"],
+            },
+            assigneeRole: "data-analyst",
+            priority: "normal",
+          },
+          maxConcurrent: 1,
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(400);
+  });
+
+  it("DELETE /api/missions/:id/schedule/:ruleId removes a rule", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId);
+
+    const delResp = await handleApiRequest(
+      { method: "DELETE", path: `/api/missions/${missionId}/schedule/${ruleId}` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(delResp.status).toBe(200);
+
+    const listResp = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${missionId}/schedule` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    expect((listResp.body as { rules: unknown[] }).rules).toHaveLength(0);
+  });
+
+  it("PATCH /api/missions/:id/schedule/:ruleId updates a rule", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId);
+
+    const patchResp = await handleApiRequest(
+      {
+        method: "PATCH",
+        path: `/api/missions/${missionId}/schedule/${ruleId}`,
+        body: { enabled: false },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(patchResp.status).toBe(200);
+    expect((patchResp.body as { rule: { enabled: boolean } }).rule.enabled).toBe(false);
+  });
+
+  it("POST /api/missions/:id/schedule/:ruleId/trigger manually triggers", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId);
+
+    const triggerResp = await handleApiRequest(
+      { method: "POST", path: `/api/missions/${missionId}/schedule/${ruleId}/trigger`, body: {} },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(triggerResp.status).toBe(200);
+    expect((triggerResp.body as { triggered: boolean }).triggered).toBe(true);
+  });
+});

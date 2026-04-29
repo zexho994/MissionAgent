@@ -1,3 +1,4 @@
+import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
 import type { InMemoryMissionService } from "./mission-service.js";
 
@@ -230,6 +231,86 @@ export async function handleApiRequest(
       return json(202, { execution, snapshot: deps.missions.snapshot() });
     }
 
+    const scheduleMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/schedule(?:\/([^/]+)(?:\/(trigger))?)?$/,
+    );
+    if (scheduleMatch) {
+      const missionId = scheduleMatch[1];
+      const ruleId = scheduleMatch[2];
+      const action = scheduleMatch[3];
+
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !ruleId) {
+        return json(200, { rules: deps.missions.getScheduleRules(missionId) });
+      }
+
+      if (request.method === "POST" && !ruleId) {
+        const body = expectObject(request.body);
+        const trigger = expectObject(body.trigger);
+        const template = expectObject(body.taskTemplate);
+        const contract = expectObject(template.contract);
+        const triggerType = expectString(trigger.type, "trigger.type");
+
+        if (triggerType !== "cron" && triggerType !== "condition") {
+          return json(400, { error: "trigger must be cron or condition" });
+        }
+
+        const rule = createScheduleRule({
+          name: expectString(body.name, "name"),
+          missionId,
+          enabled: body.enabled !== false,
+          trigger: triggerType === "cron"
+            ? {
+                type: "cron",
+                expression: expectString(trigger.expression, "trigger.expression"),
+                timezone: expectString(trigger.timezone ?? "UTC", "trigger.timezone"),
+              }
+            : {
+                type: "condition",
+                description: expectString(trigger.description, "trigger.description"),
+                sourceAgentRole: expectString(trigger.sourceAgentRole, "trigger.sourceAgentRole"),
+                evaluatePrompt: expectString(trigger.evaluatePrompt, "trigger.evaluatePrompt"),
+              },
+          taskTemplate: {
+            title: expectString(template.title, "taskTemplate.title"),
+            contract: {
+              objective: expectString(contract.objective, "taskTemplate.contract.objective"),
+              input: expectRecord(contract.input ?? {}, "taskTemplate.contract.input"),
+              outputSchema: expectRecord(contract.outputSchema ?? {}, "taskTemplate.contract.outputSchema"),
+              successCriteria: expectStringArray(contract.successCriteria ?? [], "taskTemplate.contract.successCriteria"),
+            },
+            assigneeRole: expectString(template.assigneeRole, "taskTemplate.assigneeRole"),
+            priority: parsePriority(template.priority),
+          },
+          maxConcurrent: typeof body.maxConcurrent === "number" ? body.maxConcurrent : 1,
+          metadata: expectRecord(body.metadata ?? {}, "metadata"),
+        });
+
+        deps.missions.addScheduleRule(missionId, rule);
+        return json(201, { rule, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "PATCH" && ruleId && !action) {
+        const body = expectObject(request.body);
+        deps.missions.updateScheduleRule(missionId, ruleId, body as Partial<ScheduleRule>);
+        const updated = deps.missions.getScheduleRules(missionId).find((rule) => rule.id === ruleId);
+        return json(200, { rule: updated, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "DELETE" && ruleId && !action) {
+        deps.missions.removeScheduleRule(missionId, ruleId);
+        return json(200, { snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && ruleId && action === "trigger") {
+        deps.missions.triggerScheduleRule(missionId, ruleId);
+        return json(200, { triggered: true, snapshot: deps.missions.snapshot() });
+      }
+    }
+
     return json(404, { error: "Not found" });
   } catch (error) {
     return json(400, {
@@ -261,6 +342,20 @@ function expectStringArray(value: unknown, field: string): string[] {
     throw new Error(`${field} must be a string array`);
   }
   return [...value];
+}
+
+function expectRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parsePriority(value: unknown): "low" | "normal" | "high" {
+  if (value === "low" || value === "normal" || value === "high") {
+    return value;
+  }
+  return "normal";
 }
 
 function buildOpenClawMessage(input: {
