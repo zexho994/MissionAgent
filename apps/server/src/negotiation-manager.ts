@@ -183,17 +183,31 @@ export class NegotiationManager {
       approvalRequired: false,
     });
 
+    const hrAgentRecord: WarRoomAgent = {
+      id: createId("agent"),
+      missionId: mission.id,
+      role: "hr",
+      name: "HR Agent",
+      responsibility: "Team assembly and agent coordination",
+      status: "done",
+      currentTaskId: undefined,
+      lastAction: "Team confirmed via negotiation",
+      avatarSeed: "hr",
+      sortOrder: agents.length + 1,
+    };
+
     this.tasks.set(initialTask.id, initialTask);
     for (const agent of agents) {
       this.agents.set(agent.id, agent);
     }
+    this.agents.set(hrAgentRecord.id, hrAgentRecord);
     for (const relation of relations) {
       this.agentRelations.set(relation.id, relation);
     }
 
     this.appendMessage({
       missionId: mission.id,
-      fromAgentId: `hr_${mission.id}`,
+      fromAgentId: hrAgentRecord.id,
       type: "team_created",
       content: `Team confirmed! ${agents.length} agents deployed. Starting execution.`,
     });

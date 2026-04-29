@@ -219,4 +219,27 @@ describe("NegotiationManager", () => {
       expect(proposal.missionId).toBe(mission.id);
     });
   });
+
+  describe("confirmNegotiation", () => {
+    it("should create worker agents, HR agent, task, and relations", async () => {
+      const manager = new NegotiationManager(deps);
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+
+      manager.confirmNegotiation({ missionId: mission.id }, mission);
+
+      const missionAgents = [...deps.agents.values()].filter(
+        (a) => a.missionId === mission.id,
+      );
+      const workerAgents = missionAgents.filter(
+        (a) => a.role !== "owner" && a.role !== "hr",
+      );
+      const hrAgent = missionAgents.find((a) => a.role === "hr");
+
+      expect(workerAgents.length).toBeGreaterThan(0);
+      expect(hrAgent).toBeDefined();
+      expect(hrAgent?.name).toBe("HR Agent");
+      expect(hrAgent?.status).toBe("done");
+      expect([...deps.tasks.values()]).toHaveLength(1);
+    });
+  });
 });
