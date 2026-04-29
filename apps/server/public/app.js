@@ -168,10 +168,6 @@ function renderHome() {
   $("app-view").innerHTML = `
     <section class="home-page">
       <div class="conversation-area">
-        <div class="home-title">
-          <p>Owner Agent</p>
-          <h1>告诉我你想完成什么，我来补齐 Mission。</h1>
-        </div>
         <div id="chat-stream" class="chat-stream">
           ${renderChatContent(data)}
         </div>
@@ -192,7 +188,6 @@ function renderChatContent(data) {
   if (!data.mission) {
     return `
       <div class="bubble owner">
-        <strong>Owner Agent</strong>
         <p>你不用先写成功指标和约束。只要告诉我目标，我会分析缺口、追问必要细节，并生成 Mission 团队。</p>
         <div class="choice-row">
           ${uiConfig().starterPrompts.map((prompt) => `<button type="button" data-fill="${esc(prompt.value)}">${esc(prompt.label)}</button>`).join("")}
@@ -205,7 +200,6 @@ function renderChatContent(data) {
 
   parts.push(`
     <div class="bubble user">
-      <strong>你</strong>
       <p>${esc(data.mission.goal)}</p>
     </div>
   `);
@@ -229,7 +223,6 @@ function renderChatContent(data) {
   if (!data.mission.brief && ownerThinking) {
     parts.push(`
       <div class="bubble owner thinking">
-        <strong>Owner Agent</strong>
         <p>${conversationMessages.length === 0 ? "正在分析你的目标..." : "正在思考你的回复..."}</p>
       </div>
     `);
@@ -281,10 +274,11 @@ function renderBriefMessage(data) {
 
 function renderConversationMessage(message) {
   const isUser = message.type === "user_message";
+  const content = isUser ? message.content : ownerBodyText(message.content);
+  if (!content.trim()) return "";
   return `
     <div class="bubble ${isUser ? "user" : "owner"}">
-      <strong>${isUser ? "你" : "Owner Agent"}</strong>
-      <p>${esc(message.content)}</p>
+      <p>${esc(content)}</p>
     </div>
   `;
 }
@@ -312,7 +306,7 @@ function renderConfirmPanel(data) {
 
   if (latestOwnerMessage && latestOwnerMessage.options && latestOwnerMessage.options.length > 0) {
     return `
-      <strong>选择回复或输入自定义内容</strong>
+      <strong>${esc(ownerQuestionText(latestOwnerMessage.content) || "选择回复或输入自定义内容")}</strong>
       <div class="confirm-grid">
         ${latestOwnerMessage.options.map((option) => `
           <button type="button" class="choice-option" data-fill-choice="${esc(option.value)}">${esc(option.label)}</button>
@@ -321,14 +315,38 @@ function renderConfirmPanel(data) {
     `;
   }
 
+  const latestQuestion = latestOwnerMessage ? ownerQuestionText(latestOwnerMessage.content) : "";
   return `
-    <strong>输入你的回复</strong>
-    <div class="confirm-options">
-      <span>你可以继续与 Owner 对话</span>
-      <span>Owner 会根据需要追问细节</span>
-      <span>完成后生成 Mission 团队</span>
-    </div>
+    <strong>${esc(latestQuestion || "输入你的回复")}</strong>
   `;
+}
+
+function ownerBodyText(content) {
+  const text = String(content || "").trim();
+  const questionMarkIndex = Math.max(text.lastIndexOf("？"), text.lastIndexOf("?"));
+  if (questionMarkIndex === -1) return text;
+  const beforeQuestion = text.slice(0, questionMarkIndex + 1);
+  const sentenceStart = Math.max(
+    beforeQuestion.lastIndexOf("。", beforeQuestion.length - 2),
+    beforeQuestion.lastIndexOf("！", beforeQuestion.length - 2),
+    beforeQuestion.lastIndexOf("!", beforeQuestion.length - 2),
+    beforeQuestion.lastIndexOf(".", beforeQuestion.length - 2),
+  );
+  return text.slice(0, sentenceStart + 1).trim();
+}
+
+function ownerQuestionText(content) {
+  const text = String(content || "").trim();
+  const questionMarkIndex = Math.max(text.lastIndexOf("？"), text.lastIndexOf("?"));
+  if (questionMarkIndex === -1) return "";
+  const beforeQuestion = text.slice(0, questionMarkIndex + 1);
+  const sentenceStart = Math.max(
+    beforeQuestion.lastIndexOf("。", beforeQuestion.length - 2),
+    beforeQuestion.lastIndexOf("！", beforeQuestion.length - 2),
+    beforeQuestion.lastIndexOf("!", beforeQuestion.length - 2),
+    beforeQuestion.lastIndexOf(".", beforeQuestion.length - 2),
+  );
+  return beforeQuestion.slice(sentenceStart + 1).replace(/\s+/g, " ").trim();
 }
 
 function bindChoiceButtons() {
