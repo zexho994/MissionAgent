@@ -242,6 +242,7 @@ describe("NegotiationManager", () => {
       expect(hrAgent?.name).toBe("HR Agent");
       expect(hrAgent?.status).toBe("done");
       expect([...deps.tasks.values()]).toHaveLength(1);
+      expect(deps.missions.get(mission.id)?.scheduleRules.length).toBeGreaterThan(0);
     });
 
     it("should propagate toolPermissions from RoleSpec to worker agents", async () => {

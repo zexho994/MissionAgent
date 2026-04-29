@@ -139,6 +139,7 @@ export function createHRAgent(options: HRAgentOptions) {
     const estimatedDuration = estimateDuration(totalBudget.maxRuntimeMinutes);
     const riskAssessment = assessRisks(enforcedSpecs);
     const collaborationPlan = designCollaborationPlan(enforcedSpecs);
+    const schedulePlan = designSchedulePlan(enforcedSpecs);
 
     return {
       missionId,
@@ -148,7 +149,7 @@ export function createHRAgent(options: HRAgentOptions) {
       estimatedDuration,
       riskAssessment,
       collaborationPlan,
-      schedulePlan: [],
+      schedulePlan,
       createdAt: new Date(),
     };
   }
@@ -506,6 +507,44 @@ function designCollaborationPlan(roleSpecs: RoleSpec[]) {
     communicationChannels,
     decisionMaking,
   };
+}
+
+function designSchedulePlan(roleSpecs: RoleSpec[]): SchedulePlanItem[] {
+  const primaryRole = roleSpecs[0];
+  if (!primaryRole) return [];
+
+  const monitoringRole = roleSpecs.find((spec) =>
+    /analyst|data|metric|monitor|research/i.test(roleSearchText(spec)),
+  ) ?? primaryRole;
+  const executionRole = roleSpecs.find((spec) =>
+    /content|writer|creator|operator|execution|growth/i.test(roleSearchText(spec)),
+  ) ?? primaryRole;
+
+  const plan: SchedulePlanItem[] = [
+    {
+      name: "Daily progress check",
+      cronExpression: "0 9 * * *",
+      assigneeRole: monitoringRole.id,
+      taskDescription: `Review mission progress and report blockers for ${monitoringRole.name}`,
+      justification: "Daily review keeps long-running missions from drifting without feedback.",
+    },
+  ];
+
+  if (roleSpecs.length > 1 || executionRole.id !== monitoringRole.id) {
+    plan.push({
+      name: "Weekly execution review",
+      cronExpression: "0 10 * * 1",
+      assigneeRole: executionRole.id,
+      taskDescription: `Summarize weekly execution results and propose next actions for ${executionRole.name}`,
+      justification: "Weekly synthesis turns recurring work into concrete next-step decisions.",
+    });
+  }
+
+  return plan;
+}
+
+function roleSearchText(spec: RoleSpec): string {
+  return `${spec.id} ${spec.name} ${spec.purpose} ${spec.responsibilities.join(" ")}`;
 }
 
 export function extractJson(content: string, type: "object" | "array"): string | undefined {

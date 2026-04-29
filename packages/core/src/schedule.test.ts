@@ -156,6 +156,48 @@ describe("createScheduleRule", () => {
     expect(rule.trigger.type).toBe("condition");
   });
 
+  it("rejects invalid cron expressions", () => {
+    expect(() =>
+      createScheduleRule({
+        name: "Daily check",
+        missionId: "mission_test",
+        enabled: true,
+        trigger: { ...validCronTrigger, expression: "0 9 * * 1-5" },
+        taskTemplate: validTaskTemplate,
+        maxConcurrent: 1,
+        metadata: {},
+      }),
+    ).toThrow("Unsupported cron expression");
+  });
+
+  it("rejects out-of-range cron expressions", () => {
+    expect(() =>
+      createScheduleRule({
+        name: "Daily check",
+        missionId: "mission_test",
+        enabled: true,
+        trigger: { ...validCronTrigger, expression: "99 9 * * *" },
+        taskTemplate: validTaskTemplate,
+        maxConcurrent: 1,
+        metadata: {},
+      }),
+    ).toThrow("Unsupported cron expression");
+  });
+
+  it("rejects empty cron timezone", () => {
+    expect(() =>
+      createScheduleRule({
+        name: "Daily check",
+        missionId: "mission_test",
+        enabled: true,
+        trigger: { ...validCronTrigger, timezone: "" },
+        taskTemplate: validTaskTemplate,
+        maxConcurrent: 1,
+        metadata: {},
+      }),
+    ).toThrow("Cron trigger timezone is required");
+  });
+
   it("rejects condition trigger with empty sourceAgentRole", () => {
     expect(() =>
       createScheduleRule({

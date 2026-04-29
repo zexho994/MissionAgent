@@ -5,6 +5,7 @@ import {
   createReview,
   createTask,
   transitionTask,
+  validateScheduleRule,
   type Artifact,
   type Mission,
   type MissionBrief,
@@ -840,11 +841,23 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
     }
+    const nextRules = mission.scheduleRules.map((rule) => {
+      if (rule.id !== ruleId) return rule;
+      const candidate: ScheduleRule = {
+        ...rule,
+        ...patch,
+        id: rule.id,
+        missionId: rule.missionId,
+      };
+      validateScheduleRule(candidate);
+      return candidate;
+    });
+    if (!nextRules.some((rule) => rule.id === ruleId)) {
+      throw new Error(`Schedule rule not found: ${ruleId}`);
+    }
     const updated: Mission = {
       ...mission,
-      scheduleRules: mission.scheduleRules.map((rule) =>
-        rule.id === ruleId ? { ...rule, ...patch } : rule,
-      ),
+      scheduleRules: nextRules,
     };
     this.missions.set(updated.id, updated);
     this.schedulers.get(missionId)?.updateRule(ruleId, patch);
@@ -1206,12 +1219,10 @@ export class InMemoryMissionService {
         return agent ? { id: agent.id, role: agent.role } : undefined;
       },
       countIncompleteTasksForRule: (ruleId) => {
-        const rule = this.missions.get(missionId)?.scheduleRules.find((candidate) => candidate.id === ruleId);
-        if (!rule) return 0;
         return [...this.tasks.values()].filter(
           (task) =>
             task.missionId === missionId &&
-            task.title === rule.taskTemplate.title &&
+            task.scheduleRuleId === ruleId &&
             task.status !== "completed" &&
             task.status !== "failed" &&
             task.status !== "cancelled",
@@ -1226,6 +1237,7 @@ export class InMemoryMissionService {
           dependencies: [],
           contract: template.contract,
           approvalRequired: false,
+          scheduleRuleId: _ruleId,
         });
         const assigned = { ...task, assigneeAgentId: agentId };
         this.tasks.set(assigned.id, assigned);
@@ -1293,6 +1305,7 @@ export class InMemoryMissionService {
       dependencies: [],
       contract: rule.taskTemplate.contract,
       approvalRequired: false,
+      scheduleRuleId: rule.id,
     });
     const assigned = { ...task, assigneeAgentId: agent.id };
     this.tasks.set(assigned.id, assigned);

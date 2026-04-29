@@ -37,4 +37,22 @@ describe("createTask", () => {
       }),
     ).toThrow("Task contract requires at least one success criterion");
   });
+
+  it("preserves scheduleRuleId for scheduled tasks", () => {
+    const task = createTask({
+      missionId: "mission_1",
+      title: "Run daily check",
+      dependencies: [],
+      contract: {
+        objective: "Run the scheduled check",
+        input: {},
+        outputSchema: {},
+        successCriteria: ["check completed"],
+      },
+      approvalRequired: false,
+      scheduleRuleId: "schedule_1",
+    });
+
+    expect(task.scheduleRuleId).toBe("schedule_1");
+  });
 });

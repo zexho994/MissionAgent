@@ -203,6 +203,8 @@ describe("HRAgent", () => {
       expect(proposal.totalBudget).toBeDefined();
       expect(proposal.estimatedDuration).toBeDefined();
       expect(proposal.riskAssessment).toBeDefined();
+      expect(proposal.schedulePlan).toHaveLength(1);
+      expect(proposal.schedulePlan[0]?.assigneeRole).toBe("role-1");
     });
 
     it("should include collaboration suggestions in proposal", async () => {
@@ -238,6 +240,7 @@ describe("HRAgent", () => {
       expect(proposal.collaborationPlan).toBeDefined();
       expect(proposal.collaborationPlan.workflow).toBeDefined();
       expect(proposal.roles.length).toBeGreaterThanOrEqual(2);
+      expect(proposal.schedulePlan.length).toBeGreaterThanOrEqual(1);
     });
   });
 

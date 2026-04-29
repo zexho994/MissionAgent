@@ -91,6 +91,7 @@ export interface Task {
   artifactId?: string;
   reviewId?: string;
   failureReason?: string;
+  scheduleRuleId?: string;
 }
 
 export type ArtifactType = "research_report" | "content_draft" | "metric_snapshot" | "execution_log";

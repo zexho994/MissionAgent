@@ -276,7 +276,11 @@ describe("schedule API endpoints", () => {
     return (createResp.body as { mission: { id: string } }).mission.id;
   }
 
-  async function addScheduleRule(missions: InMemoryMissionService, missionId: string): Promise<string> {
+  async function addScheduleRule(
+    missions: InMemoryMissionService,
+    missionId: string,
+    overrides: { assigneeRole?: string; title?: string } = {},
+  ): Promise<string> {
     const addResp = await handleApiRequest(
       {
         method: "POST",
@@ -285,14 +289,14 @@ describe("schedule API endpoints", () => {
           name: "Daily check",
           trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
           taskTemplate: {
-            title: "Check data",
+            title: overrides.title ?? "Check data",
             contract: {
               objective: "Check data",
               input: {},
               outputSchema: {},
               successCriteria: ["Report generated"],
             },
-            assigneeRole: "data-analyst",
+            assigneeRole: overrides.assigneeRole ?? "data-analyst",
             priority: "normal",
           },
           maxConcurrent: 1,
@@ -358,7 +362,7 @@ describe("schedule API endpoints", () => {
   it("DELETE /api/missions/:id/schedule/:ruleId removes a rule", async () => {
     const missions = new InMemoryMissionService();
     const missionId = await createMissionViaApi(missions);
-    const ruleId = await addScheduleRule(missions, missionId);
+    const ruleId = await addScheduleRule(missions, missionId, { assigneeRole: "owner" });
 
     const delResp = await handleApiRequest(
       { method: "DELETE", path: `/api/missions/${missionId}/schedule/${ruleId}` },
@@ -392,6 +396,43 @@ describe("schedule API endpoints", () => {
     expect((patchResp.body as { rule: { enabled: boolean } }).rule.enabled).toBe(false);
   });
 
+  it("PATCH /api/missions/:id/schedule/:ruleId rejects invalid updates without corrupting state", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId);
+
+    const patchResp = await handleApiRequest(
+      {
+        method: "PATCH",
+        path: `/api/missions/${missionId}/schedule/${ruleId}`,
+        body: { maxConcurrent: 0 },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(patchResp.status).toBe(400);
+    const rule = missions.getScheduleRules(missionId).find((candidate) => candidate.id === ruleId);
+    expect(rule?.maxConcurrent).toBe(1);
+  });
+
+  it("PATCH /api/missions/:id/schedule/:ruleId rejects unsupported fields", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId);
+
+    const patchResp = await handleApiRequest(
+      {
+        method: "PATCH",
+        path: `/api/missions/${missionId}/schedule/${ruleId}`,
+        body: { id: "schedule_bad" },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(patchResp.status).toBe(400);
+    expect(missions.getScheduleRules(missionId)[0]?.id).toBe(ruleId);
+  });
+
   it("POST /api/missions/:id/schedule/:ruleId/trigger manually triggers", async () => {
     const missions = new InMemoryMissionService();
     const missionId = await createMissionViaApi(missions);
@@ -404,5 +445,19 @@ describe("schedule API endpoints", () => {
 
     expect(triggerResp.status).toBe(200);
     expect((triggerResp.body as { triggered: boolean }).triggered).toBe(true);
+  });
+
+  it("manual trigger links created task to schedule rule", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId, { assigneeRole: "owner" });
+
+    await handleApiRequest(
+      { method: "POST", path: `/api/missions/${missionId}/schedule/${ruleId}/trigger`, body: {} },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    const scheduledTask = missions.snapshot().tasks.find((task) => task.scheduleRuleId === ruleId);
+    expect(scheduledTask?.title).toBe("Check data");
   });
 });

@@ -295,7 +295,12 @@ export async function handleApiRequest(
 
       if (request.method === "PATCH" && ruleId && !action) {
         const body = expectObject(request.body);
-        deps.missions.updateScheduleRule(missionId, ruleId, body as Partial<ScheduleRule>);
+        const existing = deps.missions.getScheduleRules(missionId).find((rule) => rule.id === ruleId);
+        if (!existing) {
+          throw new Error(`Schedule rule not found: ${ruleId}`);
+        }
+        const patch = parseScheduleRulePatch(body);
+        deps.missions.updateScheduleRule(missionId, ruleId, patch);
         const updated = deps.missions.getScheduleRules(missionId).find((rule) => rule.id === ruleId);
         return json(200, { rule: updated, snapshot: deps.missions.snapshot() });
       }
@@ -356,6 +361,71 @@ function parsePriority(value: unknown): "low" | "normal" | "high" {
     return value;
   }
   return "normal";
+}
+
+function parseScheduleRulePatch(body: Record<string, unknown>): Partial<ScheduleRule> {
+  const allowed = new Set(["name", "enabled", "trigger", "taskTemplate", "maxConcurrent", "metadata"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unsupported schedule patch field: ${key}`);
+    }
+  }
+
+  const patch: Partial<ScheduleRule> = {};
+  if (body.name !== undefined) {
+    patch.name = expectString(body.name, "name");
+  }
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    patch.enabled = body.enabled;
+  }
+  if (body.trigger !== undefined) {
+    const trigger = expectObject(body.trigger);
+    const triggerType = expectString(trigger.type, "trigger.type");
+    if (triggerType !== "cron" && triggerType !== "condition") {
+      throw new Error("trigger must be cron or condition");
+    }
+    patch.trigger = triggerType === "cron"
+      ? {
+          type: "cron",
+          expression: expectString(trigger.expression, "trigger.expression"),
+          timezone: expectString(trigger.timezone, "trigger.timezone"),
+        }
+      : {
+          type: "condition",
+          description: expectString(trigger.description, "trigger.description"),
+          sourceAgentRole: expectString(trigger.sourceAgentRole, "trigger.sourceAgentRole"),
+          evaluatePrompt: expectString(trigger.evaluatePrompt, "trigger.evaluatePrompt"),
+        };
+  }
+  if (body.taskTemplate !== undefined) {
+    const template = expectObject(body.taskTemplate);
+    const contract = expectObject(template.contract);
+    patch.taskTemplate = {
+      title: expectString(template.title, "taskTemplate.title"),
+      contract: {
+        objective: expectString(contract.objective, "taskTemplate.contract.objective"),
+        input: expectRecord(contract.input ?? {}, "taskTemplate.contract.input"),
+        outputSchema: expectRecord(contract.outputSchema ?? {}, "taskTemplate.contract.outputSchema"),
+        successCriteria: expectStringArray(contract.successCriteria ?? [], "taskTemplate.contract.successCriteria"),
+      },
+      assigneeRole: expectString(template.assigneeRole, "taskTemplate.assigneeRole"),
+      priority: parsePriority(template.priority),
+    };
+  }
+  if (body.maxConcurrent !== undefined) {
+    if (typeof body.maxConcurrent !== "number") {
+      throw new Error("maxConcurrent must be a number");
+    }
+    patch.maxConcurrent = body.maxConcurrent;
+  }
+  if (body.metadata !== undefined) {
+    patch.metadata = expectRecord(body.metadata, "metadata");
+  }
+
+  return patch;
 }
 
 function buildOpenClawMessage(input: {
