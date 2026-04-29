@@ -165,15 +165,14 @@ function missionMenuItem(mission) {
 
 function renderHome() {
   const data = scoped();
+  const confirmPanel = renderConfirmPanel(data);
   $("app-view").innerHTML = `
     <section class="home-page">
       <div class="conversation-area">
         <div id="chat-stream" class="chat-stream">
           ${renderChatContent(data)}
         </div>
-        <div class="confirm-panel">
-          ${renderConfirmPanel(data)}
-        </div>
+        ${confirmPanel ? `<div class="confirm-panel">${confirmPanel}</div>` : ""}
         <form id="mission-form" class="composer">
           <textarea id="goal" rows="4" placeholder="${esc(uiConfig().emptyPrompt)}">${esc(defaultGoal(data))}</textarea>
           <button type="submit">${data.mission ? "补充给 Owner" : "发送给 Owner"}</button>
@@ -285,15 +284,7 @@ function renderConversationMessage(message) {
 
 function renderConfirmPanel(data) {
   if (!data.mission) {
-    return `
-      <strong>Owner 会自动补齐这些内容</strong>
-      <div class="confirm-options">
-        <span>目标定义</span>
-        <span>成功标准</span>
-        <span>执行边界</span>
-        <span>需要的 Agent</span>
-      </div>
-    `;
+    return "";
   }
 
   // Check if the latest owner message has options
@@ -315,10 +306,7 @@ function renderConfirmPanel(data) {
     `;
   }
 
-  const latestQuestion = latestOwnerMessage ? ownerQuestionText(latestOwnerMessage.content) : "";
-  return `
-    <strong>${esc(latestQuestion || "输入你的回复")}</strong>
-  `;
+  return "";
 }
 
 function ownerBodyText(content) {
