@@ -818,7 +818,11 @@ export class InMemoryMissionService {
       scheduleRules: [...mission.scheduleRules, rule],
     };
     this.missions.set(updated.id, updated);
-    this.getOrCreateScheduler(missionId).addRule(rule);
+    if (updated.status === "active") {
+      this.getOrCreateScheduler(missionId).start(updated.scheduleRules);
+    } else {
+      this.getOrCreateScheduler(missionId).addRule(rule);
+    }
     this.persist();
   }
 

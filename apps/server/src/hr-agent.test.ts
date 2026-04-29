@@ -242,6 +242,83 @@ describe("HRAgent", () => {
       expect(proposal.roles.length).toBeGreaterThanOrEqual(2);
       expect(proposal.schedulePlan.length).toBeGreaterThanOrEqual(1);
     });
+
+    it("should use MissionBrief context to generate mission-specific schedule plan", async () => {
+      const calls: string[] = [];
+      mockLlm.call = async (messages) => {
+        calls.push(messages.map((message) => message.content).join("\n"));
+        return {
+          content: JSON.stringify([
+            {
+              name: "Daily Xiaohongshu data check",
+              cronExpression: "0 9 * * *",
+              assigneeRole: "data_analyst",
+              taskDescription: "Check yesterday's Xiaohongshu follower and engagement data",
+              justification: "Daily data checks catch performance changes quickly",
+            },
+            {
+              name: "Biweekly Xiaohongshu strategy review",
+              cronExpression: "0 10 */14 * *",
+              assigneeRole: "content_strategist",
+              taskDescription: "Review two weeks of Xiaohongshu results and adjust the content plan",
+              justification: "Biweekly strategy reviews align cadence with content performance signal",
+            },
+            {
+              name: "Engagement drop alert",
+              assigneeRole: "data_analyst",
+              taskDescription: "Investigate engagement drop and propose corrective actions",
+              justification: "Large engagement drops require immediate analysis",
+              conditionDescription: "Engagement rate drops more than 20%",
+              conditionSourceRole: "data_analyst",
+              conditionEvaluatePrompt: "Return true if engagement rate dropped more than 20%.",
+            },
+          ]),
+          model: "test-model",
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+          finishReason: "stop",
+        };
+      };
+      const hrAgent = createHRAgent({ llm: mockLlm });
+      const roleSpecs: RoleSpec[] = [
+        {
+          id: "data_analyst",
+          name: "Data Analyst",
+          purpose: "Track Xiaohongshu metrics",
+          responsibilities: ["Analyze engagement", "Report follower growth"],
+          allowedTools: ["analytics"],
+          inputContract: {},
+          outputContract: {},
+          successCriteria: ["Metrics reported"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+        },
+        {
+          id: "content_strategist",
+          name: "Content Strategist",
+          purpose: "Plan Xiaohongshu content",
+          responsibilities: ["Plan posts", "Adjust strategy"],
+          allowedTools: ["editor"],
+          inputContract: {},
+          outputContract: {},
+          successCriteria: ["Plan updated"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+        },
+      ];
+
+      const proposal = await hrAgent.proposeTeam("mission-123", roleSpecs, {
+        ...missionBrief,
+        goal: "Grow Xiaohongshu account to 1000 followers",
+        scope: "Xiaohongshu content operations",
+        successMetrics: ["followers >= 1000", "engagement rate improves"],
+      });
+
+      expect(calls.at(-1)).toContain("Grow Xiaohongshu account");
+      expect(proposal.schedulePlan.map((item) => item.name)).toEqual([
+        "Daily Xiaohongshu data check",
+        "Biweekly Xiaohongshu strategy review",
+        "Engagement drop alert",
+      ]);
+      expect(proposal.schedulePlan[2]?.conditionEvaluatePrompt).toContain("20%");
+    });
   });
 
   describe("negotiateRoleSpec", () => {

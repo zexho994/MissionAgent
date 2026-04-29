@@ -123,6 +123,7 @@ export function createHRAgent(options: HRAgentOptions) {
   async function proposeTeam(
     missionId: string,
     roleSpecs: RoleSpec[],
+    brief?: MissionBrief,
   ): Promise<TeamProposal> {
     const enforcedSpecs = roleSpecs.length > maxTeamSize
       ? roleSpecs.slice(0, maxTeamSize)
@@ -139,7 +140,9 @@ export function createHRAgent(options: HRAgentOptions) {
     const estimatedDuration = estimateDuration(totalBudget.maxRuntimeMinutes);
     const riskAssessment = assessRisks(enforcedSpecs);
     const collaborationPlan = designCollaborationPlan(enforcedSpecs);
-    const schedulePlan = designSchedulePlan(enforcedSpecs);
+    const schedulePlan = brief
+      ? await proposeSchedulePlan(brief, enforcedSpecs)
+      : designSchedulePlan(enforcedSpecs);
 
     return {
       missionId,
@@ -152,6 +155,25 @@ export function createHRAgent(options: HRAgentOptions) {
       schedulePlan,
       createdAt: new Date(),
     };
+  }
+
+  async function proposeSchedulePlan(
+    brief: MissionBrief,
+    roleSpecs: RoleSpec[],
+  ): Promise<SchedulePlanItem[]> {
+    const fallback = designSchedulePlan(roleSpecs, brief);
+
+    try {
+      const response = await llm.call([
+        { role: "system", content: buildHRAgentSystemPrompt() },
+        { role: "user", content: buildSchedulePlanPrompt(brief, roleSpecs) },
+      ]);
+      const parsed = parseSchedulePlan(response.content, roleSpecs);
+      return parsed.length > 0 ? parsed : fallback;
+    } catch (error) {
+      console.error("[HR Agent] schedulePlan generation failed, using fallback:", error instanceof Error ? error.message : String(error));
+      return fallback;
+    }
   }
 
   async function negotiateRoleSpec(
@@ -509,10 +531,13 @@ function designCollaborationPlan(roleSpecs: RoleSpec[]) {
   };
 }
 
-function designSchedulePlan(roleSpecs: RoleSpec[]): SchedulePlanItem[] {
+function designSchedulePlan(roleSpecs: RoleSpec[], brief?: MissionBrief): SchedulePlanItem[] {
   const primaryRole = roleSpecs[0];
   if (!primaryRole) return [];
 
+  const missionText = brief
+    ? `${brief.goal} ${brief.scope} ${brief.successMetrics.join(" ")} ${brief.constraints.join(" ")}`
+    : "";
   const monitoringRole = roleSpecs.find((spec) =>
     /analyst|data|metric|monitor|research/i.test(roleSearchText(spec)),
   ) ?? primaryRole;
@@ -520,17 +545,45 @@ function designSchedulePlan(roleSpecs: RoleSpec[]): SchedulePlanItem[] {
     /content|writer|creator|operator|execution|growth/i.test(roleSearchText(spec)),
   ) ?? primaryRole;
 
-  const plan: SchedulePlanItem[] = [
-    {
-      name: "Daily progress check",
-      cronExpression: "0 9 * * *",
-      assigneeRole: monitoringRole.id,
-      taskDescription: `Review mission progress and report blockers for ${monitoringRole.name}`,
-      justification: "Daily review keeps long-running missions from drifting without feedback.",
-    },
-  ];
+  const isXiaohongshu = /xiaohongshu|小红书|rednote/i.test(missionText);
 
-  if (roleSpecs.length > 1 || executionRole.id !== monitoringRole.id) {
+  const plan: SchedulePlanItem[] = isXiaohongshu
+    ? [
+        {
+          name: "Daily Xiaohongshu data check",
+          cronExpression: "0 9 * * *",
+          assigneeRole: monitoringRole.id,
+          taskDescription: "Check yesterday's Xiaohongshu follower, engagement, and content performance data",
+          justification: "Daily platform metrics are required to spot content performance changes early.",
+        },
+        {
+          name: "Biweekly Xiaohongshu strategy review",
+          cronExpression: "0 10 */14 * *",
+          assigneeRole: executionRole.id,
+          taskDescription: "Review two weeks of Xiaohongshu results and revise the content growth plan",
+          justification: "A biweekly cadence is long enough to see content pattern signal without delaying strategy changes.",
+        },
+        {
+          name: "Engagement drop alert",
+          assigneeRole: monitoringRole.id,
+          taskDescription: "Investigate Xiaohongshu engagement drop and propose corrective actions",
+          justification: "Sudden engagement drops need immediate analysis outside the normal reporting cadence.",
+          conditionDescription: "Engagement rate drops more than 20% compared with the previous period",
+          conditionSourceRole: monitoringRole.id,
+          conditionEvaluatePrompt: "Return true only if the artifact shows Xiaohongshu engagement rate dropped more than 20% compared with the previous period.",
+        },
+      ]
+    : [
+        {
+          name: "Daily progress check",
+          cronExpression: "0 9 * * *",
+          assigneeRole: monitoringRole.id,
+          taskDescription: `Review mission progress and report blockers for ${monitoringRole.name}`,
+          justification: "Daily review keeps long-running missions from drifting without feedback.",
+        },
+      ];
+
+  if (!isXiaohongshu && (roleSpecs.length > 1 || executionRole.id !== monitoringRole.id)) {
     plan.push({
       name: "Weekly execution review",
       cronExpression: "0 10 * * 1",
@@ -545,6 +598,81 @@ function designSchedulePlan(roleSpecs: RoleSpec[]): SchedulePlanItem[] {
 
 function roleSearchText(spec: RoleSpec): string {
   return `${spec.id} ${spec.name} ${spec.purpose} ${spec.responsibilities.join(" ")}`;
+}
+
+function buildSchedulePlanPrompt(brief: MissionBrief, roleSpecs: RoleSpec[]): string {
+  return [
+    "Create a mission-specific schedulePlan for this team.",
+    "",
+    `Goal: ${brief.goal}`,
+    `Scope: ${brief.scope}`,
+    `Success metrics: ${brief.successMetrics.join(", ")}`,
+    `Constraints: ${brief.constraints.join(", ")}`,
+    `Timeline: ${brief.timeline ?? "Not specified"}`,
+    "",
+    "Roles:",
+    JSON.stringify(roleSpecs.map((spec) => ({
+      id: spec.id,
+      name: spec.name,
+      purpose: spec.purpose,
+      responsibilities: spec.responsibilities,
+    })), null, 2),
+    "",
+    "Return a JSON array of schedule items. Use role ids exactly as assigneeRole/source role.",
+    "Each item must contain name, assigneeRole, taskDescription, justification.",
+    "For periodic tasks include cronExpression using five-field cron only.",
+    "For condition triggers omit cronExpression and include conditionDescription, conditionSourceRole, conditionEvaluatePrompt.",
+  ].join("\n");
+}
+
+function parseSchedulePlan(content: string, roleSpecs: RoleSpec[]): SchedulePlanItem[] {
+  const json = extractJson(content, "array");
+  if (!json) return [];
+
+  const parsed = JSON.parse(json) as unknown;
+  if (!Array.isArray(parsed)) return [];
+
+  const roleIds = new Set(roleSpecs.map((spec) => spec.id));
+  return parsed.flatMap((item): SchedulePlanItem[] => {
+    if (!item || typeof item !== "object") return [];
+    const candidate = item as Record<string, unknown>;
+    const name = nonEmptyString(candidate.name);
+    const assigneeRole = nonEmptyString(candidate.assigneeRole);
+    const taskDescription = nonEmptyString(candidate.taskDescription);
+    const justification = nonEmptyString(candidate.justification);
+    if (!name || !assigneeRole || !taskDescription || !justification || !roleIds.has(assigneeRole)) {
+      return [];
+    }
+
+    const cronExpression = optionalString(candidate.cronExpression);
+    if (cronExpression) {
+      return [{ name, cronExpression, assigneeRole, taskDescription, justification }];
+    }
+
+    const conditionDescription = nonEmptyString(candidate.conditionDescription);
+    const conditionSourceRole = nonEmptyString(candidate.conditionSourceRole);
+    const conditionEvaluatePrompt = nonEmptyString(candidate.conditionEvaluatePrompt);
+    if (!conditionDescription || !conditionSourceRole || !conditionEvaluatePrompt || !roleIds.has(conditionSourceRole)) {
+      return [];
+    }
+    return [{
+      name,
+      assigneeRole,
+      taskDescription,
+      justification,
+      conditionDescription,
+      conditionSourceRole,
+      conditionEvaluatePrompt,
+    }];
+  });
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export function extractJson(content: string, type: "object" | "array"): string | undefined {

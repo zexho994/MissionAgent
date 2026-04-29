@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
@@ -19,6 +19,10 @@ function fakeOpenClaw(): Pick<OpenClawCliAdapter, "health" | "runAgentTask"> {
     },
   };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("handleApiRequest", () => {
   it("returns health with OpenClaw status and current snapshot counts", async () => {
@@ -459,5 +463,21 @@ describe("schedule API endpoints", () => {
 
     const scheduledTask = missions.snapshot().tasks.find((task) => task.scheduleRuleId === ruleId);
     expect(scheduledTask?.title).toBe("Check data");
+  });
+
+  it("starts cron scheduler when first rule is added to an active mission", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-29T08:59:00Z"));
+
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const before = missions.snapshot().tasks.length;
+
+    await addScheduleRule(missions, missionId, { assigneeRole: "owner", title: "Cron-created task" });
+    vi.advanceTimersByTime(60_000);
+
+    const scheduledTask = missions.snapshot().tasks.find((task) => task.title === "Cron-created task");
+    expect(missions.snapshot().tasks.length).toBe(before + 1);
+    expect(scheduledTask?.scheduleRuleId).toMatch(/^schedule_/);
   });
 });

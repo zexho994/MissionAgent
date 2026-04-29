@@ -70,7 +70,7 @@ export class NegotiationManager {
     const hrAgent = createHRAgent({ llm: this.llm });
     const analysis = await hrAgent.receiveMissionBrief(mission.brief);
     const roleSpecs = await hrAgent.generateRoleSpecs(mission.id, analysis);
-    const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs);
+    const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
 
     const owner = this.agentByRole(mission.id, "owner");
     const ownerContext: OwnerContext = {
@@ -142,7 +142,7 @@ export class NegotiationManager {
       proposal.roles.map((spec) => hrAgent.negotiateRoleSpec(mission.id, spec, input.feedback)),
     );
     const flatSpecs = revisedSpecs.flat();
-    const revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs);
+    const revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
 
     const updatedContext: OwnerContext = {
       ...ownerContext,
