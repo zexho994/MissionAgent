@@ -10,34 +10,38 @@ import type { WarRoomAgent, AgentRelation, AgentMessage } from "./mission-servic
 import type { AgentSystemConfig } from "./system-config.js";
 
 function makeTestDeps() {
+  let callCount = 0;
   const llm: LlmService = {
-    call: async () => ({
-      content: JSON.stringify({
-        roles: [{
-          id: "role-analyst",
+    call: async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return {
+          content: JSON.stringify({
+            requiredCapabilities: ["data_analysis"],
+            estimatedTeamSize: 2,
+            priorityRoles: ["data_analyst", "content_strategist"],
+            complexity: "medium",
+            riskFactors: [],
+          }),
+          model: "test",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      }
+      return {
+        content: JSON.stringify([{
           name: "DataAnalyst",
-          purpose: "Analyze metrics",
-          responsibilities: ["Track KPIs"],
-          allowedTools: [],
-          inputContract: {},
-          outputContract: {},
-          successCriteria: ["KPIs tracked"],
+          purpose: "Analyze mission metrics",
+          responsibilities: ["Track KPIs", "Generate reports"],
+          allowedTools: ["web_search", "data_analyzer"],
+          successCriteria: ["KPIs tracked daily"],
           budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        }],
-        proposedBy: "hr-test",
-        totalBudget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        estimatedDuration: "1h",
-        riskAssessment: [],
-        collaborationPlan: {
-          workflow: "Sequential",
-          communicationChannels: ["direct"],
-          decisionMaking: "Lead decides",
-        },
-      }),
-      model: "test",
-      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-      finishReason: "stop",
-    }),
+        }]),
+        model: "test",
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        finishReason: "stop",
+      };
+    },
     stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
   };
 
@@ -77,9 +81,12 @@ function addOwner(agents: Map<string, WarRoomAgent>, missionId: string) {
     id: `owner_${missionId}`,
     missionId,
     role: "owner",
+    name: "Owner",
+    responsibility: "Mission oversight",
     status: "idle",
+    currentTaskId: undefined,
     lastAction: "",
-    capabilities: [],
+    avatarSeed: "owner",
     sortOrder: 0,
   };
   agents.set(owner.id, owner);
