@@ -270,10 +270,10 @@ describe("NegotiationManager", () => {
         (m) => m.missionId === mission.id && m.fromAgentId === hrId,
       );
       expect(hrMessages.length).toBeGreaterThanOrEqual(2);
-      const allHrMessages = [...deps.agentMessages.values()].filter(
-        (m) => m.missionId === mission.id && m.fromAgentId?.startsWith("agent_hr"),
+      const syntheticIdMessages = [...deps.agentMessages.values()].filter(
+        (m) => m.missionId === mission.id && m.fromAgentId === `hr_${mission.id}`,
       );
-      expect(allHrMessages).toHaveLength(0);
+      expect(syntheticIdMessages).toHaveLength(0);
     });
   });
 });
