@@ -6,6 +6,8 @@ import {
   generateSystemPrompt,
 } from "./agent-template.js";
 
+const uuidSuffix = "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+
 describe("Agent Template Types", () => {
   describe("createAgentTemplate", () => {
     it("should create a valid AgentTemplate", () => {
@@ -16,7 +18,7 @@ describe("Agent Template Types", () => {
         defaultTools: ["analytics", "charts"],
       });
 
-      expect(template.id).toMatch(/^template_\d+$/);
+      expect(template.id).toMatch(new RegExp(`^template_${uuidSuffix}$`));
       expect(template.name).toBe("Data Analyst");
       expect(template.roleType).toBe("data_analyst");
       expect(template.baseCapabilities).toEqual(["data_analysis", "reporting"]);
@@ -79,7 +81,7 @@ describe("Agent Template Types", () => {
         systemPrompt: "You are a careful data analyst...",
       });
 
-      expect(persona.id).toMatch(/^persona_\d+$/);
+      expect(persona.id).toMatch(new RegExp(`^persona_${uuidSuffix}$`));
       expect(persona.name).toBe("Strategic Analyst");
       expect(persona.personality).toBe("analytical");
       expect(persona.communicationStyle).toBe("formal");
@@ -144,7 +146,7 @@ describe("Agent Template Types", () => {
         initialInstructions: "Start by analyzing yesterday's data",
       });
 
-      expect(context.id).toMatch(/^onboarding_\d+$/);
+      expect(context.id).toMatch(new RegExp(`^onboarding_${uuidSuffix}$`));
       expect(context.agentId).toBe("agent_1");
       expect(context.missionId).toBe("mission_1");
       expect(context.roleSpec.name).toBe("Data Analyst");

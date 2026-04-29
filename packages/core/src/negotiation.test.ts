@@ -6,6 +6,8 @@ import {
   calculateAgreementScore,
 } from "./negotiation.js";
 
+const uuidSuffix = "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+
 describe("Negotiation State Machine", () => {
   describe("createNegotiation", () => {
     it("should create a negotiation in pending state", () => {
@@ -16,7 +18,7 @@ describe("Negotiation State Machine", () => {
         topic: "team_composition",
       });
 
-      expect(negotiation.id).toMatch(/^negotiation_\d+$/);
+      expect(negotiation.id).toMatch(new RegExp(`^negotiation_${uuidSuffix}$`));
       expect(negotiation.missionId).toBe("mission_1");
       expect(negotiation.initiatorId).toBe("hr_agent_1");
       expect(negotiation.participantId).toBe("owner_agent_1");
@@ -81,7 +83,7 @@ describe("Negotiation State Machine", () => {
         content: { roles: ["analyst", "creator"], budget: 200 },
       });
 
-      expect(message.id).toMatch(/^msg_\d+$/);
+      expect(message.id).toMatch(new RegExp(`^msg_${uuidSuffix}$`));
       expect(message.senderId).toBe("hr_agent_1");
       expect(message.receiverId).toBe("owner_agent_1");
       expect(message.type).toBe("proposal");

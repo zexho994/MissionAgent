@@ -5,6 +5,8 @@ import {
   validateRoleSpec,
 } from "./hr-types.js";
 
+const uuidSuffix = "[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+
 describe("HR Types", () => {
   describe("createRoleRequirement", () => {
     it("should create a valid RoleRequirement", () => {
@@ -16,7 +18,7 @@ describe("HR Types", () => {
         budgetMax: 100,
       });
 
-      expect(requirement.id).toMatch(/^role_req_\d+$/);
+      expect(requirement.id).toMatch(new RegExp(`^role_req_${uuidSuffix}$`));
       expect(requirement.missionId).toBe("mission_1");
       expect(requirement.roleType).toBe("content_creator");
       expect(requirement.neededCapabilities).toEqual(["writing", "research", "seo"]);
@@ -83,7 +85,7 @@ describe("HR Types", () => {
         escalationThreshold: 0.6,
       });
 
-      expect(config.id).toMatch(/^hr_config_\d+$/);
+      expect(config.id).toMatch(new RegExp(`^hr_config_${uuidSuffix}$`));
       expect(config.negotiationStyle).toBe("collaborative");
       expect(config.maxRounds).toBe(5);
       expect(config.escalationThreshold).toBe(0.6);
