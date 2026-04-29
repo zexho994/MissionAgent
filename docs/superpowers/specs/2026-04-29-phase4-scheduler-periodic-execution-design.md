@@ -1,658 +1,382 @@
-# Phase 4: Scheduler & Periodic Execution Specification
+# Phase 4: Scheduler & Periodic Execution — 产品设计
 
 ## Overview
 
-Phase 4 adds mission-level scheduling so long-running Missions can create tasks automatically from time rules and condition rules. The system must support daily checks, weekly reports, biweekly reviews, and future external metric triggers without depending on a hosted queue in the first version.
+Phase 4 在 Mission 内嵌入调度引擎，让长期运行的 Mission 拥有团队工作节奏。调度规则由 HR 在团队谈判时提出，Owner 审核协商，作为 TeamPlan 的一部分。系统用 cron 表达式驱动定期任务，用条件触发器响应异常。
 
-This spec is written for an implementation agent. It assumes Phase 3 conversation types and `InMemoryMissionService` are present.
+核心设计原则：调度只是创建 Task 的另一种方式，不引入新的任务状态或执行通道。
 
 ## Goals
 
-- Register, update, cancel, persist, and restore mission schedules.
-- Trigger schedules into real `Task` records assigned to the correct `WarRoomAgent`.
-- Define reusable `ScheduledTaskTemplate` records for common mission rhythms.
-- Clean up schedules when a mission is completed or cancelled.
-- Add condition triggers for metric-based events, with an explicit external data adapter boundary.
+- Mission 级别的调度引擎，支持 cron 定时和条件触发
+- 调度规则作为 HR 谈判产出的一部分，与团队方案一体
+- 触发时创建 Task 走正常任务流程（plan → execute → review）
+- 调度持久化，服务重启后恢复
+- 条件触发器挂载在 Agent 任务完成事件上，用 LLM 评估条件
+- Mission 完成/取消时自动清理调度
 
 ## Non-Goals
 
-- Do not implement real Xiaohongshu or third-party metric ingestion in Phase 4.
-- Do not add distributed locking or multi-process coordination. The current server runs a single `InMemoryMissionService`.
-- Do not auto-run OpenClaw when a scheduled task is created. Phase 4 creates and assigns tasks; execution remains an explicit later step.
-- Do not silently ignore invalid schedule definitions. Invalid cron, missing mission, missing role, and missing template fields must throw.
+- 不实现具体的社媒数据采集适配器（Phase 5 范围）
+- 不引入分布式锁或多进程协调（当前单进程架构）
+- 不自动执行 OpenClaw（调度只创建 Task，执行仍是显式触发）
+- 不引入独立的事件总线（复用现有 agent_conversation_bus）
 
 ## Architecture Decision
 
-Use an internal scheduler owned by `InMemoryMissionService`.
+**方案 A：Mission 内嵌调度器**
 
-Reasoning: the current app already persists mission state through a JSON store, has no database, and has a single server process. Adding BullMQ, Temporal, or a database-backed job system now would be infrastructure before product proof. The correct Phase 4 design is a small deterministic scheduler service with a pluggable clock for tests and a clean future replacement boundary.
+在 `InMemoryMissionService` 内为每个 active Mission 持有一个 `MissionScheduler` 实例。调度规则存储在 Mission 对象上，随 mission-store.json 持久化。
 
-The scheduler has three layers:
-
-1. Core domain types in `packages/core/src/types.ts`.
-2. Server scheduler logic in `apps/server/src/scheduler-service.ts`.
-3. Mission lifecycle/API integration in `apps/server/src/mission-service.ts` and `apps/server/src/api.ts`.
-
-## File Plan
-
-- Modify `packages/core/src/types.ts`
-  - Add schedule, template, trigger, and clock-facing domain types.
-- Create `packages/core/src/schedule.ts`
-  - Add constructors and validators for scheduled task templates, schedule registrations, and condition triggers.
-- Modify `packages/core/src/index.ts`
-  - Export `schedule.ts`.
-- Create `packages/core/src/schedule.test.ts`
-  - Unit tests for fast-fail validation and schedule object creation.
-- Create `apps/server/src/schedule-rules.ts`
-  - Parse a strict cron subset and compute next run times.
-- Create `apps/server/src/schedule-rules.test.ts`
-  - Unit tests for supported cron expressions and invalid expressions.
-- Create `apps/server/src/scheduler-service.ts`
-  - Own in-memory schedule ticking, registration, cancellation, and task creation callbacks.
-- Create `apps/server/src/scheduler-service.test.ts`
-  - Unit tests with fake clock and callback spies.
-- Modify `apps/server/src/mission-service.ts`
-  - Store schedules/templates/triggers in snapshot.
-  - Initialize scheduler after loading persisted state.
-  - Add public schedule APIs.
-  - Register default templates on mission activation.
-  - Cancel schedules on mission completion/cancellation.
-- Modify `apps/server/src/api.ts`
-  - Add schedule and trigger endpoints.
-- Modify `apps/server/src/api.test.ts`
-  - API tests for schedule CRUD and condition trigger evaluation.
-- Modify `apps/server/src/server.ts`
-  - Start scheduler ticking when server boots.
-  - Stop scheduler on process shutdown if implemented as a timer.
-- Modify `apps/server/config/agent-system.json`
-  - Add default Phase 4 schedule templates.
-- Modify `apps/server/src/system-config.ts`
-  - Validate schedule template config.
+理由：当前系统是单进程、内存存储、JSON 持久化。引入 BullMQ/Temporal 等外部调度框架是基础设施先行于产品验证。正确的 Phase 4 设计是一个轻量的内嵌调度器，有清晰的时钟抽象以便测试，有干净的替换边界以便未来升级。
 
 ## Domain Types
 
-Add these types to `packages/core/src/types.ts`.
+新增到 `packages/core/src/types.ts`：
 
 ```typescript
-export type ScheduleStatus = "active" | "paused" | "cancelled";
+// --- 触发方式 ---
 
-export type ScheduleTriggerRule =
-  | {
-      type: "cron";
-      expression: string;
-      timezone: string;
-    }
-  | {
-      type: "interval";
-      everyMinutes: number;
-    };
-
-export interface ScheduledTaskTemplate {
-  id: string;
-  missionId?: string;
-  name: string;
-  description: string;
-  triggerRule: ScheduleTriggerRule;
-  taskTitleTemplate: string;
-  taskObjectiveTemplate: string;
-  successCriteria: string[];
-  inputTemplate: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
-  assignToRole: string;
-  approvalRequired: boolean;
-  enabled: boolean;
-}
-
-export interface ScheduleRegistration {
-  id: string;
-  missionId: string;
-  templateId: string;
-  status: ScheduleStatus;
-  triggerRule: ScheduleTriggerRule;
-  assignToAgentId: string;
-  lastRunAt?: string;
-  nextRunAt: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export type ConditionOperator = "lt" | "lte" | "gt" | "gte" | "eq";
-
-export interface ConditionTriggerRule {
-  metricName: string;
-  operator: ConditionOperator;
-  threshold: number;
-  compareTo?: "absolute" | "previous";
+export interface CronTrigger {
+  type: 'cron'
+  expression: string    // "0 9 * * 1-5"
+  timezone: string      // "Asia/Shanghai"
 }
 
 export interface ConditionTrigger {
-  id: string;
-  missionId: string;
-  name: string;
-  rule: ConditionTriggerRule;
-  sourceAdapter: string;
-  detectorAgentId: string;
-  notifyAgentIds: string[];
-  status: "active" | "paused" | "cancelled";
-  lastEvaluatedAt?: string;
-  lastTriggeredAt?: string;
-  createdAt: string;
-  updatedAt: string;
+  type: 'condition'
+  description: string           // "互动率下降超过20%"
+  sourceAgentRole: string       // "data-analyst" — 谁负责检测
+  evaluatePrompt: string        // LLM 评估条件的 prompt
 }
 
-export interface MetricSnapshot {
-  missionId: string;
-  sourceAdapter: string;
-  metricName: string;
-  value: number;
-  capturedAt: string;
+export type ScheduleTrigger = CronTrigger | ConditionTrigger
+
+// --- 调度规则 ---
+
+export interface ScheduleRule {
+  id: string
+  name: string                    // "每日数据检查"
+  missionId: string
+  enabled: boolean
+
+  // 触发方式（二选一）
+  trigger: ScheduleTrigger
+
+  // 任务模板
+  taskTemplate: {
+    title: string                 // "检查昨日互动数据"
+    contract: TaskContract        // 目标、输入、输出schema、成功标准
+    assigneeRole: string          // "data-analyst"
+    priority: 'low' | 'normal' | 'high'
+  }
+
+  // 控制
+  maxConcurrent: number           // 同一时间最多几个未完成的同类任务
+  metadata: Record<string, unknown>
 }
 ```
 
-Add constructors to `packages/core/src/schedule.ts`:
+Mission 类型扩展：
 
 ```typescript
-export function createScheduledTaskTemplate(input: Omit<ScheduledTaskTemplate, "id">): ScheduledTaskTemplate
-export function createScheduleRegistration(input: Omit<ScheduleRegistration, "id" | "createdAt" | "updatedAt">): ScheduleRegistration
-export function createConditionTrigger(input: Omit<ConditionTrigger, "id" | "createdAt" | "updatedAt">): ConditionTrigger
-export function evaluateConditionTrigger(trigger: ConditionTrigger, current: MetricSnapshot, previous?: MetricSnapshot): boolean
+interface Mission {
+  // ... 现有字段
+  scheduleRules: ScheduleRule[]
+}
 ```
 
-Validation rules:
+`createMission()` 工厂函数初始化 `scheduleRules: []`。
 
-- `name`, `description`, `taskTitleTemplate`, `taskObjectiveTemplate`, `assignToRole`, `timezone`, and cron `expression` must be non-empty.
-- `successCriteria` must contain at least one non-empty string.
-- `interval.everyMinutes` must be a positive integer.
-- `ConditionTrigger.notifyAgentIds` must not be empty.
-- `compareTo: "previous"` requires a previous metric snapshot when evaluating; otherwise throw.
-- Mismatched `missionId`, `sourceAdapter`, or `metricName` between trigger and metric snapshot throws.
+构造器在 `packages/core/src/schedule.ts`：
+
+```typescript
+export function createScheduleRule(input: Omit<ScheduleRule, 'id'>): ScheduleRule
+```
+
+验证规则：
+- `name`、`missionId` 非空
+- `trigger` 必须是 CronTrigger 或 ConditionTrigger 之一
+- `taskTemplate.title`、`taskTemplate.assigneeRole` 非空
+- `taskTemplate.contract` 必须有 `objective`
+- `maxConcurrent` 为正整数
+- CronTrigger 的 `expression` 必须通过 cron 格式验证
+- ConditionTrigger 的 `description`、`sourceAgentRole`、`evaluatePrompt` 非空
 
 ## Cron Support
 
-Create `apps/server/src/schedule-rules.ts`.
+创建 `apps/server/src/schedule-rules.ts`。
 
-Phase 4 should support a strict five-field cron subset:
+使用 `node-cron` 库处理标准五字段 cron 表达式。
 
-```text
-minute hour dayOfMonth month dayOfWeek
-```
-
-Supported field values:
-
-- `*`
-- A single integer in the valid range.
-- A comma-separated list of integers.
-- `*/n` for intervals.
-
-Supported examples:
-
-- `0 9 * * *` means every day at 09:00.
-- `0 10 * * 1` means every Monday at 10:00.
-- `0 16 */14 * *` means every 14 days at 16:00.
-- `*/30 * * * *` means every 30 minutes.
-
-Do not support ranges like `1-5`, named days like `MON`, seconds, or Quartz extensions. Throw `Unsupported cron expression: <expression>` when unsupported syntax appears. This is intentional: partial cron must fail fast instead of looking like full cron.
-
-API:
+API：
 
 ```typescript
 export function validateCronExpression(expression: string): void
-export function nextRunAfter(rule: ScheduleTriggerRule, after: Date): Date
+export function nextRunAfter(trigger: CronTrigger, after: Date): Date
 export function isDue(nextRunAt: string, now: Date): boolean
 ```
 
-Timezone in Phase 4 is stored and validated as non-empty, but calculation may use server local time until a timezone library is introduced. The spec should document this limitation in code comments near `nextRunAfter`.
+支持的五字段 cron：`minute hour dayOfMonth month dayOfWeek`。
 
-## Scheduler Service
+支持的值：`*`、单个整数、逗号分隔列表、`*/n` 间隔。
 
-Create `apps/server/src/scheduler-service.ts`.
+不支持：范围（`1-5`）、命名日期（`MON`）、秒字段、Quartz 扩展。遇到不支持的语法抛出 `Unsupported cron expression`。
+
+## MissionScheduler 组件
+
+创建 `apps/server/src/mission-scheduler.ts`。
 
 ```typescript
+export interface SchedulerDeps {
+  clock: SchedulerClock
+  missionService: InMemoryMissionService
+}
+
 export interface SchedulerClock {
-  now(): Date;
-  setInterval(handler: () => void, ms: number): unknown;
-  clearInterval(handle: unknown): void;
+  now(): Date
+  setInterval(handler: () => void, ms: number): unknown
+  clearInterval(handle: unknown): void
 }
 
-export interface SchedulerStore {
-  listActiveSchedules(): ScheduleRegistration[];
-  getTemplate(templateId: string): ScheduledTaskTemplate | undefined;
-  getMission(missionId: string): Mission | undefined;
-  getAgent(agentId: string): WarRoomAgent | undefined;
-  createTaskFromSchedule(input: {
-    schedule: ScheduleRegistration;
-    template: ScheduledTaskTemplate;
-    runAt: string;
-  }): Task;
-  updateSchedule(registration: ScheduleRegistration): void;
-  appendMessage(message: Omit<AgentMessage, "id" | "createdAt">): AgentMessage;
-  persist(): void;
-}
+export class MissionScheduler {
+  constructor(missionId: string, deps: SchedulerDeps)
 
-export class SchedulerService {
-  constructor(deps: {
-    clock: SchedulerClock;
-    store: SchedulerStore;
-    tickMs: number;
-  });
+  // 生命周期
+  start(rules: ScheduleRule[]): void
+  stop(): void
+  restart(rules: ScheduleRule[]): void
 
-  start(): void;
-  stop(): void;
-  tick(): void;
+  // 规则管理
+  addRule(rule: ScheduleRule): void
+  removeRule(ruleId: string): void
+  updateRule(ruleId: string, patch: Partial<ScheduleRule>): void
+  getRules(): ScheduleRule[]
+
+  // 条件触发器评估
+  evaluateConditions(context: MissionContext): Promise<void>
 }
 ```
 
-Behavior:
+行为：
+- `start()` 为每个 CronTrigger 规则注册 node-cron 定时任务
+- `stop()` 清除所有定时任务，幂等
+- `restart()` 先 stop 再 start，用于规则变更后重建
+- 每个 cron tick 调用 `onTrigger(rule)`
 
-- `start()` throws if called twice.
-- `stop()` is idempotent.
-- `tick()` reads active schedules whose `nextRunAt <= now`.
-- For each due schedule:
-  - Load mission, template, and agent.
-  - If any is missing, throw. Do not skip silently.
-  - Create one task from the template.
-  - Append an `agent_notify` message from `"scheduler"` to the assigned agent.
-  - Set `lastRunAt = now.toISOString()`.
-  - Set `nextRunAt = nextRunAfter(schedule.triggerRule, now).toISOString()`.
-  - Persist once after processing all due schedules.
-- If one due schedule fails, let the error surface in tests. In server timer mode, catch at the timer boundary in `server.ts` and log the error so the process can keep serving requests.
+触发流程：
 
-## Mission Service Integration
-
-Add private maps:
-
-```typescript
-private readonly scheduledTaskTemplates = new Map<string, ScheduledTaskTemplate>();
-private readonly scheduleRegistrations = new Map<string, ScheduleRegistration>();
-private readonly conditionTriggers = new Map<string, ConditionTrigger>();
-private readonly metricSnapshots = new Map<string, MetricSnapshot[]>();
-private scheduler: SchedulerService | undefined;
+```
+Cron tick
+  → MissionScheduler.onTrigger(rule)
+    → 检查 maxConcurrent（查询未完成的同类任务数）
+    → 超限则跳过，记录 info 日志
+    → 未超限则：
+      → missionService.createTask(rule.taskTemplate)
+      → missionService.assignTask(taskId, agentByRole)
+      → 通过 agent_conversation_bus 通知相关 Agent
 ```
 
-Extend `MissionSnapshot`:
+## 条件触发器评估
 
-```typescript
-scheduledTaskTemplates: ScheduledTaskTemplate[];
-scheduleRegistrations: ScheduleRegistration[];
-conditionTriggers: ConditionTrigger[];
-metricSnapshots: MetricSnapshot[];
+条件触发器不依赖 cron，而是挂载在 Agent 任务执行完成的事件上：
+
+```
+Agent 完成任务（状态 → completed）
+  → MissionService.onTaskCompleted(taskId)
+    → 检查该 Mission 的所有 ConditionTrigger 规则
+    → 对每个规则：
+      if (rule.trigger.sourceAgentRole === completedTask.agentRole)
+        → 用 LLM 评估 rule.trigger.evaluatePrompt + 任务产出
+        → if (条件满足)
+          → onTrigger(rule)
 ```
 
-Public methods:
+评估上下文：LLM 拿到完成任务的 Artifact 内容、Mission 目标和成功指标、触发条件的描述。
 
-```typescript
-registerScheduleTemplate(input: Omit<ScheduledTaskTemplate, "id">): ScheduledTaskTemplate
-registerMissionSchedule(input: {
-  missionId: string;
-  templateId: string;
-}): ScheduleRegistration
-updateSchedule(input: {
-  scheduleId: string;
-  status?: ScheduleStatus;
-  triggerRule?: ScheduleTriggerRule;
-}): ScheduleRegistration
-cancelSchedule(input: { scheduleId: string }): ScheduleRegistration
-listSchedules(input: { missionId: string }): ScheduleRegistration[]
-startScheduler(): void
-stopScheduler(): void
-evaluateConditionTrigger(input: {
-  triggerId: string;
-  metric: MetricSnapshot;
-  previousMetric?: MetricSnapshot;
-}): boolean
-registerConditionTrigger(input: Omit<ConditionTrigger, "id" | "createdAt" | "updatedAt">): ConditionTrigger
+评估 prompt 模板：
+
+```
+你是任务监控器。根据以下信息判断是否满足触发条件。
+
+触发条件：${rule.trigger.description}
+任务产出：${artifact.content}
+Mission目标：${mission.goal}
+
+请回答 YES 或 NO，并简要说明原因。
 ```
 
-Task creation from schedule:
+## HR 谈判集成
+
+### TeamPlan 扩展
 
 ```typescript
-const task = createTask({
-  missionId: schedule.missionId,
-  title: renderScheduleTemplate(template.taskTitleTemplate, { missionGoal: mission.goal, runAt }),
-  dependencies: [],
-  contract: {
-    objective: renderScheduleTemplate(template.taskObjectiveTemplate, { missionGoal: mission.goal, runAt }),
-    input: {
-      ...template.inputTemplate,
-      scheduleId: schedule.id,
-      templateId: template.id,
-      scheduledRunAt: runAt,
-    },
-    outputSchema: { ...template.outputSchema },
-    successCriteria: [...template.successCriteria],
-  },
-  approvalRequired: template.approvalRequired,
-});
-```
+interface TeamProposal {
+  // ... 现有字段（roles, budget, risks）
+  schedulePlan: SchedulePlanItem[]
+}
 
-After creating the task, assign it to the scheduled agent by applying the existing task state machine:
+interface SchedulePlanItem {
+  name: string                    // "每日数据检查"
+  cronExpression?: string         // "0 9 * * 1-5"（cron 类型必填）
+  assigneeRole: string            // "data-analyst"
+  taskDescription: string         // 任务描述
+  justification: string           // "需要每天监控数据以发现异常趋势"
 
-```typescript
-const ready = transitionTask(task, { type: "contract.completed" });
-const queued = transitionTask(ready, { type: "dependencies.met" });
-const running = transitionTask(queued, { type: "worker.assigned", agentInstanceId: schedule.assignToAgentId });
-```
-
-This means a scheduled task appears as `running` and assigned, but no external tool execution has started. That is acceptable for Phase 4 because execution remains explicit. Do not create an `Execution` record inside the scheduler.
-
-Agent status update:
-
-- Assigned agent status becomes `"idle"` unless it was `"running"`.
-- `currentTaskId` becomes the scheduled task id only if the agent is not already running another task.
-- `lastAction` becomes `Scheduled task created: <task.title>`.
-
-## Default Templates
-
-Add to `apps/server/config/agent-system.json`:
-
-```json
-"scheduler": {
-  "tickMs": 60000,
-  "defaultTemplates": [
-    {
-      "name": "Daily data check",
-      "description": "Daily metric check for long-running growth missions.",
-      "triggerRule": { "type": "cron", "expression": "0 9 * * *", "timezone": "Asia/Shanghai" },
-      "taskTitleTemplate": "Daily data check - {{missionGoal}}",
-      "taskObjectiveTemplate": "Check the latest mission metrics for {{missionGoal}} and report anomalies.",
-      "successCriteria": ["Metric snapshot is reviewed", "Anomalies are reported with evidence", "Next action is recommended"],
-      "inputTemplate": { "cadence": "daily", "kind": "metric_check" },
-      "outputSchema": { "summary": "string", "metrics": "array", "risks": "array", "recommendations": "array" },
-      "assignToRole": "researcher",
-      "approvalRequired": false,
-      "enabled": true
-    },
-    {
-      "name": "Weekly topic meeting",
-      "description": "Weekly planning task for content missions.",
-      "triggerRule": { "type": "cron", "expression": "0 10 * * 1", "timezone": "Asia/Shanghai" },
-      "taskTitleTemplate": "Weekly topic meeting - {{missionGoal}}",
-      "taskObjectiveTemplate": "Review last week's progress for {{missionGoal}} and propose this week's content topics.",
-      "successCriteria": ["Last week is summarized", "This week's topics are proposed", "Risks and dependencies are listed"],
-      "inputTemplate": { "cadence": "weekly", "kind": "planning" },
-      "outputSchema": { "retrospective": "string", "topics": "array", "risks": "array" },
-      "assignToRole": "content_strategist",
-      "approvalRequired": false,
-      "enabled": true
-    },
-    {
-      "name": "Biweekly strategy review",
-      "description": "Biweekly strategic review for long-running missions.",
-      "triggerRule": { "type": "cron", "expression": "0 16 */14 * *", "timezone": "Asia/Shanghai" },
-      "taskTitleTemplate": "Biweekly strategy review - {{missionGoal}}",
-      "taskObjectiveTemplate": "Review whether the strategy for {{missionGoal}} should change based on accumulated evidence.",
-      "successCriteria": ["Progress toward success metrics is assessed", "Strategy changes are justified", "Owner decision points are listed"],
-      "inputTemplate": { "cadence": "biweekly", "kind": "strategy_review" },
-      "outputSchema": { "progress": "string", "decisionPoints": "array", "strategyChanges": "array" },
-      "assignToRole": "owner",
-      "approvalRequired": false,
-      "enabled": true
-    }
-  ]
+  // 条件触发（可选，与 cronExpression 二选一）
+  conditionDescription?: string   // "互动率下降超过20%"
+  conditionSourceRole?: string    // "data-analyst"
+  conditionEvaluatePrompt?: string // LLM 评估 prompt
 }
 ```
 
-Modify `AgentSystemConfig` to include this shape and validate every default template using `createScheduledTaskTemplate`.
+### 谈判过程
 
-Mission activation behavior:
+1. **HR 提出团队方案**时同时提出调度计划。HR 根据 MissionBrief 用 LLM 生成节奏建议（不是硬编码模板）
+2. **Owner 审核**可以接受、调整频率、添加/删除规则，走正常的谈判循环
+3. **谈判达成一致**后，`SchedulePlanItem[]` 转换为 `ScheduleRule[]`：
+   - HR 填充 `TaskContract`（根据角色能力和任务描述）
+   - 设置 `maxConcurrent` 默认为 1
+   - 条件触发器也可以在此时协商
 
-- After `activateMission` or `activateMissionWithHR` creates the team, call `registerDefaultSchedulesForMission(mission.id)`.
-- Register only templates where `enabled === true`.
-- Resolve `assignToRole` by exact `agent.role` first. If no exact match, use the same capability matching idea only for these roles:
-  - `researcher` can match roles containing `research` or `analyst`.
-  - `content_strategist` can match roles containing `content` or `strategist`.
-  - `owner` must match exact owner.
-- If no agent can be resolved, throw. Do not register a schedule against a fake agent.
-- If a mission already has schedules, do not duplicate them on re-activation.
+### HR Prompt 扩展
 
-Mission cleanup behavior:
+HR 的 system prompt 新增调度相关指引：
 
-- Add a public method `updateMissionStatus({ missionId, status })` if no status update method exists yet.
-- When status becomes `"completed"` or `"cancelled"`, mark all active schedules and condition triggers for that mission as `"cancelled"`.
-- When status becomes `"paused"`, mark schedules `"paused"`.
-- When status returns to `"active"`, do not automatically resume paused schedules. Require explicit `updateSchedule` to avoid surprise work.
+```
+在提出团队方案时，你需要同时规划团队的工作节奏：
+- 根据目标类型建议合理的定期任务
+- 考虑每个角色的职责，安排对应的周期性工作
+- 如果需要条件触发（如异常告警），明确说明触发条件和响应人
+- 用自然语言描述节奏，系统会转为 cron 表达式
+```
 
-## Condition Triggers
-
-Phase 4 condition triggers are data-model and evaluation plumbing only.
-
-External adapter interface:
+## MissionService 集成
 
 ```typescript
-export interface ExternalMetricAdapter {
-  name: string;
-  fetchMetric(input: {
-    missionId: string;
-    metricName: string;
-  }): Promise<MetricSnapshot>;
+class InMemoryMissionService {
+  private schedulers: Map<string, MissionScheduler>  // missionId → scheduler
+
+  // Mission 激活时：从 teamPlan.scheduleRules 启动调度器
+  // Mission 完成/取消时：停止调度器
+  // Mission 暂停时：暂停调度器
 }
 ```
 
-Do not implement concrete social media adapters in Phase 4.
+MissionSnapshot 扩展，新增 `scheduleRules: ScheduleRule[]`。
 
-When `evaluateConditionTrigger` returns true:
+持久化恢复流程：
 
-- Update `lastEvaluatedAt` and `lastTriggeredAt`.
-- Append the metric snapshot to `metricSnapshots`.
-- Append an `agent_notify` message:
-  - `fromAgentId`: detector agent id
-  - `mentionedAgentIds`: notify agent ids
-  - `content`: `Condition triggered: <name>. <metricName> <operator> <threshold>, current value <value>.`
-- If Phase 3 bus is configured with LLM, dispatch a `BusEvent` of type `agent_notify`.
-- Do not create a task automatically from condition triggers in Phase 4. Notification is enough. Phase 5 owns strategy adaptation.
+```
+Server.start()
+  → MissionService.loadFromStore()
+    → 对每个 active 的 Mission：
+      → 重建 MissionScheduler(mission.scheduleRules)
+      → scheduler.start()
+```
 
 ## API Endpoints
 
-Add to `apps/server/src/api.ts`:
+新增到 `apps/server/src/api.ts`：
 
-```text
-GET  /api/missions/:missionId/schedules
-POST /api/missions/schedules
-PATCH /api/missions/schedules/:scheduleId
-DELETE /api/missions/schedules/:scheduleId
-
-POST /api/missions/condition-triggers
-POST /api/missions/condition-triggers/:triggerId/evaluate
+```
+GET    /api/missions/:id/schedule          → 获取调度规则列表
+POST   /api/missions/:id/schedule          → 添加调度规则
+PATCH  /api/missions/:id/schedule/:ruleId  → 更新规则（启用/禁用/修改）
+DELETE /api/missions/:id/schedule/:ruleId  → 删除规则
+POST   /api/missions/:id/schedule/:ruleId/trigger  → 手动触发一次
 ```
 
-Request/response details:
+## UI
 
-`GET /api/missions/:missionId/schedules`
+在 Mission 详情页新增调度面板：
+- 规则列表：名称、cron/条件描述、分配角色、下次触发时间、启用状态
+- 手动触发按钮
+- 启用/禁用开关
 
-```json
-{ "schedules": [] }
-```
+UI 数据通过现有 SSE 机制实时推送。
 
-`POST /api/missions/schedules`
+## Error Handling
 
-```json
-{
-  "missionId": "mission_1",
-  "templateId": "schedule_template_1"
-}
-```
+| 场景 | 处理方式 |
+|------|---------|
+| cron 触发但 Agent 不存在 | 跳过，warn 日志，通知 Owner |
+| 条件评估 LLM 调用失败 | 跳过本次，下次重试，不创建任务 |
+| Task 创建失败 | 跳过，error 日志，通知 Owner |
+| 服务重启 | 从 store 恢复，重新注册所有 cron |
+| maxConcurrent 超限 | 静默跳过，info 日志 |
+| 任务模板填充不完整 | 创建时校验，缺失字段用默认值兜底 |
 
-Returns:
+## File Plan
 
-```json
-{ "schedule": {}, "snapshot": {} }
-```
-
-`PATCH /api/missions/schedules/:scheduleId`
-
-```json
-{
-  "status": "paused",
-  "triggerRule": { "type": "cron", "expression": "0 8 * * *", "timezone": "Asia/Shanghai" }
-}
-```
-
-`DELETE /api/missions/schedules/:scheduleId`
-
-Returns the cancelled schedule and snapshot.
-
-`POST /api/missions/condition-triggers`
-
-```json
-{
-  "missionId": "mission_1",
-  "name": "Engagement drop alert",
-  "rule": { "metricName": "engagementRate", "operator": "lte", "threshold": -20, "compareTo": "previous" },
-  "sourceAdapter": "manual",
-  "detectorAgentId": "agent_3",
-  "notifyAgentIds": ["agent_1"]
-}
-```
-
-`POST /api/missions/condition-triggers/:triggerId/evaluate`
-
-```json
-{
-  "metric": {
-    "missionId": "mission_1",
-    "sourceAdapter": "manual",
-    "metricName": "engagementRate",
-    "value": -31,
-    "capturedAt": "2026-04-29T09:00:00.000Z"
-  },
-  "previousMetric": {
-    "missionId": "mission_1",
-    "sourceAdapter": "manual",
-    "metricName": "engagementRate",
-    "value": 0,
-    "capturedAt": "2026-04-28T09:00:00.000Z"
-  }
-}
-```
-
-Returns:
-
-```json
-{ "triggered": true, "snapshot": {} }
-```
-
-Parsing must use existing strict `expectObject`, `expectString`, and typed helpers. Add helpers for optional status, trigger rule, number, and string arrays. Invalid request bodies return `400` with a clear error.
-
-## Persistence
-
-`StoredMissionSnapshot.schemaVersion` can remain `1` if new fields are optional on load:
-
-```typescript
-for (const template of stored.scheduledTaskTemplates ?? []) this.scheduledTaskTemplates.set(template.id, template);
-for (const registration of stored.scheduleRegistrations ?? []) this.scheduleRegistrations.set(registration.id, registration);
-for (const trigger of stored.conditionTriggers ?? []) this.conditionTriggers.set(trigger.id, trigger);
-for (const metric of stored.metricSnapshots ?? []) {
-  const existing = this.metricSnapshots.get(metric.missionId) ?? [];
-  this.metricSnapshots.set(metric.missionId, [...existing, metric]);
-}
-```
-
-However, new snapshots must always include the new arrays.
-
-On reload:
-
-- Rehydrate all schedules before scheduler starts.
-- Do not immediately execute overdue schedules during constructor load.
-- The first explicit `startScheduler()` tick may execute overdue schedules. This behavior is acceptable and should be covered by tests.
+- 修改 `packages/core/src/types.ts` — 新增 ScheduleRule、CronTrigger、ConditionTrigger 类型
+- 创建 `packages/core/src/schedule.ts` — 构造器和验证函数
+- 创建 `packages/core/src/schedule.test.ts` — 类型验证单元测试
+- 修改 `packages/core/src/index.ts` — 导出 schedule 模块
+- 创建 `apps/server/src/schedule-rules.ts` — cron 解析和 nextRun 计算
+- 创建 `apps/server/src/schedule-rules.test.ts` — cron 测试
+- 创建 `apps/server/src/mission-scheduler.ts` — MissionScheduler 组件
+- 创建 `apps/server/src/mission-scheduler.test.ts` — 调度器测试（fake clock）
+- 修改 `apps/server/src/mission-service.ts` — 集成调度器，持久化，恢复
+- 修改 `apps/server/src/api.ts` — 新增调度 API 端点
+- 修改 `apps/server/src/api.test.ts` — API 测试
+- 修改 `apps/server/src/server.ts` — 启动时恢复调度器
+- 修改 `apps/server/src/hr-agent.ts` — 谈判时生成调度计划
+- 修改 `apps/server/src/negotiation-manager.ts` — TeamProposal 扩展
 
 ## Testing Requirements
 
-Core tests:
+Core 测试：
+- `createScheduleRule` 拒绝空 name
+- `createScheduleRule` 拒绝无效 cron
+- `createScheduleRule` 拒绝空 sourceAgentRole 的 ConditionTrigger
 
-- `createScheduledTaskTemplate` rejects empty name.
-- `createScheduledTaskTemplate` rejects empty success criteria.
-- `createScheduleRegistration` rejects empty `nextRunAt`.
-- `createConditionTrigger` rejects empty `notifyAgentIds`.
-- `evaluateConditionTrigger` returns true for `lte` absolute threshold.
-- `evaluateConditionTrigger` throws when `compareTo: "previous"` is used without previous metric.
+Cron 测试：
+- `nextRunAfter("0 9 * * *", 08:59)` → 09:00
+- `nextRunAfter("0 9 * * *", 09:00)` → 次日 09:00
+- `nextRunAfter("0 10 * * 1", Wednesday)` → 下周一 10:00
+- 不支持的格式抛出异常
 
-Schedule rule tests:
+Scheduler 测试：
+- tick 创建 Task 并分配给正确 Agent
+- tick 跳过 disabled 的规则
+- tick 跳过 maxConcurrent 超限的规则
+- tick 后 nextRunAt 更新
+- Agent 不存在时 warn 并跳过
 
-- `nextRunAfter({ type: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" }, 2026-04-29T08:59:00)` returns 2026-04-29T09:00:00.
-- `nextRunAfter({ type: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" }, 2026-04-29T09:00:00)` returns 2026-04-30T09:00:00.
-- `nextRunAfter({ type: "cron", expression: "0 10 * * 1", timezone: "Asia/Shanghai" }, Wednesday 2026-04-29)` returns Monday 2026-05-04T10:00:00.
-- `validateCronExpression("0 9 * * MON")` throws.
-- `validateCronExpression("0 9 1-5 * *")` throws.
-- `nextRunAfter({ type: "interval", everyMinutes: 30 }, 2026-04-29T09:00:00)` returns 2026-04-29T09:30:00.
+MissionService 集成测试：
+- 激活 Mission 时注册调度规则
+- 重新激活不重复注册
+- 完成/取消 Mission 时清理调度
+- 持久化后恢复调度
+- 条件触发器在任务完成时评估
+- 评估为 true 时创建通知任务
 
-Scheduler service tests:
-
-- `start()` throws when called twice.
-- `tick()` creates exactly one task for one due active schedule.
-- `tick()` does not create a task for a paused schedule.
-- `tick()` advances `nextRunAt` after task creation.
-- `tick()` throws if the template is missing.
-- `tick()` throws if the assigned agent is missing.
-
-Mission service tests:
-
-- Activating a social mission registers daily, weekly, and biweekly schedules when matching agents exist.
-- Re-activating a mission does not duplicate schedules.
-- A persisted service reload includes schedules and can tick them.
-- Cancelling a schedule changes status to `cancelled`.
-- Pausing a mission pauses schedules.
-- Completing or cancelling a mission cancels schedules and condition triggers.
-- Evaluating a condition trigger appends an `agent_notify` message when true.
-- Evaluating a condition trigger does not append a notification when false.
-
-API tests:
-
-- `GET /api/missions/:missionId/schedules` lists schedules.
-- `POST /api/missions/schedules` registers a schedule from a template.
-- `PATCH /api/missions/schedules/:scheduleId` pauses a schedule.
-- `DELETE /api/missions/schedules/:scheduleId` cancels a schedule.
-- `POST /api/missions/condition-triggers` creates a trigger.
-- `POST /api/missions/condition-triggers/:triggerId/evaluate` returns `{ triggered: true }` and records notification.
-
-Run verification:
-
-```bash
-pnpm --filter @digitalagent/core test
-pnpm --filter @digitalagent/server test
-pnpm --filter @digitalagent/server typecheck
-pnpm test
-```
+API 测试：
+- CRUD 调度规则
+- 手动触发
+- 条件评估端点
 
 ## Acceptance Scenario
 
-Given a user creates and activates this mission:
+用户创建并激活 Mission：`运营一个小红书账号，一个月涨到1000粉丝`
 
-```text
-运营一个小红书账号，一个月涨到1000粉丝
-```
-
-Expected behavior:
-
-1. Mission activation creates the team as before.
-2. Phase 4 registers:
-   - Daily data check at `0 9 * * *`.
-   - Weekly topic meeting at `0 10 * * 1`.
-   - Biweekly strategy review at `0 16 */14 * *`.
-3. When the fake clock reaches the daily schedule time, `SchedulerService.tick()` creates a task assigned to the researcher or analyst-like agent.
-4. The task appears in `snapshot.tasks` with:
-   - `contract.input.scheduleId`
-   - `contract.input.templateId`
-   - `contract.input.scheduledRunAt`
-   - `assigneeAgentId` equal to the scheduled agent id.
-5. An `agent_notify` message records that the scheduler created the task.
-6. If a condition trigger for engagement drop receives value `-31` with threshold `-20`, the detector agent notifies the project owner/strategist through `agent_notify`.
+预期行为：
+1. Mission 激活创建团队（Phase 2）
+2. HR 谈判时提出调度计划：每日数据检查、每周选题会、每两周回顾
+3. Owner 审核确认后，系统注册三个 ScheduleRule
+4. 当时钟到达每日检查时间，MissionScheduler 触发，创建 Task 分配给数据分析师
+5. 数据分析师完成任务后，条件触发器评估"互动率是否下降超20%"
+6. 如果条件满足，通知项目经理
 
 ## Implementation Order
 
-1. Add core schedule types, constructors, and unit tests.
-2. Add cron/interval rule parsing and tests.
-3. Add `SchedulerService` with fake clock tests.
-4. Extend `MissionSnapshot`, persistence, and mission service schedule maps.
-5. Add default scheduler config and config validation.
-6. Register default schedules during mission activation.
-7. Add schedule API endpoints and tests.
-8. Add condition trigger model, evaluation methods, API endpoints, and tests.
-9. Wire server scheduler start/stop.
-10. Run full verification.
-
-## Self-Review
-
-- No placeholder sections remain.
-- Scope is focused on Phase 4 only; external adapters are intentionally interface-only.
-- The design follows existing app constraints: TypeScript monorepo, in-memory maps, JSON persistence, strict request parsing, and Vitest.
-- The scheduler fails fast for bad definitions and missing references, matching the project rule that bugs should surface early.
+1. Core schedule types + constructors + unit tests
+2. Cron/interval rule parsing + tests
+3. MissionScheduler component + fake clock tests
+4. MissionService integration (persistence, restore, lifecycle)
+5. HR negotiation integration (TeamProposal 扩展, prompt 更新)
+6. API endpoints + tests
+7. Condition trigger evaluation (LLM-based) + tests
+8. Server startup/shutdown wiring
+9. Full verification
