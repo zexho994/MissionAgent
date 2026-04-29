@@ -30,6 +30,7 @@ export class AgentConversationBus {
     resolveThread: (threadId: string) => void;
     updateAgent: (id: string, patch: Partial<WarRoomAgent>) => void;
     maxConversationDepth: number;
+    maxDiscussionRounds: number;
     cooldownMs: number;
   }) {}
 
@@ -50,8 +51,8 @@ export class AgentConversationBus {
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
-    const targets = this.targetAgents(input.missionId, input.event, snapshot);
-    if (!targets.length) {
+    const initialTargets = this.targetAgents(input.missionId, input.event, snapshot);
+    if (!initialTargets.length) {
       return undefined;
     }
 
@@ -60,78 +61,108 @@ export class AgentConversationBus {
       thread = this.deps.createThread({
         missionId: input.missionId,
         topic: this.topicForEvent(input.event),
-        participantAgentIds: this.participantIds(input.event, targets),
+        participantAgentIds: this.participantIds(input.event, initialTargets),
         status: "active",
       });
     }
 
+    const responded = new Set<string>();
+    const agentById = new Map(snapshot.agents.filter((a) => a.missionId === input.missionId).map((a) => [a.id, a]));
     let lastMessage: AgentMessage | undefined;
-    for (const target of targets) {
-      if (!this.canEngage(input.event, target.id)) {
-        continue;
-      }
-      this.deps.updateAgent(target.id, {
-        status: "thinking",
-        lastAction: "Responding in agent conversation",
-      });
-      try {
-        const response = await this.callAgent({
-          missionId: input.missionId,
-          event: input.event,
-          target,
-          thread,
-        });
-        const messageInput: Omit<AgentMessage, "id" | "createdAt"> = {
-          missionId: input.missionId,
-          fromAgentId: target.id,
-          type: response.type,
-          content: response.message,
-          threadId: thread.id,
-        };
-        if (response.mentionedAgentIds?.length) {
-          messageInput.mentionedAgentIds = response.mentionedAgentIds;
-        }
-        if (response.action) {
-          messageInput.metadata = { action: response.action };
-        }
-        lastMessage = this.deps.appendMessage(messageInput);
-        this.deps.updateAgent(target.id, {
-          status: "idle",
-          lastAction: "Responded in agent conversation",
-        });
-        this.recordCooldown(input.event, target.id);
+    let lastRoundPropagated = false;
+    let roundTargets = [...initialTargets];
 
-        if (response.shouldPropagate && response.action?.type === "request_info" && response.action.targetAgentId) {
-          await this.dispatchEvent({
+    for (let round = 0; round < this.deps.maxDiscussionRounds && roundTargets.length > 0; round++) {
+      let roundHadPropagation = false;
+
+      for (const target of roundTargets) {
+        if (responded.has(target.id)) continue;
+        if (!this.canEngage(input.event, target.id)) continue;
+        responded.add(target.id);
+
+        this.deps.updateAgent(target.id, {
+          status: "thinking",
+          lastAction: "Responding in agent conversation",
+        });
+        try {
+          const response = await this.callAgent({
             missionId: input.missionId,
-            event: {
-              type: "agent_request",
-              fromAgentId: target.id,
-              toAgentId: response.action.targetAgentId,
-              content: response.message,
-            },
+            event: input.event,
+            target,
+            thread,
+          });
+          const messageInput: Omit<AgentMessage, "id" | "createdAt"> = {
+            missionId: input.missionId,
+            fromAgentId: target.id,
+            type: response.type,
+            content: response.message,
             threadId: thread.id,
-            triggerDepth: depth + 1,
+          };
+          if (response.mentionedAgentIds?.length) {
+            messageInput.mentionedAgentIds = response.mentionedAgentIds;
+          }
+          if (response.action) {
+            messageInput.metadata = { action: response.action };
+          }
+          lastMessage = this.deps.appendMessage(messageInput);
+          this.deps.updateAgent(target.id, {
+            status: "idle",
+            lastAction: "Responded in agent conversation",
+          });
+          this.recordCooldown(input.event, target.id);
+
+          const propagated = this.propagationTargets(response, responded, agentById);
+          if (propagated.length > 0) {
+            roundTargets = propagated;
+            roundHadPropagation = true;
+            break;
+          }
+        } catch (error) {
+          lastMessage = this.deps.appendMessage({
+            missionId: input.missionId,
+            fromAgentId: target.id,
+            type: "agent_chat",
+            content: `Collaboration response failed: ${error instanceof Error ? error.message : String(error)}`,
+            threadId: thread.id,
+            metadata: { shouldPropagate: false },
+          });
+          this.deps.updateAgent(target.id, {
+            status: "blocked",
+            lastAction: "Agent conversation failed",
           });
         }
-      } catch (error) {
-        lastMessage = this.deps.appendMessage({
-          missionId: input.missionId,
-          fromAgentId: target.id,
-          type: "agent_chat",
-          content: `Collaboration response failed: ${error instanceof Error ? error.message : String(error)}`,
-          threadId: thread.id,
-          metadata: { shouldPropagate: false },
-        });
-        this.deps.updateAgent(target.id, {
-          status: "blocked",
-          lastAction: "Agent conversation failed",
-        });
       }
+
+      lastRoundPropagated = roundHadPropagation;
+      if (!roundHadPropagation) break;
     }
 
-    this.deps.resolveThread(thread.id);
+    if (!lastRoundPropagated) {
+      this.deps.resolveThread(thread.id);
+    }
     return lastMessage;
+  }
+
+  private propagationTargets(
+    response: AgentConversationResponse,
+    responded: Set<string>,
+    agentById: Map<string, WarRoomAgent>,
+  ): WarRoomAgent[] {
+    if (!response.shouldPropagate) return [];
+    const candidateIds: string[] = [];
+    if (response.action?.targetAgentId) {
+      candidateIds.push(response.action.targetAgentId);
+    }
+    if (response.mentionedAgentIds?.length) {
+      candidateIds.push(...response.mentionedAgentIds);
+    }
+    const targets: WarRoomAgent[] = [];
+    for (const id of candidateIds) {
+      if (responded.has(id)) continue;
+      const agent = agentById.get(id);
+      if (agent) targets.push(agent);
+    }
+    return targets;
   }
 
   private async callAgent(input: {

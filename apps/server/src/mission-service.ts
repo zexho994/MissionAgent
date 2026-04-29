@@ -237,11 +237,13 @@ export class InMemoryMissionService {
   private negotiationManager: NegotiationManager | undefined;
   private conversationBus: AgentConversationBus | undefined;
   private autonomyService: AgentAutonomyService | undefined;
+  private readonly personas: AgentPersonaRegistry;
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
+    this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
     this.loadFromFile();
   }
 
@@ -1029,7 +1031,7 @@ export class InMemoryMissionService {
     if (!this.conversationBus) {
       this.conversationBus = new AgentConversationBus({
         llm: this.llm,
-        personas: new AgentPersonaRegistry(this.config.agentCollaboration?.personas),
+        personas: this.personas,
         contextRetriever: new ContextRetriever(() => this.snapshot()),
         getSnapshot: () => this.snapshot(),
         appendMessage: (message) => {
@@ -1048,6 +1050,7 @@ export class InMemoryMissionService {
         },
         updateAgent: (id, patch) => this.updateAgent(id, patch),
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
+        maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 3,
         cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
       });
     }
@@ -1067,7 +1070,7 @@ export class InMemoryMissionService {
           reportFrequencyTicks: this.config.agentAutonomy?.reportFrequencyTicks ?? 5,
         },
         llm: this.llm,
-        personas: new AgentPersonaRegistry(this.config.agentCollaboration?.personas),
+        personas: this.personas,
         contextRetriever: new ContextRetriever(() => this.snapshot()),
         getSnapshot: () => this.snapshot(),
         dispatchEvent: async (input) => { await bus.dispatchEvent(input); },

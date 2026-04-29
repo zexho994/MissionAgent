@@ -30,6 +30,8 @@ export interface AgentAutonomyDeps {
 export class AgentAutonomyService {
   private readonly loops = new Map<string, TimerHandle>();
   private readonly tickCounts = new Map<string, number>();
+  private readonly tickingMissions = new Set<string>();
+  private readonly lastActivityCount = new Map<string, number>();
   private activeEvals = 0;
 
   constructor(
@@ -46,7 +48,9 @@ export class AgentAutonomyService {
 
     this.tickCounts.set(missionId, 0);
     const handle = this.timer.setInterval(() => {
-      void this.tick(missionId);
+      if (this.tickingMissions.has(missionId)) return;
+      this.tickingMissions.add(missionId);
+      return this.tick(missionId).finally(() => { this.tickingMissions.delete(missionId); });
     }, this.deps.config.tickIntervalMs);
     this.loops.set(missionId, handle);
   }
@@ -57,7 +61,13 @@ export class AgentAutonomyService {
       handle.clear();
       this.loops.delete(missionId);
       this.tickCounts.delete(missionId);
+      this.tickingMissions.delete(missionId);
     }
+  }
+
+  /** Clear activity tracking for an agent (e.g., on mission cleanup) */
+  resetAgent(agentId: string): void {
+    this.lastActivityCount.delete(agentId);
   }
 
   stopAll(): void {
@@ -91,8 +101,27 @@ export class AgentAutonomyService {
 
     for (const agent of agents) {
       if (this.activeEvals >= this.deps.config.maxConcurrentEvals) break;
+      const isReportTick = tickCount % this.deps.config.reportFrequencyTicks === 0;
+      if (!isReportTick && !this.hasNewActivity(snapshot, agent.id)) {
+        continue;
+      }
       await this.evaluateAgent(missionId, agent, tickCount);
     }
+  }
+
+  private hasNewActivity(snapshot: MissionSnapshot, agentId: string): boolean {
+    if (!this.lastActivityCount.has(agentId)) return true;
+    const relevantMessageCount = snapshot.agentMessages.filter(
+      (m) => m.fromAgentId === agentId || m.mentionedAgentIds?.includes(agentId),
+    ).length + snapshot.artifacts.length;
+    return relevantMessageCount > (this.lastActivityCount.get(agentId) ?? 0);
+  }
+
+  private recordActivity(snapshot: MissionSnapshot, agentId: string): void {
+    const count = snapshot.agentMessages.filter(
+      (m) => m.fromAgentId === agentId || m.mentionedAgentIds?.includes(agentId),
+    ).length + snapshot.artifacts.length;
+    this.lastActivityCount.set(agentId, count);
   }
 
   private async evaluateAgent(missionId: string, agent: WarRoomAgent, tickCount: number): Promise<void> {
@@ -171,6 +200,7 @@ export class AgentAutonomyService {
         status: "idle",
         lastAction: "Completed self-evaluation",
       });
+      this.recordActivity(this.deps.getSnapshot(), agent.id);
     } catch (error) {
       this.deps.updateAgent(agent.id, {
         status: "idle",

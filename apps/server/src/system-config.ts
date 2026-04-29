@@ -42,6 +42,7 @@ export interface AgentSystemConfig {
   };
   agentCollaboration?: {
     maxConversationDepth: number;
+    maxDiscussionRounds?: number;
     cooldownMs: number;
     contextTokenBudget: number;
     personas?: Record<string, {

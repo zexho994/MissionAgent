@@ -131,10 +131,10 @@ describe("AgentAutonomyService", () => {
 
   it("should evaluate agents on manual tick", async () => {
     const { deps, agentUpdates } = makeTestDeps();
-    let tickCallback: (() => void) | undefined;
+    let tickCallback: (() => Promise<void>) | undefined;
     const timer = {
       setInterval: (cb: () => void, _ms: number) => {
-        tickCallback = cb;
+        tickCallback = cb as () => Promise<void>;
         return { clear: () => {} };
       },
     };
@@ -169,10 +169,10 @@ describe("AgentAutonomyService", () => {
       stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
     };
 
-    let tickCallback: (() => void) | undefined;
+    let tickCallback: (() => Promise<void>) | undefined;
     const timer = {
       setInterval: (cb: () => void, _ms: number) => {
-        tickCallback = cb;
+        tickCallback = cb as () => Promise<void>;
         return { clear: () => {} };
       },
     };
@@ -205,10 +205,10 @@ describe("AgentAutonomyService", () => {
       stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
     };
 
-    let tickCallback: (() => void) | undefined;
+    let tickCallback: (() => Promise<void>) | undefined;
     const timer = {
       setInterval: (cb: () => void, _ms: number) => {
-        tickCallback = cb;
+        tickCallback = cb as () => Promise<void>;
         return { clear: () => {} };
       },
     };
@@ -229,10 +229,10 @@ describe("AgentAutonomyService", () => {
   it("should auto-stop loop when mission is completed", async () => {
     const { deps } = makeTestDeps();
 
-    let tickCallback: (() => void) | undefined;
+    let tickCallback: (() => Promise<void>) | undefined;
     const timer = {
       setInterval: (cb: () => void, _ms: number) => {
-        tickCallback = cb;
+        tickCallback = cb as () => Promise<void>;
         return { clear: () => {} };
       },
     };
