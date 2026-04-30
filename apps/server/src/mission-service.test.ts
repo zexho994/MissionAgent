@@ -1032,6 +1032,100 @@ describe("InMemoryMissionService", () => {
     ]);
   });
 
+  it("creates a daily schedule rule from a lightweight template", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+
+    const rule = service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "daily_check",
+      assigneeRole: "owner",
+      taskGoal: "Check yesterday's GitHub growth metrics",
+    });
+
+    expect(rule.trigger).toEqual({ type: "cron", expression: "0 9 * * *", timezone: "UTC" });
+    expect(rule.taskTemplate.title).toBe("Check yesterday's GitHub growth metrics");
+    expect(rule.taskTemplate.contract.objective).toBe("Check yesterday's GitHub growth metrics");
+    expect(rule.metadata).toEqual({ createdBy: "user_template", templateType: "daily_check" });
+  });
+
+  it("creates a weekly schedule rule from a lightweight template", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+
+    const rule = service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "weekly_review",
+      assigneeRole: "owner",
+      taskGoal: "Review weekly GitHub growth and plan next actions",
+    });
+
+    expect(rule.trigger).toEqual({ type: "cron", expression: "0 9 * * 1", timezone: "UTC" });
+    expect(rule.name).toBe("Weekly review");
+  });
+
+  it("creates a condition schedule rule from a lightweight template", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+
+    const rule = service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "condition_response",
+      sourceAgentRole: "owner",
+      condition: "Stars dropped for two consecutive days",
+      responseAssigneeRole: "owner",
+      responseTaskGoal: "Diagnose the drop and recommend a correction",
+    });
+
+    expect(rule.trigger).toEqual({
+      type: "condition",
+      description: "Stars dropped for two consecutive days",
+      sourceAgentRole: "owner",
+      evaluatePrompt: "Return true when this condition is met: Stars dropped for two consecutive days",
+    });
+    expect(rule.taskTemplate.assigneeRole).toBe("owner");
+    expect(rule.taskTemplate.title).toBe("Diagnose the drop and recommend a correction");
+  });
+
+  it("rejects unsupported biweekly template explicitly", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+
+    expect(() =>
+      service.createScheduleRuleFromTemplate(mission.id, {
+        templateType: "biweekly_review",
+        assigneeRole: "owner",
+        taskGoal: "Review every two weeks",
+      } as never),
+    ).toThrow("Unsupported schedule template: biweekly_review");
+  });
+
+  it("pauses and resumes only automation-toggle-paused rules", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const enabled = service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "daily_check",
+      assigneeRole: "owner",
+      taskGoal: "Check yesterday's GitHub growth metrics",
+    });
+    const manuallyDisabled = service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "weekly_review",
+      assigneeRole: "owner",
+      taskGoal: "Review weekly GitHub growth",
+    });
+    service.updateScheduleRule(mission.id, manuallyDisabled.id, { enabled: false });
+
+    service.pauseMissionAutomation(mission.id);
+
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === enabled.id)?.enabled).toBe(false);
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === enabled.id)?.metadata.pausedByAutomationToggle).toBe(true);
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === manuallyDisabled.id)?.metadata.pausedByAutomationToggle).toBeUndefined();
+    expect(service.getAutomationSummary(mission.id).automationPaused).toBe(true);
+
+    service.resumeMissionAutomation(mission.id);
+
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === enabled.id)?.enabled).toBe(true);
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === enabled.id)?.metadata.pausedByAutomationToggle).toBeUndefined();
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === manuallyDisabled.id)?.enabled).toBe(false);
+  });
+
   describe("HR-driven activation with negotiation", () => {
     let callCount: number;
     let fake: FakeLlmAdapter;

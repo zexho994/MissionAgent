@@ -3,6 +3,7 @@ import {
   createId,
   createMission,
   createReview,
+  createScheduleRule,
   createTask,
   transitionTask,
   validateScheduleRule,
@@ -196,6 +197,20 @@ export interface AutomationSummary {
     createdAt: string;
   };
 }
+
+export type ScheduleTemplateRequest =
+  | {
+      templateType: "daily_check" | "weekly_review";
+      assigneeRole: string;
+      taskGoal: string;
+    }
+  | {
+      templateType: "condition_response";
+      sourceAgentRole: string;
+      condition: string;
+      responseAssigneeRole: string;
+      responseTaskGoal: string;
+    };
 
 export interface ToolCallRecord {
   id: string;
@@ -874,6 +889,80 @@ export class InMemoryMissionService {
     this.persist();
   }
 
+  createScheduleRuleFromTemplate(missionId: string, input: ScheduleTemplateRequest): ScheduleRule {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+
+    let ruleInput: Parameters<typeof createScheduleRule>[0];
+    if (input.templateType === "daily_check" || input.templateType === "weekly_review") {
+      const isDaily = input.templateType === "daily_check";
+      ruleInput = {
+        name: isDaily ? "Daily check" : "Weekly review",
+        missionId,
+        enabled: true,
+        trigger: {
+          type: "cron",
+          expression: isDaily ? "0 9 * * *" : "0 9 * * 1",
+          timezone: "UTC",
+        },
+        taskTemplate: {
+          title: input.taskGoal,
+          contract: {
+            objective: input.taskGoal,
+            input: {
+              missionGoal: mission.goal,
+              templateType: input.templateType,
+            },
+            outputSchema: { summary: "string", nextActions: "array" },
+            successCriteria: ["The result directly addresses the task goal", "The result includes concrete next actions"],
+          },
+          assigneeRole: input.assigneeRole,
+          priority: "normal",
+        },
+        maxConcurrent: 1,
+        metadata: { createdBy: "user_template", templateType: input.templateType },
+      };
+    } else if (input.templateType === "condition_response") {
+      ruleInput = {
+        name: "Condition response",
+        missionId,
+        enabled: true,
+        trigger: {
+          type: "condition",
+          description: input.condition,
+          sourceAgentRole: input.sourceAgentRole,
+          evaluatePrompt: `Return true when this condition is met: ${input.condition}`,
+        },
+        taskTemplate: {
+          title: input.responseTaskGoal,
+          contract: {
+            objective: input.responseTaskGoal,
+            input: {
+              missionGoal: mission.goal,
+              condition: input.condition,
+              templateType: input.templateType,
+            },
+            outputSchema: { diagnosis: "string", recommendation: "string", nextActions: "array" },
+            successCriteria: ["The response addresses the condition", "The recommendation is actionable"],
+          },
+          assigneeRole: input.responseAssigneeRole,
+          priority: "high",
+        },
+        maxConcurrent: 1,
+        metadata: { createdBy: "user_template", templateType: input.templateType },
+      };
+    } else {
+      const unsupported = (input as { templateType?: string }).templateType;
+      throw new Error(`Unsupported schedule template: ${String(unsupported)}`);
+    }
+
+    const rule = createScheduleRule(ruleInput);
+    this.addScheduleRule(missionId, rule);
+    return rule;
+  }
+
   removeScheduleRule(missionId: string, ruleId: string): void {
     const mission = this.missions.get(missionId);
     if (!mission) {
@@ -920,6 +1009,46 @@ export class InMemoryMissionService {
         scheduler.updateRule(ruleId, patch);
       }
     }
+    this.persist();
+  }
+
+  pauseMissionAutomation(missionId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updatedRules = mission.scheduleRules.map((rule) => {
+      if (!rule.enabled) return rule;
+      return {
+        ...rule,
+        enabled: false,
+        metadata: {
+          ...rule.metadata,
+          pausedByAutomationToggle: true,
+        },
+      };
+    });
+    this.missions.set(mission.id, { ...mission, scheduleRules: updatedRules });
+    this.schedulers.get(missionId)?.restart(updatedRules);
+    this.persist();
+  }
+
+  resumeMissionAutomation(missionId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updatedRules = mission.scheduleRules.map((rule) => {
+      if (rule.metadata.pausedByAutomationToggle !== true) return rule;
+      const { pausedByAutomationToggle: _paused, ...metadata } = rule.metadata;
+      return {
+        ...rule,
+        enabled: true,
+        metadata,
+      };
+    });
+    this.missions.set(mission.id, { ...mission, scheduleRules: updatedRules });
+    this.schedulers.get(missionId)?.restart(updatedRules);
     this.persist();
   }
 
