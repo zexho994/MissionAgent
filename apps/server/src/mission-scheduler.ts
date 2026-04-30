@@ -24,6 +24,7 @@ export interface SchedulerDeps {
   ) => Task;
   assignTask: (taskId: string, agentId: string) => void;
   notifyOwner: (message: string) => void;
+  recordSkippedTrigger?: (rule: ScheduleRule) => void;
   evaluateCondition?: (
     prompt: string,
     context: { artifactContent: string; missionGoal: string },
@@ -166,6 +167,7 @@ export class MissionScheduler {
       this.deps.notifyOwner(
         `Schedule rule "${rule.name}" skipped: no agent found for role "${rule.taskTemplate.assigneeRole}"`,
       );
+      this.deps.recordSkippedTrigger?.(rule);
       return;
     }
 

@@ -1269,6 +1269,7 @@ export class InMemoryMissionService {
       createTaskFromTemplate: (_ruleId, template, agentId) => {
         const mission = this.missions.get(missionId);
         if (!mission) throw new Error(`Mission not found: ${missionId}`);
+        const ruleName = mission.scheduleRules.find((rule) => rule.id === _ruleId)?.name ?? _ruleId;
         const task = createTask({
           missionId,
           title: template.title,
@@ -1284,6 +1285,14 @@ export class InMemoryMissionService {
           fromAgentId: "system",
           type: "task_plan",
           content: `Scheduled task "${template.title}" assigned.`,
+        });
+        this.recordScheduleTriggerEvent({
+          missionId,
+          ruleId: _ruleId,
+          ruleName,
+          taskId: assigned.id,
+          status: "created",
+          message: `Scheduled task "${template.title}" created.`,
         });
         this.persist();
         return assigned;
@@ -1306,6 +1315,16 @@ export class InMemoryMissionService {
           toAgentId: owner.id,
           type: "agent_notify",
           content: message,
+        });
+        this.persist();
+      },
+      recordSkippedTrigger: (rule) => {
+        this.recordScheduleTriggerEvent({
+          missionId,
+          ruleId: rule.id,
+          ruleName: rule.name,
+          status: "skipped",
+          message: `No agent found for role "${rule.taskTemplate.assigneeRole}".`,
         });
         this.persist();
       },

@@ -572,6 +572,47 @@ describe("InMemoryMissionService", () => {
     return rule;
   }
 
+  function addConditionRule(service: InMemoryMissionService, missionId: string, assigneeRole: string) {
+    const rule = createScheduleRule({
+      name: "Condition check",
+      missionId,
+      enabled: true,
+      trigger: {
+        type: "condition",
+        description: "Owner signal is ready",
+        sourceAgentRole: "owner",
+        evaluatePrompt: "Is the owner signal ready?",
+      },
+      taskTemplate: {
+        title: "Follow up on owner signal",
+        contract: {
+          objective: "Follow up on owner signal",
+          input: { templateType: "condition_check" },
+          outputSchema: { summary: "string" },
+          successCriteria: ["Follow-up is summarized"],
+        },
+        assigneeRole,
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: { createdBy: "test" },
+    });
+    service.addScheduleRule(missionId, rule);
+    return rule;
+  }
+
+  type TestScheduler = {
+    evaluateConditions(context: {
+      completedTaskAssigneeRole: string;
+      artifactContent: string;
+      missionGoal: string;
+    }): Promise<void>;
+  };
+
+  function schedulerFor(service: InMemoryMissionService, missionId: string): TestScheduler {
+    return (service as unknown as { getOrCreateScheduler(missionId: string): TestScheduler }).getOrCreateScheduler(missionId);
+  }
+
   it("records a structured trigger event when a schedule rule is triggered", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Track GitHub growth" });
@@ -612,6 +653,90 @@ describe("InMemoryMissionService", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("records a skipped trigger event when a manual schedule trigger has no matching agent", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = createScheduleRule({
+      name: "Missing role check",
+      missionId: mission.id,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "Check unavailable specialist queue",
+        contract: {
+          objective: "Check unavailable specialist queue",
+          input: { templateType: "missing_role_check" },
+          outputSchema: { summary: "string" },
+          successCriteria: ["Skipped trigger is visible"],
+        },
+        assigneeRole: "missing_specialist",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: { createdBy: "test" },
+    });
+    service.addScheduleRule(mission.id, rule);
+
+    service.triggerScheduleRule(mission.id, rule.id);
+
+    expect(service.snapshot().scheduleTriggerEvents).toEqual([
+      expect.objectContaining({
+        missionId: mission.id,
+        ruleId: rule.id,
+        ruleName: "Missing role check",
+        status: "skipped",
+        message: "No agent found for role \"missing_specialist\".",
+      }),
+    ]);
+  });
+
+  it("records a created trigger event when the scheduler creates a task", async () => {
+    const service = new InMemoryMissionService({ llm: new FakeLlmAdapter(() => "true") });
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = addConditionRule(service, mission.id, "owner");
+    const scheduler = schedulerFor(service, mission.id);
+
+    await scheduler.evaluateConditions({
+      completedTaskAssigneeRole: "owner",
+      artifactContent: JSON.stringify({ ready: true }),
+      missionGoal: mission.goal,
+    });
+
+    expect(service.snapshot().scheduleTriggerEvents).toEqual([
+      expect.objectContaining({
+        missionId: mission.id,
+        ruleId: rule.id,
+        ruleName: "Condition check",
+        taskId: expect.stringMatching(/^task_/),
+        status: "created",
+        message: "Scheduled task \"Follow up on owner signal\" created.",
+      }),
+    ]);
+  });
+
+  it("records a skipped trigger event when the scheduler cannot find an assignee", async () => {
+    const service = new InMemoryMissionService({ llm: new FakeLlmAdapter(() => "true") });
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = addConditionRule(service, mission.id, "missing_specialist");
+    const scheduler = schedulerFor(service, mission.id);
+
+    await scheduler.evaluateConditions({
+      completedTaskAssigneeRole: "owner",
+      artifactContent: JSON.stringify({ ready: true }),
+      missionGoal: mission.goal,
+    });
+
+    expect(service.snapshot().scheduleTriggerEvents).toEqual([
+      expect.objectContaining({
+        missionId: mission.id,
+        ruleId: rule.id,
+        ruleName: "Condition check",
+        status: "skipped",
+        message: "No agent found for role \"missing_specialist\".",
+      }),
+    ]);
   });
 
   describe("HR-driven activation with negotiation", () => {

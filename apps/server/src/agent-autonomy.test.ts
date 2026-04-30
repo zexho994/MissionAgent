@@ -67,6 +67,7 @@ function makeTestDeps(): {
     agentMessages: [],
     threads: [],
     taskEvents: [],
+    scheduleTriggerEvents: [],
     toolCalls: [],
     decisions: [],
     knowledgeEntries: [],

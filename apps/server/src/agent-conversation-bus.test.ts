@@ -26,6 +26,7 @@ const baseSnapshot: MissionSnapshot = {
   agentMessages: [],
   threads: [],
   taskEvents: [],
+  scheduleTriggerEvents: [],
   toolCalls: [],
   decisions: [],
   knowledgeEntries: [],
