@@ -819,7 +819,12 @@ export class InMemoryMissionService {
     };
     this.missions.set(updated.id, updated);
     if (updated.status === "active") {
-      this.getOrCreateScheduler(missionId).start(updated.scheduleRules);
+      const scheduler = this.getOrCreateScheduler(missionId);
+      if (scheduler.isRunning()) {
+        scheduler.addRule(rule);
+      } else {
+        scheduler.start(updated.scheduleRules);
+      }
     } else {
       this.getOrCreateScheduler(missionId).addRule(rule);
     }
@@ -864,7 +869,14 @@ export class InMemoryMissionService {
       scheduleRules: nextRules,
     };
     this.missions.set(updated.id, updated);
-    this.schedulers.get(missionId)?.updateRule(ruleId, patch);
+    const scheduler = this.schedulers.get(missionId);
+    if (scheduler) {
+      if (patch.trigger !== undefined && updated.status === "active") {
+        scheduler.restart(updated.scheduleRules);
+      } else {
+        scheduler.updateRule(ruleId, patch);
+      }
+    }
     this.persist();
   }
 
@@ -874,6 +886,14 @@ export class InMemoryMissionService {
       throw new Error(`Mission not found: ${missionId}`);
     }
     return [...mission.scheduleRules];
+  }
+
+  getScheduleRuleNextRunAt(missionId: string, ruleId: string): string | undefined {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    return this.schedulers.get(missionId)?.getNextRunAt(ruleId);
   }
 
   triggerScheduleRule(missionId: string, ruleId: string): void {

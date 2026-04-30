@@ -245,6 +245,17 @@ describe("NegotiationManager", () => {
       expect(deps.missions.get(mission.id)?.scheduleRules.length).toBeGreaterThan(0);
     });
 
+    it("uses configured default timezone for schedule rules", async () => {
+      deps.config.scheduler = { defaultTimezone: "UTC" };
+      const manager = new NegotiationManager(deps);
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+
+      manager.confirmNegotiation({ missionId: mission.id }, mission);
+
+      const cronRule = deps.missions.get(mission.id)?.scheduleRules.find((rule) => rule.trigger.type === "cron");
+      expect(cronRule?.trigger).toMatchObject({ timezone: "UTC" });
+    });
+
     it("should propagate toolPermissions from RoleSpec to worker agents", async () => {
       const manager = new NegotiationManager(deps);
       await manager.startNegotiation({ missionId: mission.id }, mission);

@@ -437,6 +437,39 @@ describe("schedule API endpoints", () => {
     expect(missions.getScheduleRules(missionId)[0]?.id).toBe(ruleId);
   });
 
+  it("PATCH /api/missions/:id/schedule/:ruleId restarts scheduler when trigger changes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-29T08:59:00Z"));
+
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId, { assigneeRole: "owner" });
+
+    const patchResp = await handleApiRequest(
+      {
+        method: "PATCH",
+        path: `/api/missions/${missionId}/schedule/${ruleId}`,
+        body: {
+          trigger: {
+            type: "condition",
+            description: "Engagement drops",
+            sourceAgentRole: "owner",
+            evaluatePrompt: "Return true if engagement drops.",
+          },
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    const listResp = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${missionId}/schedule` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(patchResp.status).toBe(200);
+    const rules = (listResp.body as { rules: Array<{ id: string; nextRunAt?: string }> }).rules;
+    expect(rules.find((rule) => rule.id === ruleId)?.nextRunAt).toBeUndefined();
+  });
+
   it("POST /api/missions/:id/schedule/:ruleId/trigger manually triggers", async () => {
     const missions = new InMemoryMissionService();
     const missionId = await createMissionViaApi(missions);
@@ -479,5 +512,23 @@ describe("schedule API endpoints", () => {
     const scheduledTask = missions.snapshot().tasks.find((task) => task.title === "Cron-created task");
     expect(missions.snapshot().tasks.length).toBe(before + 1);
     expect(scheduledTask?.scheduleRuleId).toMatch(/^schedule_/);
+  });
+
+  it("GET /api/missions/:id/schedule exposes nextRunAt for cron rules", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-29T08:59:00Z"));
+
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId, { assigneeRole: "owner" });
+
+    const resp = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${missionId}/schedule` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(200);
+    const rules = (resp.body as { rules: Array<{ id: string; nextRunAt?: string }> }).rules;
+    expect(rules.find((rule) => rule.id === ruleId)?.nextRunAt).toBe("2026-04-29T09:00:00.000Z");
   });
 });

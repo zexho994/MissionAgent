@@ -58,6 +58,9 @@ export interface AgentSystemConfig {
     maxConcurrentEvals?: number;
     reportFrequencyTicks?: number;
   };
+  scheduler?: {
+    defaultTimezone?: string;
+  };
   ui: {
     emptyPrompt: string;
     starterPrompts: Array<{ label: string; value: string }>;

@@ -57,6 +57,8 @@ export class MissionScheduler {
       this.deps.clock.clearInterval(this.intervalHandle);
       this.intervalHandle = undefined;
     }
+    this.rules = [];
+    this.nextRunByRuleId.clear();
     this.running = false;
   }
 
@@ -78,13 +80,25 @@ export class MissionScheduler {
     this.rules = this.rules.map((rule) => {
       if (rule.id !== ruleId) return rule;
       const updated = { ...rule, ...patch };
-      this.seedNextRun(updated);
+      if (updated.trigger.type === "cron") {
+        this.seedNextRun(updated);
+      } else {
+        this.nextRunByRuleId.delete(ruleId);
+      }
       return updated;
     });
   }
 
   getRules(): ScheduleRule[] {
     return [...this.rules];
+  }
+
+  isRunning(): boolean {
+    return this.running;
+  }
+
+  getNextRunAt(ruleId: string): string | undefined {
+    return this.nextRunByRuleId.get(ruleId);
   }
 
   async evaluateConditions(context: {

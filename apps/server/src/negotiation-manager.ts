@@ -244,7 +244,7 @@ export class NegotiationManager {
         ? {
             type: "cron" as const,
             expression: planItem.cronExpression,
-            timezone: "Asia/Shanghai",
+            timezone: planItem.timezone ?? this.config.scheduler?.defaultTimezone ?? "Asia/Shanghai",
           }
         : {
             type: "condition" as const,

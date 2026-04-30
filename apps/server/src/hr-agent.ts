@@ -19,6 +19,7 @@ export interface MissionAnalysis {
 export interface SchedulePlanItem {
   name: string;
   cronExpression?: string;
+  timezone?: string;
   assigneeRole: string;
   taskDescription: string;
   justification: string;
@@ -620,7 +621,7 @@ function buildSchedulePlanPrompt(brief: MissionBrief, roleSpecs: RoleSpec[]): st
     "",
     "Return a JSON array of schedule items. Use role ids exactly as assigneeRole/source role.",
     "Each item must contain name, assigneeRole, taskDescription, justification.",
-    "For periodic tasks include cronExpression using five-field cron only.",
+    "For periodic tasks include cronExpression using five-field cron only, and optional timezone.",
     "For condition triggers omit cronExpression and include conditionDescription, conditionSourceRole, conditionEvaluatePrompt.",
   ].join("\n");
 }
@@ -646,7 +647,15 @@ function parseSchedulePlan(content: string, roleSpecs: RoleSpec[]): SchedulePlan
 
     const cronExpression = optionalString(candidate.cronExpression);
     if (cronExpression) {
-      return [{ name, cronExpression, assigneeRole, taskDescription, justification }];
+      const timezone = optionalString(candidate.timezone);
+      return [{
+        name,
+        cronExpression,
+        ...(timezone === undefined ? {} : { timezone }),
+        assigneeRole,
+        taskDescription,
+        justification,
+      }];
     }
 
     const conditionDescription = nonEmptyString(candidate.conditionDescription);

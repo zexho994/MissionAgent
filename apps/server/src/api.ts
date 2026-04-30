@@ -244,7 +244,11 @@ export async function handleApiRequest(
       }
 
       if (request.method === "GET" && !ruleId) {
-        return json(200, { rules: deps.missions.getScheduleRules(missionId) });
+        const rules = deps.missions.getScheduleRules(missionId).map((rule) => ({
+          ...rule,
+          nextRunAt: deps.missions.getScheduleRuleNextRunAt(missionId, rule.id),
+        }));
+        return json(200, { rules });
       }
 
       if (request.method === "POST" && !ruleId) {

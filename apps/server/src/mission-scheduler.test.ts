@@ -168,6 +168,7 @@ describe("MissionScheduler", () => {
     clock.advance(60_000);
 
     expect(createdTasks).toHaveLength(0);
+    expect(scheduler.getRules()).toEqual([]);
   });
 
   it("restart replaces rules", () => {
@@ -190,6 +191,20 @@ describe("MissionScheduler", () => {
     clock.advance(60_000);
 
     expect(createdTasks).toHaveLength(1);
+  });
+
+  it("addRule does not reset existing rule next run", () => {
+    const { deps } = makeDeps();
+    const scheduler = new MissionScheduler(deps);
+    const rule1 = cronRule();
+    const rule2 = cronRule({ name: "Second rule" });
+
+    scheduler.start([rule1]);
+    const nextRunAt = scheduler.getNextRunAt(rule1.id);
+    scheduler.addRule(rule2);
+
+    expect(scheduler.getNextRunAt(rule1.id)).toBe(nextRunAt);
+    expect(scheduler.getNextRunAt(rule2.id)).toBeDefined();
   });
 
   it("removeRule stops a specific rule", () => {
@@ -223,6 +238,18 @@ describe("MissionScheduler", () => {
     scheduler.updateRule(rule.id, { enabled: false });
 
     expect(scheduler.getRules()[0]?.enabled).toBe(false);
+  });
+
+  it("updateRule clears next run when cron rule becomes condition rule", () => {
+    const { deps } = makeDeps();
+    const scheduler = new MissionScheduler(deps);
+    const rule = cronRule();
+
+    scheduler.start([rule]);
+    expect(scheduler.getNextRunAt(rule.id)).toBeDefined();
+    scheduler.updateRule(rule.id, { trigger: conditionRule().trigger });
+
+    expect(scheduler.getNextRunAt(rule.id)).toBeUndefined();
   });
 });
 
