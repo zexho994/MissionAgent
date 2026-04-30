@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { createScheduleRule } from "@digitalagent/core";
 import { InMemoryMissionService } from "./mission-service.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
@@ -7,6 +7,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 describe("InMemoryMissionService", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("creates a mission with default success metrics from config when not provided", async () => {
     const service = new InMemoryMissionService();
 
@@ -601,6 +605,34 @@ describe("InMemoryMissionService", () => {
     return rule;
   }
 
+  function addCronRule(
+    service: InMemoryMissionService,
+    missionId: string,
+    input: { name: string; expression: string; title: string; assigneeRole?: string },
+  ) {
+    const rule = createScheduleRule({
+      name: input.name,
+      missionId,
+      enabled: true,
+      trigger: { type: "cron", expression: input.expression, timezone: "UTC" },
+      taskTemplate: {
+        title: input.title,
+        contract: {
+          objective: input.title,
+          input: {},
+          outputSchema: {},
+          successCriteria: ["Scheduled task is created"],
+        },
+        assigneeRole: input.assigneeRole ?? "owner",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: {},
+    });
+    service.addScheduleRule(missionId, rule);
+    return rule;
+  }
+
   type TestScheduler = {
     evaluateConditions(context: {
       completedTaskAssigneeRole: string;
@@ -842,6 +874,52 @@ describe("InMemoryMissionService", () => {
     expect(service.getAutomationSummary(mission.id).lastTrigger?.status).toBe("created");
   });
 
+  it("triggerNextScheduleRule chooses the earliest overdue cron rule", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    addCronRule(service, mission.id, {
+      name: "Late overdue check",
+      expression: "0 10 * * *",
+      title: "Run the later overdue check",
+    });
+    const earliest = addCronRule(service, mission.id, {
+      name: "Early overdue check",
+      expression: "0 9 * * *",
+      title: "Run the earliest overdue check",
+    });
+    vi.setSystemTime(new Date("2026-04-30T11:00:00Z"));
+
+    const task = service.triggerNextScheduleRule(mission.id);
+
+    expect(task.scheduleRuleId).toBe(earliest.id);
+    expect(task.title).toBe("Run the earliest overdue check");
+  });
+
+  it("triggerNextScheduleRule chooses the nearest future cron rule when none are overdue", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    addCronRule(service, mission.id, {
+      name: "Noon check",
+      expression: "0 12 * * *",
+      title: "Run the noon check",
+    });
+    const nearest = addCronRule(service, mission.id, {
+      name: "Morning check",
+      expression: "0 9 * * *",
+      title: "Run the morning check",
+    });
+    vi.setSystemTime(new Date("2026-04-30T08:00:00Z"));
+
+    const task = service.triggerNextScheduleRule(mission.id);
+
+    expect(task.scheduleRuleId).toBe(nearest.id);
+    expect(task.title).toBe("Run the morning check");
+  });
+
   it("triggerNextScheduleRule rejects missions without enabled cron rules", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Track GitHub growth" });
@@ -874,6 +952,36 @@ describe("InMemoryMissionService", () => {
     service.addScheduleRule(mission.id, rule);
 
     expect(() => service.triggerNextScheduleRule(mission.id)).toThrow('No agent found for role "data_analyst"');
+  });
+
+  it("triggerNextScheduleRule persists failed trigger events for missing assignee agents", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "digitalagent-trigger-next-failed-"));
+    try {
+      const storageFile = join(dir, "mission-store.json");
+      const service = new InMemoryMissionService({ storageFile });
+      const mission = await service.createMission({ goal: "Track GitHub growth" });
+      const rule = addCronRule(service, mission.id, {
+        name: "Daily analyst check",
+        expression: "0 9 * * *",
+        title: "Check yesterday's GitHub growth metrics",
+        assigneeRole: "data_analyst",
+      });
+
+      expect(() => service.triggerNextScheduleRule(mission.id)).toThrow('No agent found for role "data_analyst"');
+
+      const reloaded = new InMemoryMissionService({ storageFile });
+      expect(reloaded.snapshot().scheduleTriggerEvents).toEqual([
+        expect.objectContaining({
+          missionId: mission.id,
+          ruleId: rule.id,
+          ruleName: "Daily analyst check",
+          status: "failed",
+          message: 'No agent found for role "data_analyst".',
+        }),
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("records a skipped trigger event when the scheduler cannot find an assignee", async () => {

@@ -1048,9 +1048,14 @@ export class InMemoryMissionService {
       throw new Error("No enabled cron schedule rule available");
     }
 
-    const task = this.createTaskFromScheduleRuleStrict(mission, selected);
-    this.persist();
-    return task;
+    try {
+      const task = this.createTaskFromScheduleRuleStrict(mission, selected);
+      this.persist();
+      return task;
+    } catch (error) {
+      this.persist();
+      throw error;
+    }
   }
 
   restoreSchedulers(): void {
