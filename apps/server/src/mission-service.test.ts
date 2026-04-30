@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
+import { createScheduleRule } from "@digitalagent/core";
 import { InMemoryMissionService } from "./mission-service.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -545,6 +546,72 @@ describe("InMemoryMissionService", () => {
 
     expect(reply.type).toBe("agent_report");
     expect(reply.content).toBe("我已识别线程隔离风险，建议先补并发对话测试。");
+  });
+
+  function addOwnerDailyRule(service: InMemoryMissionService, missionId: string) {
+    const rule = createScheduleRule({
+      name: "Daily check",
+      missionId,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "Check yesterday's GitHub growth metrics",
+        contract: {
+          objective: "Check yesterday's GitHub growth metrics",
+          input: { templateType: "daily_check" },
+          outputSchema: { summary: "string" },
+          successCriteria: ["Metric check is summarized"],
+        },
+        assigneeRole: "owner",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: { createdBy: "test" },
+    });
+    service.addScheduleRule(missionId, rule);
+    return rule;
+  }
+
+  it("records a structured trigger event when a schedule rule is triggered", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const owner = service.snapshot().agents.find((agent) => agent.missionId === mission.id && agent.role === "owner");
+    if (!owner) throw new Error("missing owner");
+
+    const rule = addOwnerDailyRule(service, mission.id);
+
+    service.triggerScheduleRule(mission.id, rule.id);
+
+    const snapshot = service.snapshot();
+    expect(snapshot.scheduleTriggerEvents).toHaveLength(1);
+    expect(snapshot.scheduleTriggerEvents[0]).toEqual({
+      id: expect.stringMatching(/^schedule_trigger_/),
+      missionId: mission.id,
+      ruleId: rule.id,
+      ruleName: "Daily check",
+      taskId: expect.stringMatching(/^task_/),
+      status: "created",
+      message: "Scheduled task \"Check yesterday's GitHub growth metrics\" created.",
+      createdAt: expect.any(String),
+    });
+  });
+
+  it("persists schedule trigger events across reloads", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "digitalagent-trigger-events-"));
+    try {
+      const storageFile = join(dir, "mission-store.json");
+      const service = new InMemoryMissionService({ storageFile });
+      const mission = await service.createMission({ goal: "Track GitHub growth" });
+      const rule = addOwnerDailyRule(service, mission.id);
+      service.triggerScheduleRule(mission.id, rule.id);
+
+      const reloaded = new InMemoryMissionService({ storageFile });
+
+      expect(reloaded.snapshot().scheduleTriggerEvents).toHaveLength(1);
+      expect(reloaded.snapshot().scheduleTriggerEvents[0]?.ruleId).toBe(rule.id);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   describe("HR-driven activation with negotiation", () => {

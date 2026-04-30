@@ -157,6 +157,17 @@ export interface WarRoomTaskEvent {
   createdAt: string;
 }
 
+export interface ScheduleTriggerEvent {
+  id: string;
+  missionId: string;
+  ruleId: string;
+  ruleName: string;
+  taskId?: string;
+  status: "created" | "skipped" | "failed";
+  message: string;
+  createdAt: string;
+}
+
 export interface ToolCallRecord {
   id: string;
   missionId: string;
@@ -193,6 +204,7 @@ export interface MissionSnapshot {
   agentMessages: AgentMessage[];
   threads: ConversationThread[];
   taskEvents: WarRoomTaskEvent[];
+  scheduleTriggerEvents: ScheduleTriggerEvent[];
   toolCalls: ToolCallRecord[];
   decisions: DecisionRecord[];
   knowledgeEntries: KnowledgeEntry[];
@@ -230,6 +242,7 @@ export class InMemoryMissionService {
   private readonly agentMessages = new Map<string, AgentMessage>();
   private readonly threads = new Map<string, ConversationThread>();
   private readonly taskEvents = new Map<string, WarRoomTaskEvent>();
+  private readonly scheduleTriggerEvents = new Map<string, ScheduleTriggerEvent>();
   private readonly toolCalls = new Map<string, ToolCallRecord>();
   private readonly decisions = new Map<string, DecisionRecord>();
   private readonly knowledgeEntries = new Map<string, KnowledgeEntry>();
@@ -761,6 +774,7 @@ export class InMemoryMissionService {
       agentMessages: [...this.agentMessages.values()],
       threads: [...this.threads.values()],
       taskEvents: [...this.taskEvents.values()],
+      scheduleTriggerEvents: [...this.scheduleTriggerEvents.values()],
       toolCalls: [...this.toolCalls.values()],
       decisions: [...this.decisions.values()],
       knowledgeEntries: [...this.knowledgeEntries.values()],
@@ -1303,7 +1317,7 @@ export class InMemoryMissionService {
     return scheduler;
   }
 
-  private createTaskFromScheduleRule(mission: Mission, rule: ScheduleRule): void {
+  private createTaskFromScheduleRule(mission: Mission, rule: ScheduleRule): Task | undefined {
     const agent = [...this.agents.values()].find(
       (candidate) => candidate.missionId === mission.id && candidate.role === rule.taskTemplate.assigneeRole,
     );
@@ -1320,7 +1334,14 @@ export class InMemoryMissionService {
           content: `Schedule rule "${rule.name}" skipped: no agent for role "${rule.taskTemplate.assigneeRole}"`,
         });
       }
-      return;
+      this.recordScheduleTriggerEvent({
+        missionId: mission.id,
+        ruleId: rule.id,
+        ruleName: rule.name,
+        status: "skipped",
+        message: `No agent found for role "${rule.taskTemplate.assigneeRole}".`,
+      });
+      return undefined;
     }
 
     const task = createTask({
@@ -1339,6 +1360,25 @@ export class InMemoryMissionService {
       type: "task_plan",
       content: `Scheduled task "${rule.taskTemplate.title}" assigned to ${agent.name}.`,
     });
+    this.recordScheduleTriggerEvent({
+      missionId: mission.id,
+      ruleId: rule.id,
+      ruleName: rule.name,
+      taskId: assigned.id,
+      status: "created",
+      message: `Scheduled task "${rule.taskTemplate.title}" created.`,
+    });
+    return assigned;
+  }
+
+  private recordScheduleTriggerEvent(input: Omit<ScheduleTriggerEvent, "id" | "createdAt">): ScheduleTriggerEvent {
+    const event: ScheduleTriggerEvent = {
+      ...input,
+      id: createId("schedule_trigger"),
+      createdAt: new Date().toISOString(),
+    };
+    this.scheduleTriggerEvents.set(event.id, event);
+    return event;
   }
 
   private async evaluateScheduleConditions(
@@ -1558,6 +1598,9 @@ export class InMemoryMissionService {
     }
     for (const thread of stored.threads ?? []) this.threads.set(thread.id, thread);
     for (const event of stored.taskEvents) this.taskEvents.set(event.id, event);
+    for (const triggerEvent of stored.scheduleTriggerEvents ?? []) {
+      this.scheduleTriggerEvents.set(triggerEvent.id, triggerEvent);
+    }
     for (const call of stored.toolCalls) this.toolCalls.set(call.id, call);
     for (const decision of stored.decisions) this.decisions.set(decision.id, decision);
     for (const entry of stored.knowledgeEntries ?? []) this.knowledgeEntries.set(entry.id, entry);
