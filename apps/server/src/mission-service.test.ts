@@ -811,6 +811,71 @@ describe("InMemoryMissionService", () => {
     });
   });
 
+  it("triggerNextScheduleRule creates a task from the nearest enabled cron rule", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = createScheduleRule({
+      name: "Daily check",
+      missionId: mission.id,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "Check yesterday's GitHub growth metrics",
+        contract: {
+          objective: "Check yesterday's GitHub growth metrics",
+          input: {},
+          outputSchema: {},
+          successCriteria: ["Metric check is summarized"],
+        },
+        assigneeRole: "owner",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: {},
+    });
+    service.addScheduleRule(mission.id, rule);
+
+    const task = service.triggerNextScheduleRule(mission.id);
+
+    expect(task.scheduleRuleId).toBe(rule.id);
+    expect(task.title).toBe("Check yesterday's GitHub growth metrics");
+    expect(service.getAutomationSummary(mission.id).lastTrigger?.status).toBe("created");
+  });
+
+  it("triggerNextScheduleRule rejects missions without enabled cron rules", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+
+    expect(() => service.triggerNextScheduleRule(mission.id)).toThrow("No enabled cron schedule rule available");
+  });
+
+  it("triggerNextScheduleRule rejects missing assignee agents", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = createScheduleRule({
+      name: "Daily check",
+      missionId: mission.id,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "Check yesterday's GitHub growth metrics",
+        contract: {
+          objective: "Check yesterday's GitHub growth metrics",
+          input: {},
+          outputSchema: {},
+          successCriteria: ["Metric check is summarized"],
+        },
+        assigneeRole: "data_analyst",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: {},
+    });
+    service.addScheduleRule(mission.id, rule);
+
+    expect(() => service.triggerNextScheduleRule(mission.id)).toThrow('No agent found for role "data_analyst"');
+  });
+
   it("records a skipped trigger event when the scheduler cannot find an assignee", async () => {
     const service = new InMemoryMissionService({ llm: new FakeLlmAdapter(() => "true") });
     const mission = await service.createMission({ goal: "Track GitHub growth" });

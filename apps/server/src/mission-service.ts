@@ -1020,6 +1020,39 @@ export class InMemoryMissionService {
     this.persist();
   }
 
+  triggerNextScheduleRule(missionId: string): Task {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+
+    const candidates = mission.scheduleRules
+      .filter((rule) => rule.enabled && rule.trigger.type === "cron")
+      .map((rule) => ({
+        rule,
+        nextRunAt: this.getScheduleRuleNextRunAt(missionId, rule.id) ?? "",
+      }))
+      .filter((candidate) => candidate.nextRunAt);
+
+    if (candidates.length === 0) {
+      throw new Error("No enabled cron schedule rule available");
+    }
+
+    const nowIso = new Date().toISOString();
+    const overdue = candidates
+      .filter((candidate) => candidate.nextRunAt <= nowIso)
+      .sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
+    const future = candidates.sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
+    const selected = (overdue[0] ?? future[0])?.rule;
+    if (!selected) {
+      throw new Error("No enabled cron schedule rule available");
+    }
+
+    const task = this.createTaskFromScheduleRuleStrict(mission, selected);
+    this.persist();
+    return task;
+  }
+
   restoreSchedulers(): void {
     for (const mission of this.missions.values()) {
       if (mission.status === "active" && mission.scheduleRules.length > 0) {
@@ -1458,6 +1491,78 @@ export class InMemoryMissionService {
         message: `No agent found for role "${rule.taskTemplate.assigneeRole}".`,
       });
       return undefined;
+    }
+
+    const task = createTask({
+      missionId: mission.id,
+      title: rule.taskTemplate.title,
+      dependencies: [],
+      contract: rule.taskTemplate.contract,
+      approvalRequired: false,
+      scheduleRuleId: rule.id,
+    });
+    const assigned = { ...task, assigneeAgentId: agent.id };
+    this.tasks.set(assigned.id, assigned);
+    this.appendMessage({
+      missionId: mission.id,
+      fromAgentId: "system",
+      type: "task_plan",
+      content: `Scheduled task "${rule.taskTemplate.title}" assigned to ${agent.name}.`,
+    });
+    this.recordScheduleTriggerEvent({
+      missionId: mission.id,
+      ruleId: rule.id,
+      ruleName: rule.name,
+      taskId: assigned.id,
+      status: "created",
+      message: `Scheduled task "${rule.taskTemplate.title}" created.`,
+    });
+    return assigned;
+  }
+
+  private createTaskFromScheduleRuleStrict(mission: Mission, rule: ScheduleRule): Task {
+    if (!rule.enabled) {
+      this.recordScheduleTriggerEvent({
+        missionId: mission.id,
+        ruleId: rule.id,
+        ruleName: rule.name,
+        status: "failed",
+        message: "Schedule rule is disabled.",
+      });
+      throw new Error("Schedule rule is disabled");
+    }
+
+    const incomplete = [...this.tasks.values()].filter(
+      (task) =>
+        task.missionId === mission.id &&
+        task.scheduleRuleId === rule.id &&
+        task.status !== "completed" &&
+        task.status !== "failed" &&
+        task.status !== "cancelled",
+    ).length;
+    if (incomplete >= rule.maxConcurrent) {
+      this.recordScheduleTriggerEvent({
+        missionId: mission.id,
+        ruleId: rule.id,
+        ruleName: rule.name,
+        status: "failed",
+        message: "Schedule rule is already at max concurrency.",
+      });
+      throw new Error("Schedule rule is already at max concurrency");
+    }
+
+    const agent = [...this.agents.values()].find(
+      (candidate) => candidate.missionId === mission.id && candidate.role === rule.taskTemplate.assigneeRole,
+    );
+    if (!agent) {
+      this.recordScheduleTriggerEvent({
+        missionId: mission.id,
+        ruleId: rule.id,
+        ruleName: rule.name,
+        status: "failed",
+        message: `No agent found for role "${rule.taskTemplate.assigneeRole}".`,
+      });
+      throw new Error(`No agent found for role "${rule.taskTemplate.assigneeRole}"`);
     }
 
     const task = createTask({
