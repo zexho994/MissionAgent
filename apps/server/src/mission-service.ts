@@ -1039,23 +1039,26 @@ export class InMemoryMissionService {
     }
 
     const nowIso = new Date().toISOString();
-    const overdue = candidates
-      .filter((candidate) => candidate.nextRunAt <= nowIso)
-      .sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
-    const future = candidates.sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
-    const selected = (overdue[0] ?? future[0])?.rule;
+    const sortedCandidates = [...candidates].sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt));
+    const overdue = sortedCandidates.filter((candidate) => candidate.nextRunAt <= nowIso);
+    const selected = (overdue[0] ?? sortedCandidates[0])?.rule;
     if (!selected) {
       throw new Error("No enabled cron schedule rule available");
     }
 
+    let task: Task;
     try {
-      const task = this.createTaskFromScheduleRuleStrict(mission, selected);
-      this.persist();
-      return task;
+      task = this.createTaskFromScheduleRuleStrict(mission, selected);
     } catch (error) {
-      this.persist();
+      try {
+        this.persist();
+      } catch {
+        // Preserve the original fast-fail domain error.
+      }
       throw error;
     }
+    this.persist();
+    return task;
   }
 
   restoreSchedulers(): void {

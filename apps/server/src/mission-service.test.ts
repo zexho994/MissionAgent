@@ -954,6 +954,31 @@ describe("InMemoryMissionService", () => {
     expect(() => service.triggerNextScheduleRule(mission.id)).toThrow('No agent found for role "data_analyst"');
   });
 
+  it("triggerNextScheduleRule rejects rules already at max concurrency", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T00:00:00Z"));
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    addCronRule(service, mission.id, {
+      name: "Daily check",
+      expression: "0 9 * * *",
+      title: "Check yesterday's GitHub growth metrics",
+    });
+
+    service.triggerNextScheduleRule(mission.id);
+    vi.setSystemTime(new Date("2026-04-30T00:00:01Z"));
+
+    expect(() => service.triggerNextScheduleRule(mission.id)).toThrow(
+      "Schedule rule is already at max concurrency",
+    );
+    expect(service.getAutomationSummary(mission.id).lastTrigger).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        message: "Schedule rule is already at max concurrency.",
+      }),
+    );
+  });
+
   it("triggerNextScheduleRule persists failed trigger events for missing assignee agents", async () => {
     const dir = mkdtempSync(join(tmpdir(), "digitalagent-trigger-next-failed-"));
     try {
