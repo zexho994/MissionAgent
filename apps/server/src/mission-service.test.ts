@@ -716,6 +716,101 @@ describe("InMemoryMissionService", () => {
     ]);
   });
 
+  it("returns an empty automation summary when a mission has no schedule rules", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+
+    expect(service.getAutomationSummary(mission.id)).toEqual({
+      missionId: mission.id,
+      rulesCount: 0,
+      automationPaused: false,
+      currentScheduledTasks: [],
+    });
+  });
+
+  it("returns the next cron action in the automation summary", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = createScheduleRule({
+      name: "Daily check",
+      missionId: mission.id,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "Check yesterday's GitHub growth metrics",
+        contract: {
+          objective: "Check yesterday's GitHub growth metrics",
+          input: {},
+          outputSchema: {},
+          successCriteria: ["Metric check is summarized"],
+        },
+        assigneeRole: "owner",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: {},
+    });
+    service.addScheduleRule(mission.id, rule);
+
+    const summary = service.getAutomationSummary(mission.id);
+
+    expect(summary.rulesCount).toBe(1);
+    expect(summary.nextAction).toEqual({
+      ruleId: rule.id,
+      ruleName: "Daily check",
+      nextRunAt: expect.any(String),
+      assigneeRole: "owner",
+      assigneeAgentId: expect.stringMatching(/^agent_/),
+      taskTitle: "Check yesterday's GitHub growth metrics",
+    });
+  });
+
+  it("includes current scheduled tasks and the latest trigger event in the automation summary", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = createScheduleRule({
+      name: "Daily check",
+      missionId: mission.id,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "Check yesterday's GitHub growth metrics",
+        contract: {
+          objective: "Check yesterday's GitHub growth metrics",
+          input: {},
+          outputSchema: {},
+          successCriteria: ["Metric check is summarized"],
+        },
+        assigneeRole: "owner",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: {},
+    });
+    service.addScheduleRule(mission.id, rule);
+    service.triggerScheduleRule(mission.id, rule.id);
+
+    const summary = service.getAutomationSummary(mission.id);
+
+    expect(summary.currentScheduledTasks).toEqual([
+      {
+        taskId: expect.stringMatching(/^task_/),
+        ruleId: rule.id,
+        title: "Check yesterday's GitHub growth metrics",
+        status: "draft",
+        assigneeAgentId: expect.stringMatching(/^agent_/),
+      },
+    ]);
+    expect(summary.lastTrigger).toEqual({
+      ruleId: rule.id,
+      ruleName: "Daily check",
+      taskId: expect.stringMatching(/^task_/),
+      status: "created",
+      message: "Scheduled task \"Check yesterday's GitHub growth metrics\" created.",
+      createdAt: expect.any(String),
+    });
+  });
+
   it("records a skipped trigger event when the scheduler cannot find an assignee", async () => {
     const service = new InMemoryMissionService({ llm: new FakeLlmAdapter(() => "true") });
     const mission = await service.createMission({ goal: "Track GitHub growth" });

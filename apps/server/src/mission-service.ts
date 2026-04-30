@@ -168,6 +168,35 @@ export interface ScheduleTriggerEvent {
   createdAt: string;
 }
 
+export interface AutomationSummary {
+  missionId: string;
+  rulesCount: number;
+  automationPaused: boolean;
+  nextAction?: {
+    ruleId: string;
+    ruleName: string;
+    nextRunAt: string;
+    assigneeRole: string;
+    assigneeAgentId?: string;
+    taskTitle: string;
+  };
+  currentScheduledTasks: Array<{
+    taskId: string;
+    ruleId: string;
+    title: string;
+    status: string;
+    assigneeAgentId?: string;
+  }>;
+  lastTrigger?: {
+    ruleId: string;
+    ruleName: string;
+    taskId?: string;
+    status: "created" | "skipped" | "failed";
+    message: string;
+    createdAt: string;
+  };
+}
+
 export interface ToolCallRecord {
   id: string;
   missionId: string;
@@ -908,6 +937,74 @@ export class InMemoryMissionService {
       throw new Error(`Mission not found: ${missionId}`);
     }
     return this.schedulers.get(missionId)?.getNextRunAt(ruleId);
+  }
+
+  getAutomationSummary(missionId: string): AutomationSummary {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+
+    const rules = mission.scheduleRules;
+    const agents = [...this.agents.values()].filter((agent) => agent.missionId === missionId);
+    const agentByRole = new Map(agents.map((agent) => [agent.role, agent]));
+    const currentScheduledTasks = [...this.tasks.values()]
+      .filter((task) => task.missionId === missionId && task.scheduleRuleId)
+      .filter((task) => task.status !== "completed" && task.status !== "failed" && task.status !== "cancelled")
+      .map((task) => ({
+        taskId: task.id,
+        ruleId: task.scheduleRuleId!,
+        title: task.title,
+        status: task.status,
+        ...(task.assigneeAgentId ? { assigneeAgentId: task.assigneeAgentId } : {}),
+      }));
+
+    const nextAction = rules
+      .filter((rule) => rule.enabled && rule.trigger.type === "cron")
+      .map((rule) => {
+        const nextRunAt = this.getScheduleRuleNextRunAt(missionId, rule.id);
+        if (!nextRunAt) return undefined;
+        const assignee = agentByRole.get(rule.taskTemplate.assigneeRole);
+        return {
+          ruleId: rule.id,
+          ruleName: rule.name,
+          nextRunAt,
+          assigneeRole: rule.taskTemplate.assigneeRole,
+          ...(assignee ? { assigneeAgentId: assignee.id } : {}),
+          taskTitle: rule.taskTemplate.title,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .sort((a, b) => a.nextRunAt.localeCompare(b.nextRunAt))[0];
+
+    const lastTriggerEvent = [...this.scheduleTriggerEvents.values()]
+      .filter((event) => event.missionId === missionId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+
+    const automationPaused =
+      rules.length > 0 &&
+      rules.every((rule) => !rule.enabled) &&
+      rules.some((rule) => rule.metadata.pausedByAutomationToggle === true);
+
+    return {
+      missionId,
+      rulesCount: rules.length,
+      automationPaused,
+      currentScheduledTasks,
+      ...(nextAction ? { nextAction } : {}),
+      ...(lastTriggerEvent
+        ? {
+            lastTrigger: {
+              ruleId: lastTriggerEvent.ruleId,
+              ruleName: lastTriggerEvent.ruleName,
+              ...(lastTriggerEvent.taskId ? { taskId: lastTriggerEvent.taskId } : {}),
+              status: lastTriggerEvent.status,
+              message: lastTriggerEvent.message,
+              createdAt: lastTriggerEvent.createdAt,
+            },
+          }
+        : {}),
+    };
   }
 
   triggerScheduleRule(missionId: string, ruleId: string): void {
