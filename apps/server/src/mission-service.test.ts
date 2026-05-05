@@ -11,6 +11,24 @@ describe("InMemoryMissionService", () => {
     vi.useRealTimers();
   });
 
+  async function createConfirmedMission(service: InMemoryMissionService) {
+    const mission = await service.createMission({ goal: "Run a mission" });
+    await service.continueMission({
+      missionId: mission.id,
+      message: "Audience is developers. Timeline is one month.",
+    });
+    const withBrief = service.snapshot().missions.find((candidate) => candidate.id === mission.id);
+    if (!withBrief?.brief) throw new Error("brief should exist");
+    service.confirmBrief({ missionId: mission.id });
+    return mission;
+  }
+
+  async function createConfirmedActivatedMission(service: InMemoryMissionService) {
+    const mission = await createConfirmedMission(service);
+    service.activateMission({ missionId: mission.id });
+    return mission;
+  }
+
   it("creates a mission with default success metrics from config when not provided", async () => {
     const service = new InMemoryMissionService();
 
@@ -451,6 +469,130 @@ describe("InMemoryMissionService", () => {
       }),
     ]);
     expect(service.snapshot().agents.find((agent) => agent.role === "owner")?.status).toBe("blocked");
+  });
+
+  it("diagnoses a new mission as briefing", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Grow GitHub repositories" });
+
+    expect(service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true })).toMatchObject({
+      missionId: mission.id,
+      stage: "briefing",
+      ready: false,
+      signals: {
+        briefConfirmed: false,
+        hasPlan: false,
+        teamReady: false,
+        hasInitialTasks: false,
+        hasExecutionRunner: true,
+        hasScheduleRules: false,
+        hasRunningExecution: false,
+      },
+    });
+  });
+
+  it("diagnoses a brief-confirmed mission without plan as missing_plan", async () => {
+    const service = new InMemoryMissionService({
+      llm: new FakeLlmAdapter(() => JSON.stringify({
+        goal: "Grow GitHub repositories",
+        scope: "GitHub growth",
+        constraints: ["one month"],
+        successMetrics: ["two repositories exceed 1k stars"],
+        keyAssumptions: ["developer audience"],
+      })),
+    });
+    const mission = await createConfirmedMission(service);
+
+    const diagnosis = service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true });
+
+    expect(diagnosis.stage).toBe("missing_plan");
+    expect(diagnosis.blockers[0]).toMatchObject({
+      code: "mission_plan_missing",
+    });
+  });
+
+  it("diagnoses running execution before other blockers", async () => {
+    const service = new InMemoryMissionService({
+      llm: new FakeLlmAdapter(() => JSON.stringify({
+        goal: "Run a mission",
+        scope: "Execution test",
+        constraints: [],
+        successMetrics: ["Mission is runnable"],
+        keyAssumptions: [],
+      })),
+    });
+    const mission = await createConfirmedActivatedMission(service);
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    service.startExecution({ missionId: mission.id, taskId: task!.id });
+
+    expect(service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true }).stage).toBe("running");
+  });
+
+  it("diagnoses failed execution as blocked", async () => {
+    const service = new InMemoryMissionService({
+      llm: new FakeLlmAdapter(() => JSON.stringify({
+        goal: "Run a mission",
+        scope: "Execution test",
+        constraints: [],
+        successMetrics: ["Mission is runnable"],
+        keyAssumptions: [],
+      })),
+    });
+    const mission = await createConfirmedActivatedMission(service);
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
+    service.failExecution({ executionId: execution.id, error: "runner unavailable" });
+
+    const diagnosis = service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true });
+
+    expect(diagnosis.stage).toBe("blocked");
+    expect(diagnosis.blockers[0]).toMatchObject({
+      code: "execution_blocked",
+    });
+  });
+
+  it("diagnoses missing execution runner when executable tasks exist", async () => {
+    const service = new InMemoryMissionService({
+      llm: new FakeLlmAdapter(() => JSON.stringify({
+        goal: "Run a mission",
+        scope: "Execution test",
+        constraints: [],
+        successMetrics: ["Mission is runnable"],
+        keyAssumptions: [],
+      })),
+    });
+    const mission = await createConfirmedActivatedMission(service);
+
+    const diagnosis = service.getAutopilotDiagnosis(mission.id, {
+      hasExecutionRunner: false,
+      hasPlan: true,
+    });
+
+    expect(diagnosis.stage).toBe("missing_execution_runner");
+    expect(diagnosis.blockers.some((blocker) => blocker.code === "execution_runner_missing")).toBe(true);
+  });
+
+  it("diagnoses missing schedule after earlier blockers are cleared", async () => {
+    const service = new InMemoryMissionService({
+      llm: new FakeLlmAdapter(() => JSON.stringify({
+        goal: "Run a mission",
+        scope: "Execution test",
+        constraints: [],
+        successMetrics: ["Mission is runnable"],
+        keyAssumptions: [],
+      })),
+    });
+    const mission = await createConfirmedActivatedMission(service);
+
+    const diagnosis = service.getAutopilotDiagnosis(mission.id, {
+      hasExecutionRunner: true,
+      hasPlan: true,
+    });
+
+    expect(diagnosis.stage).toBe("missing_schedule");
+    expect(diagnosis.blockers.some((blocker) => blocker.code === "schedule_rules_missing")).toBe(true);
   });
 
   it("triggers agent collaboration reports after execution completes", async () => {

@@ -198,6 +198,55 @@ export interface AutomationSummary {
   };
 }
 
+export type AutopilotStage =
+  | "briefing"
+  | "missing_plan"
+  | "team_not_ready"
+  | "missing_initial_tasks"
+  | "missing_execution_runner"
+  | "missing_schedule"
+  | "ready"
+  | "running"
+  | "blocked";
+
+export type AutopilotBlockerCode =
+  | "brief_not_confirmed"
+  | "mission_plan_missing"
+  | "team_not_ready"
+  | "initial_tasks_missing"
+  | "execution_runner_missing"
+  | "schedule_rules_missing"
+  | "execution_blocked";
+
+export interface AutopilotBlocker {
+  code: AutopilotBlockerCode;
+  message: string;
+  nextAction: string;
+}
+
+export interface AutopilotDiagnosisSignals {
+  briefConfirmed: boolean;
+  hasPlan: boolean;
+  teamReady: boolean;
+  hasInitialTasks: boolean;
+  hasExecutionRunner: boolean;
+  hasScheduleRules: boolean;
+  hasRunningExecution: boolean;
+}
+
+export interface AutopilotDiagnosis {
+  missionId: string;
+  stage: AutopilotStage;
+  ready: boolean;
+  blockers: AutopilotBlocker[];
+  signals: AutopilotDiagnosisSignals;
+}
+
+export interface AutopilotRuntimeSignals {
+  hasExecutionRunner: boolean;
+  hasPlan?: boolean;
+}
+
 export type ScheduleTemplateRequest =
   | {
       templateType: "daily_check" | "weekly_review";
@@ -828,6 +877,114 @@ export class InMemoryMissionService {
       error: input.error,
     }, execution.missionId);
     return failed;
+  }
+
+  getAutopilotDiagnosis(missionId: string, runtime: AutopilotRuntimeSignals): AutopilotDiagnosis {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+
+    const missionExecutions = [...this.executions.values()].filter((execution) => execution.missionId === missionId);
+    const missionAgents = [...this.agents.values()].filter((agent) => agent.missionId === missionId);
+    const executableTasks = [...this.tasks.values()].filter(
+      (task) =>
+        task.missionId === missionId &&
+        task.status !== "completed" &&
+        task.status !== "failed" &&
+        task.status !== "cancelled",
+    );
+
+    const hasRunningExecution = missionExecutions.some((execution) => execution.status === "running");
+    const hasFailedExecution = missionExecutions.some((execution) => execution.status === "failed");
+    const hasBlockedAgent = missionAgents.some((agent) => agent.status === "blocked");
+    const signals: AutopilotDiagnosisSignals = {
+      briefConfirmed: mission.briefConfirmed === true,
+      hasPlan: runtime.hasPlan === true,
+      teamReady: missionAgents.some((agent) => agent.role !== "owner" && agent.role !== "hr"),
+      hasInitialTasks: executableTasks.length > 0,
+      hasExecutionRunner: runtime.hasExecutionRunner,
+      hasScheduleRules: mission.scheduleRules.length > 0,
+      hasRunningExecution,
+    };
+
+    const blockers: AutopilotBlocker[] = [];
+    if (hasFailedExecution || hasBlockedAgent) {
+      blockers.push({
+        code: "execution_blocked",
+        message: "A mission execution or agent is blocked.",
+        nextAction: "Inspect the failed execution or blocked agent, fix the root cause, then retry the task.",
+      });
+    }
+    if (!signals.briefConfirmed) {
+      blockers.push({
+        code: "brief_not_confirmed",
+        message: "MissionBrief has not been confirmed.",
+        nextAction: "Confirm the MissionBrief before starting autopilot bootstrap.",
+      });
+    }
+    if (!signals.hasPlan) {
+      blockers.push({
+        code: "mission_plan_missing",
+        message: "MissionBrief is confirmed, but no confirmed MissionPlan exists.",
+        nextAction: "Generate and confirm a MissionPlan before treating the mission as autopilot-ready.",
+      });
+    }
+    if (!signals.teamReady) {
+      blockers.push({
+        code: "team_not_ready",
+        message: "No execution team agent exists for this mission.",
+        nextAction: "Assemble the mission team so non-owner execution agents are available.",
+      });
+    }
+    if (!signals.hasInitialTasks) {
+      blockers.push({
+        code: "initial_tasks_missing",
+        message: "No executable initial mission task exists.",
+        nextAction: "Create an initial task before runner or schedule readiness can be evaluated.",
+      });
+    }
+    if (signals.hasInitialTasks && !signals.hasExecutionRunner) {
+      blockers.push({
+        code: "execution_runner_missing",
+        message: "Executable tasks exist, but no execution runner is available.",
+        nextAction: "Provide an execution runner availability signal before launching autopilot execution.",
+      });
+    }
+    if (!signals.hasScheduleRules) {
+      blockers.push({
+        code: "schedule_rules_missing",
+        message: "No schedule rules are registered for this mission.",
+        nextAction: "Register at least one schedule rule after the mission is otherwise ready.",
+      });
+    }
+
+    let stage: AutopilotStage = "ready";
+    if (signals.hasRunningExecution) {
+      stage = "running";
+    } else if (hasFailedExecution || hasBlockedAgent) {
+      stage = "blocked";
+    } else if (!signals.briefConfirmed) {
+      stage = "briefing";
+    } else if (!signals.hasPlan) {
+      stage = "missing_plan";
+    } else if (!signals.teamReady) {
+      stage = "team_not_ready";
+    } else if (!signals.hasInitialTasks) {
+      stage = "missing_initial_tasks";
+    } else if (!signals.hasExecutionRunner) {
+      stage = "missing_execution_runner";
+    } else if (!signals.hasScheduleRules) {
+      stage = "missing_schedule";
+    }
+
+    return {
+      missionId,
+      stage,
+      ready: stage === "ready",
+      blockers,
+      signals,
+    };
   }
 
   snapshot(): MissionSnapshot {
