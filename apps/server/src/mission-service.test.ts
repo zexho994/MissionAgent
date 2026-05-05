@@ -507,6 +507,9 @@ describe("InMemoryMissionService", () => {
         hasRunningExecution: false,
       },
     });
+    expect(service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true, hasPlan: false }).blockers).toEqual([
+      expect.objectContaining({ code: "brief_not_confirmed" }),
+    ]);
   });
 
   it("diagnoses a brief-confirmed mission without plan as missing_plan", async () => {

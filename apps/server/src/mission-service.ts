@@ -942,35 +942,42 @@ export class InMemoryMissionService {
         nextAction: "Confirm the MissionBrief before starting autopilot bootstrap.",
       });
     }
-    if (!signals.hasPlan) {
+    if (signals.briefConfirmed && !signals.hasPlan) {
       blockers.push({
         code: "mission_plan_missing",
         message: "MissionBrief is confirmed, but no confirmed MissionPlan exists.",
         nextAction: "Generate and confirm a MissionPlan before treating the mission as autopilot-ready.",
       });
     }
-    if (!signals.teamReady) {
+    if (signals.briefConfirmed && signals.hasPlan && !signals.teamReady) {
       blockers.push({
         code: "team_not_ready",
         message: "No execution team agent exists for this mission.",
         nextAction: "Assemble the mission team so non-owner execution agents are available.",
       });
     }
-    if (!signals.hasInitialTasks) {
+    if (signals.briefConfirmed && signals.hasPlan && signals.teamReady && !signals.hasInitialTasks) {
       blockers.push({
         code: "initial_tasks_missing",
         message: "No executable initial mission task exists.",
         nextAction: "Create an initial task before runner or schedule readiness can be evaluated.",
       });
     }
-    if (signals.hasInitialTasks && !signals.hasExecutionRunner) {
+    if (signals.briefConfirmed && signals.hasPlan && signals.teamReady && signals.hasInitialTasks && !signals.hasExecutionRunner) {
       blockers.push({
         code: "execution_runner_missing",
         message: "Executable tasks exist, but no execution runner is available.",
         nextAction: "Provide an execution runner availability signal before launching autopilot execution.",
       });
     }
-    if (!signals.hasScheduleRules) {
+    if (
+      signals.briefConfirmed &&
+      signals.hasPlan &&
+      signals.teamReady &&
+      signals.hasInitialTasks &&
+      signals.hasExecutionRunner &&
+      !signals.hasScheduleRules
+    ) {
       blockers.push({
         code: "schedule_rules_missing",
         message: "No schedule rules are registered for this mission.",
@@ -1000,7 +1007,7 @@ export class InMemoryMissionService {
     return {
       missionId,
       stage,
-      ready: stage === "ready",
+      ready: stage === "ready" || stage === "running",
       blockers,
       signals,
     };
