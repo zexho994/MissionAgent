@@ -9,6 +9,7 @@ const state = {
   streamingMissionId: undefined,
   pollingInterval: undefined,
   automationSummaryByMissionId: {},
+  autopilotDiagnosisByMissionId: {},
   scheduleRulesByMissionId: {},
   scheduleActionPending: false,
   scheduleFormOpen: false,
@@ -56,10 +57,17 @@ async function loadAutomationState(missionId) {
   state.scheduleRulesByMissionId[missionId] = scheduleResult.rules;
 }
 
+async function loadAutopilotDiagnosis(missionId) {
+  if (!missionId) return;
+  const result = await api(`/api/missions/${missionId}/autopilot-diagnosis`);
+  state.autopilotDiagnosisByMissionId[missionId] = result.diagnosis;
+}
+
 async function refreshMissionAutomation() {
   const mission = currentMission();
   if (!mission) return;
   await loadAutomationState(mission.id);
+  await loadAutopilotDiagnosis(mission.id);
 }
 
 async function triggerNextSchedule(missionId) {
@@ -473,17 +481,20 @@ function bindChoiceButtons() {
         state.draftMode = false;
         state.warTab = "overview";
         await loadAutomationState(mission.id);
+        await loadAutopilotDiagnosis(mission.id);
         renderAll();
         startPolling();
         const result = await activation;
         state.snapshot = result.snapshot;
         await loadAutomationState(mission.id);
+        await loadAutopilotDiagnosis(mission.id);
         renderAll();
         return;
       }
       state.view = "mission";
       state.draftMode = false;
       await loadAutomationState(mission.id);
+      await loadAutopilotDiagnosis(mission.id);
       renderAll();
     });
   });

@@ -482,6 +482,73 @@ h1, h2, p { margin-top: 0; }
   font-weight: 700;
 }
 
+.autopilot-diagnosis {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(240px, 0.9fr);
+  gap: 14px;
+  margin-bottom: 18px;
+  border: 1px solid #d4dae5;
+  border-radius: 12px;
+  background: #fbfcff;
+  padding: 16px;
+}
+.autopilot-diagnosis.ready {
+  border-color: #b7dfc5;
+  background: #f5fbf7;
+}
+.autopilot-diagnosis-main span,
+.autopilot-next span {
+  display: block;
+  margin-bottom: 5px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+}
+.autopilot-diagnosis-main strong {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 17px;
+  line-height: 1.3;
+}
+.autopilot-diagnosis-main p,
+.autopilot-next p {
+  margin: 0;
+  color: #5d6675;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.autopilot-signals {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.autopilot-signal {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  border: 1px solid #d8dee8;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #5d6675;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.autopilot-signal.ok {
+  border-color: #b7dfc5;
+  background: #ecfdf3;
+  color: #157347;
+}
+.autopilot-signal.warn {
+  border-color: #f4d4a4;
+  background: #fff8ed;
+  color: #9a5b00;
+}
+
 .war-stage {
   min-height: 620px;
   border: 1px solid #d8dee8;
@@ -1056,6 +1123,12 @@ h1, h2, p { margin-top: 0; }
   .war-content { padding: 20px; }
   .automation-pulse {
     grid-template-columns: 1fr;
+  }
+  .autopilot-diagnosis {
+    grid-template-columns: 1fr;
+  }
+  .autopilot-signals {
+    gap: 6px;
   }
   .pulse-actions {
     justify-content: flex-start;
