@@ -35,7 +35,13 @@ export function parseMissionPlanDraft(text: string): MissionPlanDraft {
     throw new Error("No JSON object found in LLM response");
   }
 
-  const parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new Error(`Invalid MissionPlan JSON in LLM response${detail}`);
+  }
 
   return {
     goal: requireNonEmptyString(parsed.goal, "MissionPlan.goal"),
@@ -150,6 +156,12 @@ function extractJsonObject(text: string): string | undefined {
   if (codeBlockMatch?.[1]) {
     const inner = codeBlockMatch[1].trim();
     if (inner.startsWith("{")) return inner;
+  }
+
+  const braceIndex = stripped.indexOf("{");
+  if (braceIndex !== -1) {
+    const endIndex = findMatchingBrace(stripped, braceIndex);
+    if (endIndex !== -1) return stripped.slice(braceIndex, endIndex + 1);
   }
 
   return undefined;
