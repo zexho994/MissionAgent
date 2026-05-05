@@ -20,6 +20,71 @@ function fakeOpenClaw(): Pick<OpenClawCliAdapter, "health" | "runAgentTask"> {
   };
 }
 
+function apiLlmWithPlan() {
+  return new FakeLlmAdapter((messages) => {
+    if (messages[0]?.content.includes("Owner planning workflow")) {
+      return JSON.stringify({
+        goal: "Run a mission",
+        successMetrics: ["Mission is runnable"],
+        phases: [
+          {
+            name: "Launch",
+            objective: "Start execution cleanly",
+            deliverables: ["Initial task plan"],
+            successCriteria: ["Execution can start"],
+          },
+        ],
+        workstreams: [
+          {
+            name: "Execution",
+            objective: "Deliver mission output",
+            requiredRole: "researcher",
+            responsibilities: ["Run the first task"],
+            firstTaskGoal: "Complete the first task",
+          },
+        ],
+        reportingLines: [
+          {
+            fromRole: "researcher",
+            toRole: "owner",
+            cadence: "daily",
+            purpose: "Progress reporting",
+          },
+        ],
+        scheduleRhythms: [
+          {
+            name: "Daily check",
+            cadence: "daily",
+            ownerRole: "owner",
+            purpose: "Review execution status",
+          },
+        ],
+        risks: ["Runner may be unavailable"],
+        checkpoints: ["First task completed"],
+      });
+    }
+    return JSON.stringify({
+      goal: "Run a mission",
+      scope: "Execution test",
+      constraints: ["human approval"],
+      successMetrics: ["Mission is runnable"],
+      keyAssumptions: [],
+    });
+  });
+}
+
+async function createMissionWithConfirmedPlan(missions: InMemoryMissionService): Promise<string> {
+  const mission = await missions.createMission({ goal: "Run a mission" });
+  await missions.continueMission({
+    missionId: mission.id,
+    message: "Audience is developers. Timeline is one month.",
+  });
+  missions.confirmBrief({ missionId: mission.id });
+  const plan = await missions.generateMissionPlan({ missionId: mission.id });
+  missions.confirmMissionPlan({ missionId: mission.id, planId: plan.id });
+  return mission.id;
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -57,7 +122,7 @@ describe("handleApiRequest", () => {
     expect(snapshot.missions[0]?.successMetrics).toContain("目标结果已经被 Owner 明确");
   });
 
-  it("creates a mission with user-provided metrics and activates it", async () => {
+  it("rejects API activation when no current MissionPlan is confirmed", async () => {
     const missions = new InMemoryMissionService();
 
     const createResponse = await handleApiRequest(
@@ -85,25 +150,16 @@ describe("handleApiRequest", () => {
       { missions, openclaw: fakeOpenClaw() },
     );
 
-    expect(activateResponse.status).toBe(200);
-    expect(missions.snapshot().tasks).toHaveLength(1);
+    expect(activateResponse.status).toBe(400);
+    expect(activateResponse.body).toMatchObject({
+      error: expect.stringContaining("Mission requires a confirmed MissionPlan before activation"),
+    });
+    expect(missions.snapshot().tasks).toHaveLength(0);
   });
 
   it("starts mission activation asynchronously so the UI can show HR recruiting", async () => {
-    const missions = new InMemoryMissionService();
-    const createResponse = await handleApiRequest(
-      {
-        method: "POST",
-        path: "/api/missions",
-        body: {
-          goal: "Grow GitHub account to two 1k-star repos",
-          successMetrics: ["two repos over 1000 stars"],
-          constraints: ["one month"],
-        },
-      },
-      { missions, openclaw: fakeOpenClaw() },
-    );
-    const missionId = (createResponse.body as { mission: { id: string } }).mission.id;
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
+    const missionId = await createMissionWithConfirmedPlan(missions);
 
     const response = await handleApiRequest(
       {
@@ -119,6 +175,28 @@ describe("handleApiRequest", () => {
     const hr = snapshot.agents.find((agent) => agent.missionId === missionId && agent.role === "hr");
     expect(hr?.status).toBe("running");
     expect(snapshot.tasks.filter((task) => task.missionId === missionId)).toHaveLength(0);
+  });
+
+  it("rejects async API activation before creating HR work when no MissionPlan is confirmed", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = await missions.createMission({ goal: "Run a mission" });
+
+    const response = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/activate-async",
+        body: { missionId: mission.id },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      error: expect.stringContaining("Mission requires a confirmed MissionPlan before activation"),
+    });
+    const snapshot = missions.snapshot();
+    expect(snapshot.tasks.filter((task) => task.missionId === mission.id)).toHaveLength(0);
+    expect(snapshot.agents.find((agent) => agent.missionId === mission.id && agent.role === "hr")).toBeUndefined();
   });
 
   it("continues an existing mission instead of creating a new one", async () => {

@@ -167,12 +167,9 @@ describe("InMemoryMissionService", () => {
   });
 
   it("marks HR as recruiting before activation work completes", async () => {
-    const service = new InMemoryMissionService();
-    const mission = await service.createMission({
-      goal: "Grow a GitHub account",
-      successMetrics: ["two repos over 1000 stars"],
-      constraints: ["one month"],
-    });
+    const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+    const mission = await createConfirmedMission(service);
+    await confirmPlanForMission(service, mission.id);
 
     service.beginMissionActivation({ missionId: mission.id });
 
@@ -714,6 +711,18 @@ describe("InMemoryMissionService", () => {
       expect(service.getMissionPlan({ missionId: mission.id })).toEqual(confirmedSecond);
     });
 
+    it("returns a newer draft as the current MissionPlan after a confirmed plan is revised", async () => {
+      const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+      const mission = await createConfirmedMission(service);
+      const confirmed = await service.generateMissionPlan({ missionId: mission.id });
+      service.confirmMissionPlan({ missionId: mission.id, planId: confirmed.id });
+
+      const revision = await service.generateMissionPlan({ missionId: mission.id, feedback: "Revise after review" });
+
+      expect(service.getMissionPlan({ missionId: mission.id })).toEqual(revision);
+      expect(service.getMissionPlan({ missionId: mission.id, planId: confirmed.id })?.status).toBe("confirmed");
+    });
+
     it("fails fast when confirming a non-draft MissionPlan", async () => {
       const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
       const mission = await createConfirmedMission(service);
@@ -766,6 +775,17 @@ describe("InMemoryMissionService", () => {
       expect(() => service.getMissionPlan({ missionId: mission.id })).toThrow("Confirmed MissionPlan not found");
     });
 
+    it("returns a newer draft instead of a corrupt confirmedPlanId when the draft supersedes it", async () => {
+      const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+      const mission = await createConfirmedMission(service);
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+      service.confirmMissionPlan({ missionId: mission.id, planId: plan.id });
+      const revision = await service.generateMissionPlan({ missionId: mission.id, feedback: "Revise after review" });
+      (service.snapshot().missions.find((candidate) => candidate.id === mission.id) as any).confirmedPlanId = "plan_missing";
+
+      expect(service.getMissionPlan({ missionId: mission.id })).toEqual(revision);
+    });
+
     it("keeps hasPlan false for confirmed draft and true only for confirmed MissionPlan state", async () => {
       const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
       const mission = await createConfirmedMission(service);
@@ -776,6 +796,39 @@ describe("InMemoryMissionService", () => {
       service.confirmMissionPlan({ missionId: mission.id, planId: draft.id });
 
       expect(service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true }).signals.hasPlan).toBe(true);
+    });
+
+    it("treats a newer draft revision as missing_plan until it is confirmed", async () => {
+      const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+      const mission = await createConfirmedMission(service);
+      const confirmed = await service.generateMissionPlan({ missionId: mission.id });
+      service.confirmMissionPlan({ missionId: mission.id, planId: confirmed.id });
+
+      const revision = await service.generateMissionPlan({ missionId: mission.id, feedback: "Revise after review" });
+      const draftDiagnosis = service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true });
+
+      expect(draftDiagnosis.stage).toBe("missing_plan");
+      expect(draftDiagnosis.signals.hasPlan).toBe(false);
+
+      service.confirmMissionPlan({ missionId: mission.id, planId: revision.id });
+
+      expect(service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true }).signals.hasPlan).toBe(true);
+    });
+
+    it("fails HR activation fast when no current confirmed MissionPlan exists", async () => {
+      const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+      const mission = await createConfirmedMission(service);
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+      service.confirmMissionPlan({ missionId: mission.id, planId: plan.id });
+      await service.generateMissionPlan({ missionId: mission.id, feedback: "Revise before activation" });
+
+      await expect(service.activateMissionWithHR({ missionId: mission.id })).rejects.toThrow(
+        "Mission requires a confirmed MissionPlan before activation",
+      );
+      expect(() => service.beginMissionActivation({ missionId: mission.id })).toThrow(
+        "Mission requires a confirmed MissionPlan before activation",
+      );
+      expect(service.snapshot().tasks.filter((task) => task.missionId === mission.id)).toHaveLength(0);
     });
   });
 
@@ -1705,6 +1758,9 @@ describe("InMemoryMissionService", () => {
       fake = new FakeLlmAdapter((messages) => {
         callCount += 1;
         const lastMsg = messages[messages.length - 1]?.content ?? "";
+        if (messages[0]?.content.includes("Owner planning workflow")) {
+          return missionPlanJson();
+        }
         // Owner conversation: return brief JSON
         if (lastMsg.includes("补充信息") || lastMsg.includes("目标人群")) {
           return JSON.stringify({
@@ -1746,6 +1802,7 @@ describe("InMemoryMissionService", () => {
       });
       await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
       service.confirmBrief({ missionId: mission.id });
+      await confirmPlanForMission(service, mission.id);
 
       await service.activateMissionWithHR({ missionId: mission.id });
 
@@ -1765,6 +1822,7 @@ describe("InMemoryMissionService", () => {
       });
       await service.continueMission({ missionId: mission.id, message: "补充信息" });
       service.confirmBrief({ missionId: mission.id });
+      await confirmPlanForMission(service, mission.id);
       await service.activateMissionWithHR({ missionId: mission.id });
 
       service.confirmNegotiation({ missionId: mission.id });
@@ -1774,7 +1832,7 @@ describe("InMemoryMissionService", () => {
       expect(snapshot.tasks).toHaveLength(1);
     });
 
-    it("falls back to keyword matching when no brief is confirmed", async () => {
+    it("fails fast when HR activation has no confirmed MissionPlan", async () => {
       const service = new InMemoryMissionService({ llm: fake });
       const mission = await service.createMission({
         goal: "Create a harness learning image",
@@ -1782,11 +1840,12 @@ describe("InMemoryMissionService", () => {
         constraints: ["concise"],
       });
 
-      await service.activateMissionWithHR({ missionId: mission.id });
+      await expect(service.activateMissionWithHR({ missionId: mission.id })).rejects.toThrow(
+        "Mission requires a confirmed MissionPlan before activation",
+      );
 
       const snapshot = service.snapshot();
-      expect(snapshot.agents.filter((a) => a.missionId === mission.id).length).toBeGreaterThanOrEqual(3);
-      expect(snapshot.tasks).toHaveLength(1);
+      expect(snapshot.tasks).toHaveLength(0);
       expect(service.getNegotiation({ missionId: mission.id })).toBeUndefined();
     });
   });

@@ -515,6 +515,7 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
+    this.assertMissionPlanReadyForActivation(mission.id);
     const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
     if (existingTask) {
       return mission;
@@ -547,6 +548,7 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
+    this.assertMissionPlanReadyForActivation(mission.id);
     const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
     if (existingTask) {
       return mission;
@@ -750,9 +752,11 @@ export class InMemoryMissionService {
       const plan = this.plans.get(input.planId);
       return plan?.missionId === mission.id ? plan : undefined;
     }
-    if (!mission.confirmedPlanId) {
-      return this.getLatestDraftMissionPlan(mission.id);
+    const latestDraft = this.getLatestDraftMissionPlan(mission.id);
+    if (latestDraft) {
+      return latestDraft;
     }
+    if (!mission.confirmedPlanId) return undefined;
     return this.getConfirmedMissionPlan(mission);
   }
 
@@ -1678,11 +1682,28 @@ export class InMemoryMissionService {
   }
 
   private hasConfirmedMissionPlan(mission: Mission): boolean {
+    if (this.getLatestDraftMissionPlan(mission.id)) {
+      return false;
+    }
     if (!mission.confirmedPlanId) {
       return false;
     }
     const plan = this.getConfirmedMissionPlan(mission);
     return plan.status === "confirmed";
+  }
+
+  assertMissionPlanReadyForActivation(missionId: string): MissionPlan {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    if (this.getLatestDraftMissionPlan(mission.id)) {
+      throw new Error(`Mission requires a confirmed MissionPlan before activation: ${mission.id}`);
+    }
+    if (!mission.confirmedPlanId) {
+      throw new Error(`Mission requires a confirmed MissionPlan before activation: ${mission.id}`);
+    }
+    return this.getConfirmedMissionPlan(mission);
   }
 
   private getLatestDraftMissionPlan(missionId: string): MissionPlan | undefined {
