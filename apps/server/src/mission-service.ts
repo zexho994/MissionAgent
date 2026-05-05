@@ -696,6 +696,13 @@ export class InMemoryMissionService {
       ...draft,
     };
     this.plans.set(plan.id, plan);
+    const owner = this.agentByRole(mission.id, "owner");
+    this.appendMessage({
+      missionId: mission.id,
+      fromAgentId: owner.id,
+      type: "task_plan",
+      content: `Owner generated MissionPlan revision ${plan.revision}.`,
+    });
     this.persist();
     return plan;
   }

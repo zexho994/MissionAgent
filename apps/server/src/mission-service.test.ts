@@ -608,6 +608,16 @@ describe("InMemoryMissionService", () => {
       expect(plan.goal).toBe("Run a mission");
       expect(service.snapshot().plans).toEqual([plan]);
       expect(service.getMissionPlan({ missionId: mission.id, planId: plan.id })).toEqual(plan);
+      const owner = service.snapshot().agents.find((agent) => agent.missionId === mission.id && agent.role === "owner");
+      const planMessages = service.snapshot().agentMessages.filter(
+        (message) => message.missionId === mission.id && message.type === "task_plan",
+      );
+      expect(planMessages).toHaveLength(1);
+      expect(planMessages[0]).toMatchObject({
+        fromAgentId: owner?.id,
+        content: "Owner generated MissionPlan revision 1.",
+      });
+      expect(planMessages[0]?.id).toEqual(expect.any(String));
     });
 
     it("returns the latest draft MissionPlan when no plan has been confirmed", async () => {
