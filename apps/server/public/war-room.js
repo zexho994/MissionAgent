@@ -28,6 +28,26 @@ function renderWarRoom() {
       renderWarRoom();
     });
   });
+
+  const triggerNext = document.querySelector("[data-trigger-next]");
+  if (triggerNext) {
+    triggerNext.addEventListener("click", () => {
+      const mission = currentMission();
+      if (mission) void triggerNextSchedule(mission.id);
+    });
+  }
+  const toggleAutomation = document.querySelector("[data-toggle-automation]");
+  if (toggleAutomation) {
+    toggleAutomation.addEventListener("click", () => {
+      const mission = currentMission();
+      if (!mission) return;
+      if (toggleAutomation.dataset.toggleAutomation === "resume") {
+        void resumeAutomation(mission.id);
+      } else {
+        void pauseAutomation(mission.id);
+      }
+    });
+  }
 }
 
 function warNavButton(tab, label) {
@@ -43,6 +63,7 @@ function renderWarOverview(data) {
       </div>
       <span>${missionStateText(data.executions)}</span>
     </div>
+    ${renderAutomationPulse(data, state.automationSummaryByMissionId[data.mission.id])}
     <div class="war-stage">
       <div class="stage-note">
         <strong>War Room</strong>
@@ -64,6 +85,43 @@ function renderWarOverview(data) {
         <strong>最近产出</strong>
         <p>${esc(latestOutputText(data))}</p>
       </div>
+    </div>
+  `;
+}
+
+function renderAutomationPulse(data, summary) {
+  if (!summary) {
+    return `
+      <div class="automation-pulse">
+        <div>
+          <strong>自动运行</strong>
+          <p>正在读取 Mission 自动运行状态。</p>
+        </div>
+      </div>
+    `;
+  }
+
+  const next = summary.nextAction;
+  const current = summary.currentScheduledTasks || [];
+  const paused = summary.automationPaused;
+  const actionDisabled = state.scheduleActionPending ? "disabled" : "";
+  return `
+    <div class="automation-pulse ${paused ? "paused" : ""}">
+      <div class="pulse-main">
+        <span class="pulse-label">${paused ? "自动运行已暂停" : "下一次自动动作"}</span>
+        <strong>${next ? esc(next.ruleName) : "还没有自动运行节奏"}</strong>
+        <p>${next ? `${esc(formatTime(next.nextRunAt))} · ${esc(next.assigneeRole)} · ${esc(next.taskTitle)}` : "去定时任务页添加每日检查或每周复盘。"}</p>
+      </div>
+      <div class="pulse-side">
+        <span>当前运行</span>
+        <strong>${current.length ? `${current.length} 个任务` : "无排队任务"}</strong>
+        <p>${summary.lastTrigger ? esc(summary.lastTrigger.message) : "暂无触发记录"}</p>
+      </div>
+      <div class="pulse-actions">
+        <button type="button" data-trigger-next ${actionDisabled}>${state.scheduleActionPending ? "处理中..." : "立即触发下一步"}</button>
+        <button type="button" data-toggle-automation="${paused ? "resume" : "pause"}" ${actionDisabled}>${paused ? "恢复自动运行" : "暂停自动运行"}</button>
+      </div>
+      ${state.scheduleError ? `<div class="inline-error">${esc(state.scheduleError)}</div>` : ""}
     </div>
   `;
 }

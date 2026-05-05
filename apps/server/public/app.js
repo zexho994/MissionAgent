@@ -8,6 +8,11 @@ const state = {
   popoverOpen: false,
   streamingMissionId: undefined,
   pollingInterval: undefined,
+  automationSummaryByMissionId: {},
+  scheduleRulesByMissionId: {},
+  scheduleActionPending: false,
+  scheduleFormOpen: false,
+  scheduleError: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -23,6 +28,7 @@ function emptySnapshot() {
     agentMessages: [],
     threads: [],
     taskEvents: [],
+    scheduleTriggerEvents: [],
     toolCalls: [],
     decisions: [],
     agentRelations: [],
@@ -40,6 +46,72 @@ async function api(path, options = {}) {
   return json;
 }
 
+async function loadAutomationState(missionId) {
+  if (!missionId) return;
+  const [summaryResult, scheduleResult] = await Promise.all([
+    api(`/api/missions/${missionId}/automation-summary`),
+    api(`/api/missions/${missionId}/schedule`),
+  ]);
+  state.automationSummaryByMissionId[missionId] = summaryResult.summary;
+  state.scheduleRulesByMissionId[missionId] = scheduleResult.rules;
+}
+
+async function refreshMissionAutomation() {
+  const mission = currentMission();
+  if (!mission) return;
+  await loadAutomationState(mission.id);
+}
+
+async function triggerNextSchedule(missionId) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/trigger-next`, { method: "POST", body: {} });
+    state.snapshot = result.snapshot;
+    await loadAutomationState(missionId);
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
+async function pauseAutomation(missionId) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/pause`, { method: "POST", body: {} });
+    state.snapshot = result.snapshot;
+    state.automationSummaryByMissionId[missionId] = result.summary;
+    await loadAutomationState(missionId);
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
+async function resumeAutomation(missionId) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/resume`, { method: "POST", body: {} });
+    state.snapshot = result.snapshot;
+    state.automationSummaryByMissionId[missionId] = result.summary;
+    await loadAutomationState(missionId);
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
 async function refresh() {
   state.config = await api("/api/config");
   const health = await api("/api/health");
@@ -51,6 +123,9 @@ async function refresh() {
 
   state.snapshot = await api("/api/snapshot");
   syncSelectedMission();
+  if (state.view === "mission" && currentMission()) {
+    await refreshMissionAutomation();
+  }
   renderAll();
 }
 
@@ -376,15 +451,18 @@ function bindChoiceButtons() {
         state.view = "mission";
         state.draftMode = false;
         state.warTab = "overview";
+        await loadAutomationState(mission.id);
         renderAll();
         startPolling();
         const result = await activation;
         state.snapshot = result.snapshot;
+        await loadAutomationState(mission.id);
         renderAll();
         return;
       }
       state.view = "mission";
       state.draftMode = false;
+      await loadAutomationState(mission.id);
       renderAll();
     });
   });
