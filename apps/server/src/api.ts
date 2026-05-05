@@ -231,6 +231,22 @@ export async function handleApiRequest(
       return json(202, { execution, snapshot: deps.missions.snapshot() });
     }
 
+    const autopilotDiagnosisMatch = request.path.match(/^\/api\/missions\/([^/]+)\/autopilot-diagnosis$/);
+    if (autopilotDiagnosisMatch) {
+      const missionId = autopilotDiagnosisMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        const openclawHealth = await deps.openclaw.health();
+        const diagnosis = deps.missions.getAutopilotDiagnosis(missionId, {
+          hasExecutionRunner: openclawHealth.available,
+          hasPlan: false,
+        });
+        return json(200, { diagnosis });
+      }
+    }
+
     const automationSummaryMatch = request.path.match(/^\/api\/missions\/([^/]+)\/automation-summary$/);
     if (automationSummaryMatch) {
       const missionId = automationSummaryMatch[1];

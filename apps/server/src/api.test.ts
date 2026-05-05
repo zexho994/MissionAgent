@@ -184,6 +184,49 @@ describe("handleApiRequest", () => {
     expect(missions.snapshot().executions[0]?.status).toBe("running");
   });
 
+  it("GET /api/missions/:id/autopilot-diagnosis reports briefing when OpenClaw is available", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = await missions.createMission({ goal: "Grow GitHub repositories" });
+
+    const response = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${mission.id}/autopilot-diagnosis` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      diagnosis: {
+        missionId: mission.id,
+        stage: "briefing",
+        ready: false,
+        signals: {
+          hasExecutionRunner: true,
+        },
+      },
+    });
+  });
+
+  it("GET /api/missions/:id/autopilot-diagnosis reports unavailable OpenClaw runner", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = await missions.createMission({ goal: "Grow GitHub repositories" });
+    const unavailableOpenClaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask"> = {
+      async health() {
+        return { available: false };
+      },
+      async runAgentTask() {
+        throw new Error("OpenClaw unavailable");
+      },
+    };
+
+    const response = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${mission.id}/autopilot-diagnosis` },
+      { missions, openclaw: unavailableOpenClaw },
+    );
+
+    expect(response.status).toBe(200);
+    expect((response.body as { diagnosis: { signals: { hasExecutionRunner: boolean } } }).diagnosis.signals.hasExecutionRunner).toBe(false);
+  });
+
   it("confirms a MissionBrief via the API", async () => {
     const fake = new FakeLlmAdapter(() => JSON.stringify({
       goal: "运营小红书账号到1000粉丝",
