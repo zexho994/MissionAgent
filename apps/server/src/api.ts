@@ -231,6 +231,38 @@ export async function handleApiRequest(
       return json(202, { execution, snapshot: deps.missions.snapshot() });
     }
 
+    const planMatch = request.path.match(/^\/api\/missions\/([^/]+)\/plan(?:\/(generate|confirm))?$/);
+    if (planMatch) {
+      const missionId = planMatch[1];
+      const action = planMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !action) {
+        const plan = deps.missions.getMissionPlan({ missionId });
+        return json(200, plan ? { plan } : {});
+      }
+
+      if (request.method === "POST" && action === "generate") {
+        const body = expectObject(request.body ?? {});
+        const feedback = body.feedback === undefined ? undefined : expectString(body.feedback, "feedback");
+        const plan = await deps.missions.generateMissionPlan({
+          missionId,
+          ...(feedback !== undefined ? { feedback } : {}),
+        });
+        return json(200, { plan, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "confirm") {
+        const body = expectObject(request.body);
+        const planId = expectString(body.planId, "planId");
+        const mission = deps.missions.confirmMissionPlan({ missionId, planId });
+        const plan = deps.missions.getMissionPlan({ missionId });
+        return json(200, { mission, plan, snapshot: deps.missions.snapshot() });
+      }
+    }
+
     const autopilotDiagnosisMatch = request.path.match(/^\/api\/missions\/([^/]+)\/autopilot-diagnosis$/);
     if (autopilotDiagnosisMatch) {
       const missionId = autopilotDiagnosisMatch[1];

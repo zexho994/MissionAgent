@@ -85,6 +85,16 @@ async function createMissionWithConfirmedPlan(missions: InMemoryMissionService):
   return mission.id;
 }
 
+async function createMissionWithConfirmedBrief(missions: InMemoryMissionService): Promise<string> {
+  const mission = await missions.createMission({ goal: "Run a mission" });
+  await missions.continueMission({
+    missionId: mission.id,
+    message: "Audience is developers. Timeline is one month.",
+  });
+  missions.confirmBrief({ missionId: mission.id });
+  return mission.id;
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -303,6 +313,98 @@ describe("handleApiRequest", () => {
 
     expect(response.status).toBe(200);
     expect((response.body as { diagnosis: { signals: { hasExecutionRunner: boolean } } }).diagnosis.signals.hasExecutionRunner).toBe(false);
+  });
+
+  it("GET /api/missions/:id/plan returns no plan before generation", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = await missions.createMission({ goal: "Run a mission" });
+
+    const response = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${mission.id}/plan` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({});
+  });
+
+  it("generates and confirms a MissionPlan via API", async () => {
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
+    const missionId = await createMissionWithConfirmedBrief(missions);
+
+    const generateResponse = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/plan/generate`,
+        body: { feedback: "Include analytics." },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(generateResponse.status).toBe(200);
+    const generated = generateResponse.body as {
+      plan: { id: string; status: string; feedback: string };
+      snapshot: MissionSnapshot;
+    };
+    expect(generated.plan.status).toBe("draft");
+    expect(generated.plan.feedback).toBe("Include analytics.");
+    expect(generated.snapshot.plans.some((plan) => plan.id === generated.plan.id)).toBe(true);
+
+    const confirmResponse = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/plan/confirm`,
+        body: { planId: generated.plan.id },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(confirmResponse.status).toBe(200);
+    const confirmed = confirmResponse.body as {
+      mission: { confirmedPlanId: string };
+      plan: { id: string; status: string };
+      snapshot: MissionSnapshot;
+    };
+    expect(confirmed.mission.confirmedPlanId).toBe(generated.plan.id);
+    expect(confirmed.plan).toMatchObject({ id: generated.plan.id, status: "confirmed" });
+    expect(confirmed.snapshot.missions.find((mission) => mission.id === missionId)?.confirmedPlanId).toBe(generated.plan.id);
+
+    const diagnosisResponse = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${missionId}/autopilot-diagnosis` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(diagnosisResponse.status).toBe(200);
+    expect((diagnosisResponse.body as { diagnosis: { signals: { hasPlan: boolean } } }).diagnosis.signals.hasPlan).toBe(true);
+  });
+
+  it("rejects malformed MissionPlan API inputs", async () => {
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
+    const missionId = await createMissionWithConfirmedBrief(missions);
+
+    const malformedFeedback = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/plan/generate`,
+        body: { feedback: 42 },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(malformedFeedback.status).toBe(400);
+    expect(malformedFeedback.body).toMatchObject({ error: "feedback must be a non-empty string" });
+
+    const malformedConfirm = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/plan/confirm`,
+        body: {},
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(malformedConfirm.status).toBe(400);
+    expect(malformedConfirm.body).toMatchObject({ error: "planId must be a non-empty string" });
   });
 
   it("confirms a MissionBrief via the API", async () => {
