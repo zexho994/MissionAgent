@@ -15,6 +15,55 @@ export interface MissionBrief {
   timeline?: string | undefined;
 }
 
+export type MissionPlanStatus = "draft" | "confirmed" | "superseded";
+
+export interface MissionPlanPhase {
+  name: string;
+  objective: string;
+  deliverables: string[];
+  successCriteria: string[];
+}
+
+export interface MissionPlanWorkstream {
+  name: string;
+  objective: string;
+  requiredRole: string;
+  responsibilities: string[];
+  firstTaskGoal: string;
+}
+
+export interface MissionPlanReportingLine {
+  fromRole: string;
+  toRole: string;
+  cadence: string;
+  purpose: string;
+}
+
+export interface MissionPlanScheduleRhythm {
+  name: string;
+  cadence: string;
+  ownerRole: string;
+  purpose: string;
+}
+
+export interface MissionPlan {
+  id: string;
+  missionId: string;
+  status: MissionPlanStatus;
+  createdAt: Date;
+  confirmedAt?: Date;
+  revision: number;
+  feedback?: string;
+  goal: string;
+  successMetrics: string[];
+  phases: MissionPlanPhase[];
+  workstreams: MissionPlanWorkstream[];
+  reportingLines: MissionPlanReportingLine[];
+  scheduleRhythms: MissionPlanScheduleRhythm[];
+  risks: string[];
+  checkpoints: string[];
+}
+
 export interface Mission {
   id: string;
   goal: string;
@@ -25,6 +74,7 @@ export interface Mission {
   createdAt: Date;
   brief?: MissionBrief;
   briefConfirmed?: boolean;
+  confirmedPlanId?: string;
   scheduleRules: ScheduleRule[];
 }
 
