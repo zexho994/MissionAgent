@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { createScheduleRule } from "@digitalagent/core";
 import { InMemoryMissionService } from "./mission-service.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -1124,6 +1124,59 @@ describe("InMemoryMissionService", () => {
     expect(service.getScheduleRules(mission.id).find((rule) => rule.id === enabled.id)?.enabled).toBe(true);
     expect(service.getScheduleRules(mission.id).find((rule) => rule.id === enabled.id)?.metadata.pausedByAutomationToggle).toBeUndefined();
     expect(service.getScheduleRules(mission.id).find((rule) => rule.id === manuallyDisabled.id)?.enabled).toBe(false);
+  });
+
+  it("does not resume rules manually disabled while automation-toggle paused", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    const rule = service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "daily_check",
+      assigneeRole: "owner",
+      taskGoal: "Check yesterday's GitHub growth metrics",
+    });
+
+    service.pauseMissionAutomation(mission.id);
+    service.updateScheduleRule(mission.id, rule.id, { enabled: false });
+    service.resumeMissionAutomation(mission.id);
+
+    const updated = service.getScheduleRules(mission.id).find((candidate) => candidate.id === rule.id);
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.metadata.pausedByAutomationToggle).toBeUndefined();
+  });
+
+  it("does not start automation-toggle schedulers for inactive missions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-30T08:00:00Z"));
+    const dir = mkdtempSync(join(tmpdir(), "digitalagent-inactive-automation-"));
+    try {
+      const storageFile = join(dir, "mission-store.json");
+      const initial = new InMemoryMissionService({ storageFile });
+      const mission = await initial.createMission({ goal: "Track GitHub growth" });
+      const stored = initial.snapshot();
+      stored.missions = stored.missions.map((candidate) =>
+        candidate.id === mission.id ? { ...candidate, status: "paused" } : candidate,
+      );
+      rmSync(storageFile, { force: true });
+      const inactiveStore = {
+        schemaVersion: 1,
+        ...stored,
+      };
+      writeFileSync(storageFile, `${JSON.stringify(inactiveStore, null, 2)}\n`, "utf8");
+      const service = new InMemoryMissionService({ storageFile });
+      service.createScheduleRuleFromTemplate(mission.id, {
+        templateType: "daily_check",
+        assigneeRole: "owner",
+        taskGoal: "Check yesterday's GitHub growth metrics",
+      });
+
+      service.pauseMissionAutomation(mission.id);
+      service.resumeMissionAutomation(mission.id);
+      vi.advanceTimersByTime(25 * 60 * 60 * 1000);
+
+      expect(service.snapshot().tasks).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   describe("HR-driven activation with negotiation", () => {

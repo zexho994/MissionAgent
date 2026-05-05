@@ -258,6 +258,11 @@ interface StoredMissionSnapshot extends MissionSnapshot {
   schemaVersion: 1;
 }
 
+function clearAutomationTogglePause(metadata: Record<string, unknown>): Record<string, unknown> {
+  const { pausedByAutomationToggle: _paused, ...rest } = metadata;
+  return rest;
+}
+
 export interface MissionServiceOptions {
   storageFile?: string | undefined;
   configFile?: string | undefined;
@@ -984,9 +989,14 @@ export class InMemoryMissionService {
     }
     const nextRules = mission.scheduleRules.map((rule) => {
       if (rule.id !== ruleId) return rule;
+      const metadata = patch.enabled === undefined ? patch.metadata : clearAutomationTogglePause({
+        ...rule.metadata,
+        ...patch.metadata,
+      });
       const candidate: ScheduleRule = {
         ...rule,
         ...patch,
+        ...(metadata === undefined ? {} : { metadata }),
         id: rule.id,
         missionId: rule.missionId,
       };
@@ -1003,10 +1013,18 @@ export class InMemoryMissionService {
     this.missions.set(updated.id, updated);
     const scheduler = this.schedulers.get(missionId);
     if (scheduler) {
+      const updatedRule = nextRules.find((rule) => rule.id === ruleId);
+      const schedulerPatch =
+        patch.enabled === undefined || !updatedRule
+          ? patch
+          : {
+              ...patch,
+              metadata: updatedRule.metadata,
+            };
       if (patch.trigger !== undefined && updated.status === "active") {
         scheduler.restart(updated.scheduleRules);
       } else {
-        scheduler.updateRule(ruleId, patch);
+        scheduler.updateRule(ruleId, schedulerPatch);
       }
     }
     this.persist();
@@ -1029,7 +1047,9 @@ export class InMemoryMissionService {
       };
     });
     this.missions.set(mission.id, { ...mission, scheduleRules: updatedRules });
-    this.schedulers.get(missionId)?.restart(updatedRules);
+    if (mission.status === "active") {
+      this.schedulers.get(missionId)?.restart(updatedRules);
+    }
     this.persist();
   }
 
@@ -1048,7 +1068,9 @@ export class InMemoryMissionService {
       };
     });
     this.missions.set(mission.id, { ...mission, scheduleRules: updatedRules });
-    this.schedulers.get(missionId)?.restart(updatedRules);
+    if (mission.status === "active") {
+      this.schedulers.get(missionId)?.restart(updatedRules);
+    }
     this.persist();
   }
 
