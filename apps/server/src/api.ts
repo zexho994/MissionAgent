@@ -241,7 +241,6 @@ export async function handleApiRequest(
         const openclawHealth = await deps.openclaw.health();
         const diagnosis = deps.missions.getAutopilotDiagnosis(missionId, {
           hasExecutionRunner: openclawHealth.available,
-          hasPlan: false,
         });
         return json(200, { diagnosis });
       }

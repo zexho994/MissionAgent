@@ -10,6 +10,7 @@ import {
   type Artifact,
   type Mission,
   type MissionBrief,
+  type MissionPlan,
   type Review,
   type ScheduleRule,
   type Task,
@@ -18,7 +19,13 @@ import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadAgentSystemConfig, type AgentSystemConfig } from "./system-config.js";
-import { buildOwnerSystemPrompt, buildConversationMessages, buildSummaryRequest } from "./owner/index.js";
+import {
+  buildMissionPlanMessages,
+  buildOwnerSystemPrompt,
+  buildConversationMessages,
+  buildSummaryRequest,
+  parseMissionPlanDraft,
+} from "./owner/index.js";
 import type { TeamProposal } from "./hr-agent.js";
 import { NegotiationManager, type NegotiationSummary } from "./negotiation-manager.js";
 import { planMissionTeam, matcherFor, type MissionTeamPlan } from "./team-planning.js";
@@ -244,7 +251,6 @@ export interface AutopilotDiagnosis {
 
 export interface AutopilotRuntimeSignals {
   hasExecutionRunner: boolean;
-  hasPlan: boolean;
 }
 
 function assertAutopilotRuntimeSignals(runtime: AutopilotRuntimeSignals): void {
@@ -253,9 +259,6 @@ function assertAutopilotRuntimeSignals(runtime: AutopilotRuntimeSignals): void {
   }
   if (typeof runtime.hasExecutionRunner !== "boolean") {
     throw new Error("Autopilot runtime signal hasExecutionRunner must be boolean");
-  }
-  if (typeof runtime.hasPlan !== "boolean") {
-    throw new Error("Autopilot runtime signal hasPlan must be boolean");
   }
 }
 
@@ -300,6 +303,7 @@ export interface DecisionRecord {
 
 export interface MissionSnapshot {
   missions: Mission[];
+  plans: MissionPlan[];
   tasks: Task[];
   artifacts: Artifact[];
   reviews: Review[];
@@ -362,6 +366,7 @@ export interface StreamSubscription {
 
 export class InMemoryMissionService {
   private readonly missions = new Map<string, Mission>();
+  private readonly plans = new Map<string, MissionPlan>();
   private readonly tasks = new Map<string, Task>();
   private readonly artifacts = new Map<string, Artifact>();
   private readonly reviews = new Map<string, Review>();
@@ -655,6 +660,94 @@ export class InMemoryMissionService {
     return updated;
   }
 
+  async generateMissionPlan(input: { missionId: string; feedback?: string }): Promise<MissionPlan> {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (!mission.brief || mission.briefConfirmed !== true) {
+      throw new Error("MissionBrief must be confirmed before generating a MissionPlan");
+    }
+    if (!this.llm) {
+      throw new Error("LLM is required to generate a MissionPlan");
+    }
+
+    const response = await this.llm.call(buildMissionPlanMessages({
+      brief: mission.brief,
+      ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+    }));
+    const draft = parseMissionPlanDraft(response.content);
+    const existingPlans = [...this.plans.values()].filter((plan) => plan.missionId === mission.id);
+    const revision = existingPlans.length + 1;
+
+    for (const plan of existingPlans) {
+      if (plan.status === "draft") {
+        this.plans.set(plan.id, { ...plan, status: "superseded" });
+      }
+    }
+
+    const plan: MissionPlan = {
+      id: createId("plan"),
+      missionId: mission.id,
+      status: "draft",
+      createdAt: new Date(),
+      revision,
+      ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+      ...draft,
+    };
+    this.plans.set(plan.id, plan);
+    this.persist();
+    return plan;
+  }
+
+  confirmMissionPlan(input: { missionId: string; planId: string }): MissionPlan {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const plan = this.plans.get(input.planId);
+    if (!plan || plan.missionId !== mission.id) {
+      throw new Error(`MissionPlan not found in mission: ${input.planId}`);
+    }
+    if (plan.status !== "draft" && plan.status !== "confirmed") {
+      throw new Error(`Only draft or confirmed MissionPlan can be confirmed: ${input.planId}`);
+    }
+
+    for (const candidate of this.plans.values()) {
+      if (candidate.missionId === mission.id && candidate.id !== plan.id && candidate.status === "confirmed") {
+        this.plans.set(candidate.id, { ...candidate, status: "superseded" });
+      }
+    }
+
+    const confirmed: MissionPlan = {
+      ...plan,
+      status: "confirmed",
+      confirmedAt: plan.confirmedAt ?? new Date(),
+    };
+    this.plans.set(confirmed.id, confirmed);
+    this.missions.set(mission.id, {
+      ...mission,
+      confirmedPlanId: confirmed.id,
+    });
+    this.persist();
+    return confirmed;
+  }
+
+  getMissionPlan(input: { missionId: string; planId?: string }): MissionPlan | undefined {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (input.planId !== undefined) {
+      const plan = this.plans.get(input.planId);
+      return plan?.missionId === mission.id ? plan : undefined;
+    }
+    if (!mission.confirmedPlanId) {
+      return undefined;
+    }
+    return this.getConfirmedMissionPlan(mission);
+  }
+
   startExecution(input: StartExecutionRequest): Execution {
     const mission = this.missions.get(input.missionId);
     if (!mission) {
@@ -930,7 +1023,7 @@ export class InMemoryMissionService {
     );
     const signals: AutopilotDiagnosisSignals = {
       briefConfirmed: mission.briefConfirmed === true,
-      hasPlan: runtime.hasPlan === true,
+      hasPlan: this.hasConfirmedMissionPlan(mission),
       teamReady: missionAgents.some(
         (agent) => agent.role !== "owner" && agent.role !== "hr" && agent.status !== "blocked" && agent.status !== "done",
       ),
@@ -1036,6 +1129,7 @@ export class InMemoryMissionService {
   snapshot(): MissionSnapshot {
     return {
       missions: [...this.missions.values()],
+      plans: [...this.plans.values()],
       tasks: [...this.tasks.values()],
       artifacts: [...this.artifacts.values()],
       reviews: [...this.reviews.values()],
@@ -1573,6 +1667,31 @@ export class InMemoryMissionService {
         }
       },
     };
+  }
+
+  private hasConfirmedMissionPlan(mission: Mission): boolean {
+    if (!mission.confirmedPlanId) {
+      return false;
+    }
+    const plan = this.getConfirmedMissionPlan(mission);
+    return plan.status === "confirmed";
+  }
+
+  private getConfirmedMissionPlan(mission: Mission): MissionPlan {
+    if (!mission.confirmedPlanId) {
+      throw new Error(`Mission has no confirmed MissionPlan: ${mission.id}`);
+    }
+    const plan = this.plans.get(mission.confirmedPlanId);
+    if (!plan) {
+      throw new Error(`Confirmed MissionPlan not found: ${mission.confirmedPlanId}`);
+    }
+    if (plan.missionId !== mission.id) {
+      throw new Error(`Confirmed MissionPlan belongs to a different mission: ${mission.confirmedPlanId}`);
+    }
+    if (plan.status !== "confirmed") {
+      throw new Error(`Confirmed MissionPlan is not confirmed: ${mission.confirmedPlanId}`);
+    }
+    return plan;
   }
 
   private notifyStreamListeners(missionId: string, event: Parameters<StreamEventListener>[0]): void {
@@ -2189,6 +2308,15 @@ export class InMemoryMissionService {
         createdAt: new Date(mission.createdAt),
         scheduleRules: (mission as Mission & { scheduleRules?: ScheduleRule[] }).scheduleRules ?? [],
       });
+    }
+    for (const plan of stored.plans ?? []) {
+      const restoredPlan: MissionPlan = {
+        ...plan,
+        createdAt: new Date(plan.createdAt),
+        ...(plan.confirmedAt !== undefined ? { confirmedAt: new Date(plan.confirmedAt) } : {}),
+        ...(plan.feedback !== undefined ? { feedback: plan.feedback } : {}),
+      };
+      this.plans.set(restoredPlan.id, restoredPlan);
     }
     for (const task of stored.tasks) this.tasks.set(task.id, task);
     for (const artifact of stored.artifacts) this.artifacts.set(artifact.id, { ...artifact, createdAt: new Date(artifact.createdAt) });

@@ -8,6 +8,7 @@ import type { ContextRetriever } from "./context-retriever.js";
 
 const baseSnapshot: MissionSnapshot = {
   missions: [{ id: "m1", goal: "test discussion", successMetrics: [], constraints: [], status: "active", budget: { maxRuntimeMinutes: 60 }, createdAt: new Date(), scheduleRules: [] }],
+  plans: [],
   tasks: [],
   artifacts: [],
   reviews: [],

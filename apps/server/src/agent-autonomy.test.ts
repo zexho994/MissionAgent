@@ -52,6 +52,7 @@ function makeTestDeps(): {
 
   const snapshot: MissionSnapshot = {
     missions: [{ id: "mission_1", goal: "test", successMetrics: [], constraints: [], status: "active", budget: { maxRuntimeMinutes: 60 }, createdAt: new Date(), scheduleRules: [] }],
+    plans: [],
     tasks: [],
     artifacts: [],
     reviews: [],
