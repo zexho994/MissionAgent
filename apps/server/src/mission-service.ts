@@ -244,7 +244,7 @@ export interface AutopilotDiagnosis {
 
 export interface AutopilotRuntimeSignals {
   hasExecutionRunner: boolean;
-  hasPlan?: boolean;
+  hasPlan: boolean;
 }
 
 export type ScheduleTemplateRequest =
@@ -895,13 +895,32 @@ export class InMemoryMissionService {
         task.status !== "cancelled",
     );
 
+    const latestExecutionByTask = new Map<string, Execution>();
+    for (const execution of missionExecutions) {
+      const existing = latestExecutionByTask.get(execution.taskId);
+      if (!existing) {
+        latestExecutionByTask.set(execution.taskId, execution);
+        continue;
+      }
+      const executionTime = execution.completedAt ?? execution.startedAt;
+      const existingTime = existing.completedAt ?? existing.startedAt;
+      if (executionTime >= existingTime) {
+        latestExecutionByTask.set(execution.taskId, execution);
+      }
+    }
+
+    const latestExecutions = [...latestExecutionByTask.values()];
     const hasRunningExecution = missionExecutions.some((execution) => execution.status === "running");
-    const hasFailedExecution = missionExecutions.some((execution) => execution.status === "failed");
-    const hasBlockedAgent = missionAgents.some((agent) => agent.status === "blocked");
+    const hasFailedExecution = latestExecutions.some((execution) => execution.status === "failed");
+    const hasBlockedExecutionAgent = missionAgents.some(
+      (agent) => agent.role !== "owner" && agent.role !== "hr" && agent.status === "blocked",
+    );
     const signals: AutopilotDiagnosisSignals = {
       briefConfirmed: mission.briefConfirmed === true,
       hasPlan: runtime.hasPlan === true,
-      teamReady: missionAgents.some((agent) => agent.role !== "owner" && agent.role !== "hr"),
+      teamReady: missionAgents.some(
+        (agent) => agent.role !== "owner" && agent.role !== "hr" && agent.status !== "blocked" && agent.status !== "done",
+      ),
       hasInitialTasks: executableTasks.length > 0,
       hasExecutionRunner: runtime.hasExecutionRunner,
       hasScheduleRules: mission.scheduleRules.length > 0,
@@ -909,11 +928,11 @@ export class InMemoryMissionService {
     };
 
     const blockers: AutopilotBlocker[] = [];
-    if (hasFailedExecution || hasBlockedAgent) {
+    if (hasFailedExecution || hasBlockedExecutionAgent) {
       blockers.push({
         code: "execution_blocked",
-        message: "A mission execution or agent is blocked.",
-        nextAction: "Inspect the failed execution or blocked agent, fix the root cause, then retry the task.",
+        message: "The latest execution for a task failed, or an execution team agent is blocked.",
+        nextAction: "Inspect the unresolved failed execution or blocked execution agent, fix the root cause, then retry the task.",
       });
     }
     if (!signals.briefConfirmed) {
@@ -962,7 +981,7 @@ export class InMemoryMissionService {
     let stage: AutopilotStage = "ready";
     if (signals.hasRunningExecution) {
       stage = "running";
-    } else if (hasFailedExecution || hasBlockedAgent) {
+    } else if (hasFailedExecution || hasBlockedExecutionAgent) {
       stage = "blocked";
     } else if (!signals.briefConfirmed) {
       stage = "briefing";
