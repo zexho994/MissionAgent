@@ -137,39 +137,39 @@ export interface AutopilotDiagnosis {
 
 ## Stage Rules
 
-Evaluate stages in this order:
+Evaluate prerequisite gates first. Runtime states are only considered after the Mission has passed all startup prerequisites.
 
-1. `running`
-   - If the Mission has any running execution.
-
-2. `blocked`
-   - If the Mission has a failed execution or blocked Agent state that prevents progress.
-
-3. `briefing`
+1. `briefing`
    - If `mission.briefConfirmed !== true`.
 
-4. `missing_plan`
+2. `missing_plan`
    - If no confirmed `MissionPlan` exists.
    - In Phase 4.6.0 this will be true for most Missions because `MissionPlan` does not exist yet.
 
-5. `team_not_ready`
+3. `team_not_ready`
    - If the Mission has no non-Owner, non-HR execution Agents.
 
-6. `missing_initial_tasks`
+4. `missing_initial_tasks`
    - If the Mission has no non-completed task that can plausibly be executed.
 
-7. `missing_execution_runner`
+5. `missing_execution_runner`
    - If the Mission has executable tasks but no available runner signal.
    - In Phase 4.6.0, the only real runner signal is OpenClaw availability from the API layer.
    - Internal LLM runner support is not counted until Phase 4.6.4 adds that runner.
 
-8. `missing_schedule`
+6. `missing_schedule`
    - If the Mission has no schedule rules.
 
-9. `ready`
-   - If no blockers remain.
+7. `blocked`
+   - If all prerequisites are satisfied, but the latest task execution failed or a non-Owner/non-HR execution Agent is blocked.
 
-The diagnosis should return all relevant blockers, but `stage` should reflect the earliest blocking stage in the order above, except `running` and `blocked`, which are immediate runtime states.
+8. `running`
+   - If all prerequisites are satisfied and the Mission has any running execution.
+
+9. `ready`
+   - If all prerequisites are satisfied and there are no runtime blockers.
+
+The diagnosis should return only blockers that are relevant after earlier prerequisite gates pass. For example, a Mission with an unconfirmed brief should not also report missing plan, runner, or schedule blockers.
 
 ## API Design
 
