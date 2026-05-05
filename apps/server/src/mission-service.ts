@@ -247,6 +247,18 @@ export interface AutopilotRuntimeSignals {
   hasPlan: boolean;
 }
 
+function assertAutopilotRuntimeSignals(runtime: AutopilotRuntimeSignals): void {
+  if (!runtime || typeof runtime !== "object") {
+    throw new Error("Autopilot runtime signals must be provided");
+  }
+  if (typeof runtime.hasExecutionRunner !== "boolean") {
+    throw new Error("Autopilot runtime signal hasExecutionRunner must be boolean");
+  }
+  if (typeof runtime.hasPlan !== "boolean") {
+    throw new Error("Autopilot runtime signal hasPlan must be boolean");
+  }
+}
+
 export type ScheduleTemplateRequest =
   | {
       templateType: "daily_check" | "weekly_review";
@@ -884,6 +896,7 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
     }
+    assertAutopilotRuntimeSignals(runtime);
 
     const missionExecutions = [...this.executions.values()].filter((execution) => execution.missionId === missionId);
     const missionAgents = [...this.agents.values()].filter((agent) => agent.missionId === missionId);
@@ -926,9 +939,16 @@ export class InMemoryMissionService {
       hasScheduleRules: mission.scheduleRules.length > 0,
       hasRunningExecution,
     };
+    const prerequisitesReady =
+      signals.briefConfirmed &&
+      signals.hasPlan &&
+      signals.teamReady &&
+      signals.hasInitialTasks &&
+      signals.hasExecutionRunner &&
+      signals.hasScheduleRules;
 
     const blockers: AutopilotBlocker[] = [];
-    if (hasFailedExecution || hasBlockedExecutionAgent) {
+    if (prerequisitesReady && (hasFailedExecution || hasBlockedExecutionAgent)) {
       blockers.push({
         code: "execution_blocked",
         message: "The latest execution for a task failed, or an execution team agent is blocked.",
@@ -986,11 +1006,7 @@ export class InMemoryMissionService {
     }
 
     let stage: AutopilotStage = "ready";
-    if (signals.hasRunningExecution) {
-      stage = "running";
-    } else if (hasFailedExecution || hasBlockedExecutionAgent) {
-      stage = "blocked";
-    } else if (!signals.briefConfirmed) {
+    if (!signals.briefConfirmed) {
       stage = "briefing";
     } else if (!signals.hasPlan) {
       stage = "missing_plan";
@@ -1002,6 +1018,10 @@ export class InMemoryMissionService {
       stage = "missing_execution_runner";
     } else if (!signals.hasScheduleRules) {
       stage = "missing_schedule";
+    } else if (hasFailedExecution || hasBlockedExecutionAgent) {
+      stage = "blocked";
+    } else if (signals.hasRunningExecution) {
+      stage = "running";
     }
 
     return {

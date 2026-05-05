@@ -532,7 +532,7 @@ describe("InMemoryMissionService", () => {
     });
   });
 
-  it("diagnoses running execution before other blockers", async () => {
+  it("keeps missing plan ahead of running execution state", async () => {
     const service = new InMemoryMissionService({
       llm: new FakeLlmAdapter(() => JSON.stringify({
         goal: "Run a mission",
@@ -547,10 +547,15 @@ describe("InMemoryMissionService", () => {
     expect(task).toBeDefined();
     service.startExecution({ missionId: mission.id, taskId: task!.id });
 
-    expect(service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true, hasPlan: false }).stage).toBe("running");
+    const diagnosis = service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true, hasPlan: false });
+
+    expect(diagnosis.stage).toBe("missing_plan");
+    expect(diagnosis.blockers).toEqual([
+      expect.objectContaining({ code: "mission_plan_missing" }),
+    ]);
   });
 
-  it("diagnoses failed execution as blocked", async () => {
+  it("keeps missing plan ahead of failed execution blockers", async () => {
     const service = new InMemoryMissionService({
       llm: new FakeLlmAdapter(() => JSON.stringify({
         goal: "Run a mission",
@@ -568,10 +573,51 @@ describe("InMemoryMissionService", () => {
 
     const diagnosis = service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true, hasPlan: false });
 
-    expect(diagnosis.stage).toBe("blocked");
-    expect(diagnosis.blockers[0]).toMatchObject({
-      code: "execution_blocked",
+    expect(diagnosis.stage).toBe("missing_plan");
+    expect(diagnosis.blockers).toEqual([
+      expect.objectContaining({ code: "mission_plan_missing" }),
+    ]);
+  });
+
+  it("diagnoses running and blocked states only after prerequisite gates are ready", async () => {
+    const service = new InMemoryMissionService({
+      llm: new FakeLlmAdapter(() => JSON.stringify({
+        goal: "Run a mission",
+        scope: "Execution test",
+        constraints: [],
+        successMetrics: ["Mission is runnable"],
+        keyAssumptions: [],
+      })),
     });
+    const runningMission = await createConfirmedActivatedMission(service);
+    addOwnerDailyRule(service, runningMission.id);
+    const runningTask = service.snapshot().tasks.find((candidate) => candidate.missionId === runningMission.id);
+    expect(runningTask).toBeDefined();
+    service.startExecution({ missionId: runningMission.id, taskId: runningTask!.id });
+
+    expect(service.getAutopilotDiagnosis(runningMission.id, { hasExecutionRunner: true, hasPlan: true }).stage).toBe("running");
+
+    const blockedMission = await createConfirmedActivatedMission(service);
+    addOwnerDailyRule(service, blockedMission.id);
+    const blockedTask = service.snapshot().tasks.find((candidate) => candidate.missionId === blockedMission.id);
+    expect(blockedTask).toBeDefined();
+    const execution = service.startExecution({ missionId: blockedMission.id, taskId: blockedTask!.id });
+    service.failExecution({ executionId: execution.id, error: "runner unavailable" });
+
+    const blockedDiagnosis = service.getAutopilotDiagnosis(blockedMission.id, { hasExecutionRunner: true, hasPlan: true });
+    expect(blockedDiagnosis.stage).toBe("blocked");
+    expect(blockedDiagnosis.blockers).toEqual([
+      expect.objectContaining({ code: "execution_blocked" }),
+    ]);
+  });
+
+  it("fails fast when autopilot runtime signals are missing", async () => {
+    const service = new InMemoryMissionService({ llm: diagnosisBriefLlm() });
+    const mission = await createConfirmedMission(service);
+
+    expect(() => service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true } as any)).toThrow(
+      "Autopilot runtime signal hasPlan must be boolean",
+    );
   });
 
   it("diagnoses missing execution runner when executable tasks exist", async () => {
