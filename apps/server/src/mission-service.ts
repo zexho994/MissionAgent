@@ -263,6 +263,25 @@ function clearAutomationTogglePause(metadata: Record<string, unknown>): Record<s
   return rest;
 }
 
+function isAutomationPaused(rules: ScheduleRule[]): boolean {
+  return (
+    rules.length > 0 &&
+    rules.every((rule) => !rule.enabled) &&
+    rules.some((rule) => rule.metadata.pausedByAutomationToggle === true)
+  );
+}
+
+function applyAutomationTogglePause(rule: ScheduleRule): ScheduleRule {
+  return {
+    ...rule,
+    enabled: false,
+    metadata: {
+      ...rule.metadata,
+      pausedByAutomationToggle: true,
+    },
+  };
+}
+
 export interface MissionServiceOptions {
   storageFile?: string | undefined;
   configFile?: string | undefined;
@@ -876,20 +895,21 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
     }
+    const ruleToAdd = isAutomationPaused(mission.scheduleRules) ? applyAutomationTogglePause(rule) : rule;
     const updated: Mission = {
       ...mission,
-      scheduleRules: [...mission.scheduleRules, rule],
+      scheduleRules: [...mission.scheduleRules, ruleToAdd],
     };
     this.missions.set(updated.id, updated);
     if (updated.status === "active") {
       const scheduler = this.getOrCreateScheduler(missionId);
       if (scheduler.isRunning()) {
-        scheduler.addRule(rule);
+        scheduler.addRule(ruleToAdd);
       } else {
         scheduler.start(updated.scheduleRules);
       }
     } else {
-      this.getOrCreateScheduler(missionId).addRule(rule);
+      this.getOrCreateScheduler(missionId).addRule(ruleToAdd);
     }
     this.persist();
   }
@@ -899,6 +919,7 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
     }
+    const automationPaused = isAutomationPaused(mission.scheduleRules);
 
     let ruleInput: Parameters<typeof createScheduleRule>[0];
     if (input.templateType === "daily_check" || input.templateType === "weekly_review") {
@@ -906,7 +927,7 @@ export class InMemoryMissionService {
       ruleInput = {
         name: isDaily ? "Daily check" : "Weekly review",
         missionId,
-        enabled: true,
+        enabled: !automationPaused,
         trigger: {
           type: "cron",
           expression: isDaily ? "0 9 * * *" : "0 9 * * 1",
@@ -927,13 +948,17 @@ export class InMemoryMissionService {
           priority: "normal",
         },
         maxConcurrent: 1,
-        metadata: { createdBy: "user_template", templateType: input.templateType },
+        metadata: {
+          createdBy: "user_template",
+          templateType: input.templateType,
+          ...(automationPaused ? { pausedByAutomationToggle: true } : {}),
+        },
       };
     } else if (input.templateType === "condition_response") {
       ruleInput = {
         name: "Condition response",
         missionId,
-        enabled: true,
+        enabled: !automationPaused,
         trigger: {
           type: "condition",
           description: input.condition,
@@ -956,7 +981,11 @@ export class InMemoryMissionService {
           priority: "high",
         },
         maxConcurrent: 1,
-        metadata: { createdBy: "user_template", templateType: input.templateType },
+        metadata: {
+          createdBy: "user_template",
+          templateType: input.templateType,
+          ...(automationPaused ? { pausedByAutomationToggle: true } : {}),
+        },
       };
     } else {
       const unsupported = (input as { templateType?: string }).templateType;
@@ -965,7 +994,7 @@ export class InMemoryMissionService {
 
     const rule = createScheduleRule(ruleInput);
     this.addScheduleRule(missionId, rule);
-    return rule;
+    return isAutomationPaused(mission.scheduleRules) ? applyAutomationTogglePause(rule) : rule;
   }
 
   removeScheduleRule(missionId: string, ruleId: string): void {
@@ -1132,15 +1161,10 @@ export class InMemoryMissionService {
       .filter((event) => event.missionId === missionId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 
-    const automationPaused =
-      rules.length > 0 &&
-      rules.every((rule) => !rule.enabled) &&
-      rules.some((rule) => rule.metadata.pausedByAutomationToggle === true);
-
     return {
       missionId,
       rulesCount: rules.length,
-      automationPaused,
+      automationPaused: isAutomationPaused(rules),
       currentScheduledTasks,
       ...(nextAction ? { nextAction } : {}),
       ...(lastTriggerEvent

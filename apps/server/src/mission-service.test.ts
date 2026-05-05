@@ -1126,6 +1126,42 @@ describe("InMemoryMissionService", () => {
     expect(service.getScheduleRules(mission.id).find((rule) => rule.id === manuallyDisabled.id)?.enabled).toBe(false);
   });
 
+  it("pauses and resumes template rules created while automation is paused", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "daily_check",
+      assigneeRole: "owner",
+      taskGoal: "Check yesterday's GitHub growth metrics",
+    });
+
+    service.pauseMissionAutomation(mission.id);
+    const createdWhilePaused = service.createScheduleRuleFromTemplate(mission.id, {
+      templateType: "weekly_review",
+      assigneeRole: "owner",
+      taskGoal: "Review weekly GitHub growth",
+    });
+
+    expect(createdWhilePaused.enabled).toBe(false);
+    expect(createdWhilePaused.metadata.pausedByAutomationToggle).toBe(true);
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === createdWhilePaused.id)).toEqual(
+      expect.objectContaining({
+        enabled: false,
+        metadata: expect.objectContaining({ pausedByAutomationToggle: true }),
+      }),
+    );
+    expect(service.getAutomationSummary(mission.id).automationPaused).toBe(true);
+
+    service.resumeMissionAutomation(mission.id);
+
+    expect(service.getScheduleRules(mission.id).find((rule) => rule.id === createdWhilePaused.id)).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        metadata: expect.not.objectContaining({ pausedByAutomationToggle: true }),
+      }),
+    );
+  });
+
   it("does not resume rules manually disabled while automation-toggle paused", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Track GitHub growth" });
