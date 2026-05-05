@@ -1,6 +1,6 @@
 import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
-import type { InMemoryMissionService } from "./mission-service.js";
+import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
 
 export interface ApiRequest {
   method: string;
@@ -229,6 +229,68 @@ export async function handleApiRequest(
         });
 
       return json(202, { execution, snapshot: deps.missions.snapshot() });
+    }
+
+    const automationSummaryMatch = request.path.match(/^\/api\/missions\/([^/]+)\/automation-summary$/);
+    if (automationSummaryMatch) {
+      const missionId = automationSummaryMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        return json(200, { summary: deps.missions.getAutomationSummary(missionId) });
+      }
+    }
+
+    const scheduleProductActionMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/schedule\/(trigger-next|templates|pause|resume)$/,
+    );
+    if (scheduleProductActionMatch) {
+      const missionId = scheduleProductActionMatch[1];
+      const action = scheduleProductActionMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "POST" && action === "trigger-next") {
+        const task = deps.missions.triggerNextScheduleRule(missionId);
+        return json(200, { task, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "templates") {
+        const body = expectObject(request.body);
+        const templateType = expectString(body.templateType, "templateType");
+        let input: ScheduleTemplateRequest;
+        if (templateType === "daily_check" || templateType === "weekly_review") {
+          input = {
+            templateType,
+            assigneeRole: expectString(body.assigneeRole, "assigneeRole"),
+            taskGoal: expectString(body.taskGoal, "taskGoal"),
+          };
+        } else if (templateType === "condition_response") {
+          input = {
+            templateType,
+            sourceAgentRole: expectString(body.sourceAgentRole, "sourceAgentRole"),
+            condition: expectString(body.condition, "condition"),
+            responseAssigneeRole: expectString(body.responseAssigneeRole, "responseAssigneeRole"),
+            responseTaskGoal: expectString(body.responseTaskGoal, "responseTaskGoal"),
+          };
+        } else {
+          throw new Error(`Unsupported schedule template: ${templateType}`);
+        }
+        const rule = deps.missions.createScheduleRuleFromTemplate(missionId, input);
+        return json(201, { rule, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "pause") {
+        deps.missions.pauseMissionAutomation(missionId);
+        return json(200, { summary: deps.missions.getAutomationSummary(missionId), snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "resume") {
+        deps.missions.resumeMissionAutomation(missionId);
+        return json(200, { summary: deps.missions.getAutomationSummary(missionId), snapshot: deps.missions.snapshot() });
+      }
     }
 
     const scheduleMatch = request.path.match(

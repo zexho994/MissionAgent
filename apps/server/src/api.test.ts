@@ -531,4 +531,98 @@ describe("schedule API endpoints", () => {
     const rules = (resp.body as { rules: Array<{ id: string; nextRunAt?: string }> }).rules;
     expect(rules.find((rule) => rule.id === ruleId)?.nextRunAt).toBe("2026-04-29T09:00:00.000Z");
   });
+
+  it("GET /api/missions/:id/automation-summary returns automation summary", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    await addScheduleRule(missions, missionId, { assigneeRole: "owner" });
+
+    const resp = await handleApiRequest(
+      { method: "GET", path: `/api/missions/${missionId}/automation-summary` },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(200);
+    expect((resp.body as { summary: { rulesCount: number; nextAction?: { ruleName: string } } }).summary.rulesCount).toBe(1);
+    expect((resp.body as { summary: { nextAction?: { ruleName: string } } }).summary.nextAction?.ruleName).toBe("Daily check");
+  });
+
+  it("POST /api/missions/:id/schedule/trigger-next creates the next scheduled task", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const ruleId = await addScheduleRule(missions, missionId, { assigneeRole: "owner" });
+
+    const resp = await handleApiRequest(
+      { method: "POST", path: `/api/missions/${missionId}/schedule/trigger-next`, body: {} },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(200);
+    expect((resp.body as { task: { scheduleRuleId: string } }).task.scheduleRuleId).toBe(ruleId);
+    expect((resp.body as { snapshot: MissionSnapshot }).snapshot.scheduleTriggerEvents).toHaveLength(1);
+  });
+
+  it("POST /api/missions/:id/schedule/templates creates a daily rule", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+
+    const resp = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/schedule/templates`,
+        body: {
+          templateType: "daily_check",
+          assigneeRole: "owner",
+          taskGoal: "Check yesterday's GitHub growth metrics",
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(201);
+    expect((resp.body as { rule: { metadata: Record<string, unknown> } }).rule.metadata.templateType).toBe("daily_check");
+  });
+
+  it("POST /api/missions/:id/schedule/templates rejects biweekly rules", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+
+    const resp = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/schedule/templates`,
+        body: {
+          templateType: "biweekly_review",
+          assigneeRole: "owner",
+          taskGoal: "Review every two weeks",
+        },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(400);
+    expect((resp.body as { error: string }).error).toContain("Unsupported schedule template: biweekly_review");
+  });
+
+  it("POST pause and resume toggle automation without restoring manually disabled rules", async () => {
+    const missions = new InMemoryMissionService();
+    const missionId = await createMissionViaApi(missions);
+    const enabledRuleId = await addScheduleRule(missions, missionId, { assigneeRole: "owner" });
+    const disabledRuleId = await addScheduleRule(missions, missionId, { assigneeRole: "owner", title: "Weekly review" });
+    missions.updateScheduleRule(missionId, disabledRuleId, { enabled: false });
+
+    const pauseResp = await handleApiRequest(
+      { method: "POST", path: `/api/missions/${missionId}/schedule/pause`, body: {} },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    const resumeResp = await handleApiRequest(
+      { method: "POST", path: `/api/missions/${missionId}/schedule/resume`, body: {} },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(pauseResp.status).toBe(200);
+    expect(resumeResp.status).toBe(200);
+    expect(missions.getScheduleRules(missionId).find((rule) => rule.id === enabledRuleId)?.enabled).toBe(true);
+    expect(missions.getScheduleRules(missionId).find((rule) => rule.id === disabledRuleId)?.enabled).toBe(false);
+  });
 });
