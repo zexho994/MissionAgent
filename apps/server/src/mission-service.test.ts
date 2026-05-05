@@ -610,6 +610,15 @@ describe("InMemoryMissionService", () => {
       expect(service.getMissionPlan({ missionId: mission.id, planId: plan.id })).toEqual(plan);
     });
 
+    it("returns the latest draft MissionPlan when no plan has been confirmed", async () => {
+      const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+      const mission = await createConfirmedMission(service);
+
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+
+      expect(service.getMissionPlan({ missionId: mission.id })).toEqual(plan);
+    });
+
     it("fails fast when plan generation prerequisites or parser output are invalid", async () => {
       const noLlmService = new InMemoryMissionService();
       const mission = await noLlmService.createMission({ goal: "Run a mission" });
@@ -681,17 +690,40 @@ describe("InMemoryMissionService", () => {
       const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
       const mission = await createConfirmedMission(service);
       const first = await service.generateMissionPlan({ missionId: mission.id });
-      const confirmedFirst = service.confirmMissionPlan({ missionId: mission.id, planId: first.id });
+      service.confirmMissionPlan({ missionId: mission.id, planId: first.id });
       const second = await service.generateMissionPlan({ missionId: mission.id, feedback: "Revise after review" });
-      const confirmedSecond = service.confirmMissionPlan({ missionId: mission.id, planId: second.id });
+      service.confirmMissionPlan({ missionId: mission.id, planId: second.id });
+      const confirmedSecond = service.getMissionPlan({ missionId: mission.id, planId: second.id });
 
-      expect(confirmedFirst.confirmedAt).toBeInstanceOf(Date);
-      expect(confirmedSecond.status).toBe("confirmed");
+      expect(service.getMissionPlan({ missionId: mission.id, planId: first.id })?.confirmedAt).toBeInstanceOf(Date);
+      expect(confirmedSecond?.status).toBe("confirmed");
       expect(service.getMissionPlan({ missionId: mission.id, planId: first.id })?.status).toBe("superseded");
       expect(service.snapshot().missions.find((candidate) => candidate.id === mission.id)?.confirmedPlanId).toBe(
         second.id,
       );
       expect(service.getMissionPlan({ missionId: mission.id })).toEqual(confirmedSecond);
+    });
+
+    it("fails fast when confirming a non-draft MissionPlan", async () => {
+      const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+      const mission = await createConfirmedMission(service);
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+      service.confirmMissionPlan({ missionId: mission.id, planId: plan.id });
+
+      expect(() => service.confirmMissionPlan({ missionId: mission.id, planId: plan.id })).toThrow(
+        "Only draft MissionPlan can be confirmed",
+      );
+    });
+
+    it("returns the updated Mission after confirming a MissionPlan", async () => {
+      const service = new InMemoryMissionService({ llm: diagnosisLlmWithPlan() });
+      const mission = await createConfirmedMission(service);
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+
+      const updatedMission = service.confirmMissionPlan({ missionId: mission.id, planId: plan.id });
+
+      expect(updatedMission.id).toBe(mission.id);
+      expect(updatedMission.confirmedPlanId).toBe(plan.id);
     });
 
     it("persists and reloads plans with Date fields intact", async () => {

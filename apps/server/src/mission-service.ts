@@ -700,7 +700,7 @@ export class InMemoryMissionService {
     return plan;
   }
 
-  confirmMissionPlan(input: { missionId: string; planId: string }): MissionPlan {
+  confirmMissionPlan(input: { missionId: string; planId: string }): Mission {
     const mission = this.missions.get(input.missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
@@ -709,8 +709,8 @@ export class InMemoryMissionService {
     if (!plan || plan.missionId !== mission.id) {
       throw new Error(`MissionPlan not found in mission: ${input.planId}`);
     }
-    if (plan.status !== "draft" && plan.status !== "confirmed") {
-      throw new Error(`Only draft or confirmed MissionPlan can be confirmed: ${input.planId}`);
+    if (plan.status !== "draft") {
+      throw new Error(`Only draft MissionPlan can be confirmed: ${input.planId}`);
     }
 
     for (const candidate of this.plans.values()) {
@@ -725,12 +725,13 @@ export class InMemoryMissionService {
       confirmedAt: plan.confirmedAt ?? new Date(),
     };
     this.plans.set(confirmed.id, confirmed);
-    this.missions.set(mission.id, {
+    const updatedMission: Mission = {
       ...mission,
       confirmedPlanId: confirmed.id,
-    });
+    };
+    this.missions.set(updatedMission.id, updatedMission);
     this.persist();
-    return confirmed;
+    return updatedMission;
   }
 
   getMissionPlan(input: { missionId: string; planId?: string }): MissionPlan | undefined {
@@ -743,7 +744,7 @@ export class InMemoryMissionService {
       return plan?.missionId === mission.id ? plan : undefined;
     }
     if (!mission.confirmedPlanId) {
-      return undefined;
+      return this.getLatestDraftMissionPlan(mission.id);
     }
     return this.getConfirmedMissionPlan(mission);
   }
@@ -1675,6 +1676,12 @@ export class InMemoryMissionService {
     }
     const plan = this.getConfirmedMissionPlan(mission);
     return plan.status === "confirmed";
+  }
+
+  private getLatestDraftMissionPlan(missionId: string): MissionPlan | undefined {
+    return [...this.plans.values()]
+      .filter((plan) => plan.missionId === missionId && plan.status === "draft")
+      .sort((a, b) => b.revision - a.revision)[0];
   }
 
   private getConfirmedMissionPlan(mission: Mission): MissionPlan {
