@@ -48,6 +48,38 @@ function renderWarRoom() {
       }
     });
   }
+  const toggleScheduleForm = document.querySelector("[data-toggle-schedule-form]");
+  if (toggleScheduleForm) {
+    toggleScheduleForm.addEventListener("click", () => {
+      state.scheduleFormOpen = !state.scheduleFormOpen;
+      renderWarRoom();
+    });
+  }
+  const scheduleTemplateForm = document.querySelector("#schedule-template-form");
+  if (scheduleTemplateForm) {
+    scheduleTemplateForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const mission = currentMission();
+      if (!mission) return;
+      const formData = new FormData(scheduleTemplateForm);
+      const templateType = formData.get("templateType");
+      const runNow = formData.get("runNow") === "on";
+      const payload = templateType === "condition_response"
+        ? {
+            templateType,
+            sourceAgentRole: formData.get("sourceAgentRole"),
+            condition: formData.get("condition"),
+            responseAssigneeRole: formData.get("responseAssigneeRole"),
+            responseTaskGoal: formData.get("responseTaskGoal"),
+          }
+        : {
+            templateType,
+            assigneeRole: formData.get("assigneeRole"),
+            taskGoal: formData.get("taskGoal"),
+          };
+      void createScheduleTemplate(mission.id, payload, runNow);
+    });
+  }
 }
 
 function warNavButton(tab, label) {
@@ -193,6 +225,13 @@ function renderWarTab(data) {
   if (state.warTab === "conversations") {
     return renderConversationFeed(data);
   }
+  if (state.warTab === "schedule") {
+    return renderScheduleTab(
+      data,
+      state.scheduleRulesByMissionId[data.mission.id] || [],
+      state.automationSummaryByMissionId[data.mission.id],
+    );
+  }
   const map = {
     agents: {
       title: "Agents 看板",
@@ -226,6 +265,126 @@ function renderWarTab(data) {
         ${content.items.length ? content.items.map((item) => `<div>${esc(item)}</div>`).join("") : `<div>暂无数据</div>`}
       </div>
     </div>
+  `;
+}
+
+function renderScheduleTab(data, rules, summary) {
+  const disabled = state.scheduleActionPending ? "disabled" : "";
+  return `
+    <div class="tab-panel schedule-panel">
+      <div class="schedule-head">
+        <div>
+          <h1>定时任务</h1>
+          <p>把 Mission 的日常检查、周复盘和条件响应固化成自动执行规则。</p>
+        </div>
+        <button type="button" data-toggle-schedule-form ${disabled}>${state.scheduleFormOpen ? "收起" : "新增规则"}</button>
+      </div>
+      ${state.scheduleError ? `<div class="inline-error">${esc(state.scheduleError)}</div>` : ""}
+      ${renderTriggerHistory(summary)}
+      ${state.scheduleFormOpen ? renderScheduleTemplateForm(data) : ""}
+      <div class="schedule-rules">
+        ${rules.length ? rules.map((rule) => renderScheduleRuleCard(data, rule)).join("") : `<div class="empty-state">暂无定时规则。新增每日检查、每周复盘或条件响应后，这里会显示运行节奏。</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderScheduleRuleCard(data, rule) {
+  const trigger = rule.trigger.type === "cron"
+    ? `Cron：${rule.trigger.expression} · ${rule.trigger.timezone}${rule.nextRunAt ? ` · 下次 ${formatTime(rule.nextRunAt)}` : ""}`
+    : `条件：${rule.trigger.description} · 来源 ${rule.trigger.sourceAgentRole}`;
+  const agent = data.agents.find((candidate) => candidate.role === rule.taskTemplate.assigneeRole);
+  return `
+    <article class="schedule-rule-card ${rule.enabled ? "" : "paused"}">
+      <header>
+        <div>
+          <strong>${esc(rule.name)}</strong>
+          <span>${esc(trigger)}</span>
+        </div>
+        <span class="schedule-rule-state">${rule.enabled ? "启用" : "暂停"}</span>
+      </header>
+      <dl>
+        <div>
+          <dt>负责人</dt>
+          <dd>${esc(agent ? `${agent.name} / ${rule.taskTemplate.assigneeRole}` : rule.taskTemplate.assigneeRole)}</dd>
+        </div>
+        <div>
+          <dt>任务</dt>
+          <dd>${esc(rule.taskTemplate.title)}</dd>
+        </div>
+      </dl>
+    </article>
+  `;
+}
+
+function renderTriggerHistory(summary) {
+  const current = summary?.currentScheduledTasks || [];
+  return `
+    <section class="schedule-history">
+      <div>
+        <span>最近触发</span>
+        <strong>${summary?.lastTrigger ? esc(summary.lastTrigger.ruleName) : "暂无触发记录"}</strong>
+        <p>${summary?.lastTrigger ? `${esc(formatTime(summary.lastTrigger.createdAt))} · ${esc(summary.lastTrigger.status)} · ${esc(summary.lastTrigger.message)}` : "手动或自动触发后会记录在这里。"}</p>
+      </div>
+      <div>
+        <span>当前排队</span>
+        <strong>${current.length ? `${current.length} 个任务` : "无排队任务"}</strong>
+        <p>${current.length ? current.map((task) => esc(`${statusLabel(task.status)}：${task.title}`)).join("<br>") : "没有未完成的定时任务。"}</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderScheduleTemplateForm(data) {
+  const roleOptions = data.agents
+    .map((agent) => agent.role)
+    .filter((role, index, roles) => roles.indexOf(role) === index)
+    .map((role) => `<option value="${esc(role)}">${esc(role)}</option>`)
+    .join("");
+  return `
+    <form id="schedule-template-form" class="schedule-template-form">
+      <label>
+        <span>模板</span>
+        <select name="templateType">
+          <option value="daily_check">每日检查</option>
+          <option value="weekly_review">每周复盘</option>
+          <option value="condition_response">条件响应</option>
+        </select>
+      </label>
+      <div class="schedule-form-grid">
+        <label>
+          <span>负责人</span>
+          <select name="assigneeRole">${roleOptions}</select>
+        </label>
+        <label>
+          <span>任务目标</span>
+          <input name="taskGoal" type="text" placeholder="例如：检查昨天的增长指标并给出下一步动作">
+        </label>
+        <label>
+          <span>来源角色</span>
+          <select name="sourceAgentRole">${roleOptions}</select>
+        </label>
+        <label>
+          <span>触发条件</span>
+          <input name="condition" type="text" placeholder="例如：核心指标连续两天下降">
+        </label>
+        <label>
+          <span>响应负责人</span>
+          <select name="responseAssigneeRole">${roleOptions}</select>
+        </label>
+        <label>
+          <span>响应任务目标</span>
+          <input name="responseTaskGoal" type="text" placeholder="例如：诊断异常并提出修正方案">
+        </label>
+      </div>
+      <div class="schedule-form-actions">
+        <label class="schedule-run-now">
+          <input name="runNow" type="checkbox">
+          <span>创建后立即运行一次</span>
+        </label>
+        <button type="submit" ${state.scheduleActionPending ? "disabled" : ""}>${state.scheduleActionPending ? "创建中..." : "创建规则"}</button>
+      </div>
+    </form>
   `;
 }
 

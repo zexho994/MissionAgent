@@ -112,6 +112,27 @@ async function resumeAutomation(missionId) {
   }
 }
 
+async function createScheduleTemplate(missionId, payload, runNow) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/templates`, { method: "POST", body: payload });
+    state.snapshot = result.snapshot;
+    if (runNow) {
+      const trigger = await api(`/api/missions/${missionId}/schedule/${result.rule.id}/trigger`, { method: "POST", body: {} });
+      state.snapshot = trigger.snapshot || state.snapshot;
+    }
+    await loadAutomationState(missionId);
+    state.scheduleFormOpen = false;
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
 async function refresh() {
   state.config = await api("/api/config");
   const health = await api("/api/health");
