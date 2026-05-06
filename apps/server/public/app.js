@@ -419,11 +419,17 @@ function renderMissionPlanReview(data) {
   const planUi = currentPlanUiState();
   const error = planUi.error ? `<p class="plan-error">${esc(planUi.error)}</p>` : "";
   if (!plan) {
+    const legacyWarRoomAction = data.tasks.length > 0 ? `
+        <div class="choice-row">
+          <button type="button" data-open-existing-war-room ${pending ? "disabled" : ""}>进入作战室</button>
+        </div>
+      ` : "";
     return `
       <div class="mission-plan-card">
         <strong>Owner Agent · MissionPlan</strong>
         ${error}
         <button type="button" data-generate-plan ${pending ? "disabled" : ""}>${pending ? "正在生成计划..." : "生成执行计划"}</button>
+        ${legacyWarRoomAction}
       </div>
     `;
   }
@@ -679,6 +685,23 @@ function bindChoiceButtons() {
       }
       state.view = "mission";
       state.draftMode = false;
+      await loadAutomationState(mission.id);
+      await loadAutopilotDiagnosis(mission.id);
+      renderAll();
+    });
+  });
+  document.querySelectorAll("[data-open-existing-war-room]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      if (scoped().tasks.length === 0) {
+        planUiState(mission.id).error = "请先生成并确认 MissionPlan。";
+        renderAll();
+        return;
+      }
+      state.view = "mission";
+      state.draftMode = false;
+      state.warTab = "overview";
       await loadAutomationState(mission.id);
       await loadAutopilotDiagnosis(mission.id);
       renderAll();
