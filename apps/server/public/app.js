@@ -15,9 +15,7 @@ const state = {
   scheduleFormOpen: false,
   scheduleError: "",
   planActionMissionId: undefined,
-  planRevisionOpen: false,
-  planRevisionFeedback: "",
-  planError: "",
+  planUiByMissionId: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -195,6 +193,29 @@ function currentMissionPlan() {
 function isPlanPending() {
   const mission = currentMission();
   return Boolean(mission && state.planActionMissionId === mission.id);
+}
+
+function planUiState(missionId) {
+  if (!state.planUiByMissionId[missionId]) {
+    state.planUiByMissionId[missionId] = {
+      revisionOpen: false,
+      revisionFeedback: "",
+      error: "",
+    };
+  }
+  return state.planUiByMissionId[missionId];
+}
+
+function currentPlanUiState() {
+  const mission = currentMission();
+  if (!mission) {
+    return {
+      revisionOpen: false,
+      revisionFeedback: "",
+      error: "",
+    };
+  }
+  return planUiState(mission.id);
 }
 
 function scoped() {
@@ -395,7 +416,8 @@ function renderBriefMessage(data) {
 function renderMissionPlanReview(data) {
   const plan = currentMissionPlan();
   const pending = isPlanPending();
-  const error = state.planError ? `<p class="plan-error">${esc(state.planError)}</p>` : "";
+  const planUi = currentPlanUiState();
+  const error = planUi.error ? `<p class="plan-error">${esc(planUi.error)}</p>` : "";
   if (!plan) {
     return `
       <div class="mission-plan-card">
@@ -431,15 +453,15 @@ function renderMissionPlanReview(data) {
           <button type="button" data-confirm-plan="${esc(plan.id)}" ${pending ? "disabled" : ""}>确认 MissionPlan</button>
           <button type="button" data-toggle-plan-revision ${pending ? "disabled" : ""}>提出修改建议</button>
         </div>
-        ${state.planRevisionOpen ? `
+        ${planUi.revisionOpen ? `
           <div class="plan-revision-box">
-            <textarea id="plan-revision-feedback" rows="3" placeholder="修改建议">${esc(state.planRevisionFeedback)}</textarea>
+            <textarea id="plan-revision-feedback" rows="3" placeholder="修改建议">${esc(planUi.revisionFeedback)}</textarea>
             <button type="button" data-submit-plan-revision="${esc(plan.id)}" ${pending ? "disabled" : ""}>重新生成计划</button>
           </div>
         ` : ""}
       ` : `
         <div class="choice-row">
-          <button type="button" data-open-war-room>${data.tasks.length > 0 ? "进入作战室" : "创建作战室"}</button>
+          <button type="button" data-open-war-room ${pending ? "disabled" : ""}>${data.tasks.length > 0 ? "进入作战室" : "创建作战室"}</button>
         </div>
       `}
     </div>
@@ -544,15 +566,16 @@ function bindChoiceButtons() {
       const mission = currentMission();
       if (!mission) return;
       state.planActionMissionId = mission.id;
-      state.planError = "";
+      planUiState(mission.id).error = "";
       renderAll();
       try {
         const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: {} });
         state.snapshot = result.snapshot;
-        state.planRevisionOpen = false;
-        state.planRevisionFeedback = "";
+        const planUi = planUiState(mission.id);
+        planUi.revisionOpen = false;
+        planUi.revisionFeedback = "";
       } catch (error) {
-        state.planError = error instanceof Error ? error.message : String(error);
+        planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
       } finally {
         state.planActionMissionId = undefined;
         renderAll();
@@ -566,14 +589,14 @@ function bindChoiceButtons() {
       const planId = button.getAttribute("data-confirm-plan");
       if (!planId) throw new Error("Missing MissionPlan id");
       state.planActionMissionId = mission.id;
-      state.planError = "";
+      planUiState(mission.id).error = "";
       renderAll();
       try {
         const result = await api(`/api/missions/${mission.id}/plan/confirm`, { method: "POST", body: { planId } });
         state.snapshot = result.snapshot;
         await loadAutopilotDiagnosis(mission.id);
       } catch (error) {
-        state.planError = error instanceof Error ? error.message : String(error);
+        planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
       } finally {
         state.planActionMissionId = undefined;
         renderAll();
@@ -582,36 +605,42 @@ function bindChoiceButtons() {
   });
   document.querySelectorAll("[data-toggle-plan-revision]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.planRevisionOpen = !state.planRevisionOpen;
+      const mission = currentMission();
+      if (!mission) return;
+      const planUi = planUiState(mission.id);
+      planUi.revisionOpen = !planUi.revisionOpen;
       renderAll();
     });
   });
   const revisionTextarea = $("plan-revision-feedback");
   if (revisionTextarea) {
     revisionTextarea.addEventListener("input", (event) => {
-      state.planRevisionFeedback = event.target.value;
+      const mission = currentMission();
+      if (!mission) return;
+      planUiState(mission.id).revisionFeedback = event.target.value;
     });
   }
   document.querySelectorAll("[data-submit-plan-revision]").forEach((button) => {
     button.addEventListener("click", async () => {
       const mission = currentMission();
       if (!mission) return;
-      const feedback = state.planRevisionFeedback.trim();
+      const planUi = planUiState(mission.id);
+      const feedback = planUi.revisionFeedback.trim();
       if (!feedback) {
-        state.planError = "请输入修改建议。";
+        planUi.error = "请输入修改建议。";
         renderAll();
         return;
       }
       state.planActionMissionId = mission.id;
-      state.planError = "";
+      planUi.error = "";
       renderAll();
       try {
         const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: { feedback } });
         state.snapshot = result.snapshot;
-        state.planRevisionOpen = false;
-        state.planRevisionFeedback = "";
+        planUi.revisionOpen = false;
+        planUi.revisionFeedback = "";
       } catch (error) {
-        state.planError = error instanceof Error ? error.message : String(error);
+        planUi.error = error instanceof Error ? error.message : String(error);
       } finally {
         state.planActionMissionId = undefined;
         renderAll();
@@ -623,22 +652,29 @@ function bindChoiceButtons() {
       const mission = currentMission();
       if (!mission) return;
       if (scoped().tasks.length === 0) {
-        const activation = api("/api/missions/activate-async", {
-          method: "POST",
-          body: { missionId: mission.id },
-        });
-        state.view = "mission";
-        state.draftMode = false;
-        state.warTab = "overview";
-        await loadAutomationState(mission.id);
-        await loadAutopilotDiagnosis(mission.id);
+        state.planActionMissionId = mission.id;
+        planUiState(mission.id).error = "";
         renderAll();
-        startPolling();
-        const result = await activation;
-        state.snapshot = result.snapshot;
-        await loadAutomationState(mission.id);
-        await loadAutopilotDiagnosis(mission.id);
-        renderAll();
+        try {
+          const result = await api("/api/missions/activate-async", {
+            method: "POST",
+            body: { missionId: mission.id },
+          });
+          state.snapshot = result.snapshot;
+          state.view = "mission";
+          state.draftMode = false;
+          state.warTab = "overview";
+          await loadAutomationState(mission.id);
+          await loadAutopilotDiagnosis(mission.id);
+          renderAll();
+          startPolling();
+        } catch (error) {
+          planUiState(mission.id).error = `作战室创建失败：${error instanceof Error ? error.message : String(error)}`;
+          renderAll();
+        } finally {
+          state.planActionMissionId = undefined;
+          renderAll();
+        }
         return;
       }
       state.view = "mission";
