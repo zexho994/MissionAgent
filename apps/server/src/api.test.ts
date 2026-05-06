@@ -484,6 +484,79 @@ describe("handleApiRequest", () => {
     expect(threadResponse.status).toBe(200);
     expect((threadResponse.body as { messages: Array<{ content: string }> }).messages.some((message) => message.content.includes("下一步建议"))).toBe(true);
   });
+
+  it("returns mission feedback summary", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = await missions.createMission({ goal: "Grow a GitHub repository" });
+    missions.activateMission({ missionId: mission.id });
+    const task = missions.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = missions.startExecution({ missionId: mission.id, taskId: task!.id });
+    missions.failExecution({ executionId: execution.id, error: "OpenClaw timed out" });
+
+    const resp = await handleApiRequest(
+      {
+        method: "GET",
+        path: `/api/missions/${mission.id}/feedback-summary`,
+        body: undefined,
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(resp.status).toBe(200);
+    expect(resp.body).toMatchObject({
+      summary: {
+        missionId: mission.id,
+        counts: {
+          evaluations: 1,
+          failureAnalyses: 1,
+          strategyAdjustments: 0,
+        },
+      },
+    });
+  });
+
+  it("returns feedback record collections", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = await missions.createMission({ goal: "Grow a GitHub repository" });
+    missions.activateMission({ missionId: mission.id });
+    const task = missions.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = missions.startExecution({ missionId: mission.id, taskId: task!.id });
+    missions.failExecution({ executionId: execution.id, error: "OpenClaw timed out" });
+
+    const evaluations = await handleApiRequest(
+      {
+        method: "GET",
+        path: `/api/missions/${mission.id}/feedback/evaluations`,
+        body: undefined,
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    const failureAnalyses = await handleApiRequest(
+      {
+        method: "GET",
+        path: `/api/missions/${mission.id}/feedback/failure-analyses`,
+        body: undefined,
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    const strategyAdjustments = await handleApiRequest(
+      {
+        method: "GET",
+        path: `/api/missions/${mission.id}/feedback/strategy-adjustments`,
+        body: undefined,
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(evaluations.status).toBe(200);
+    expect((evaluations.body as { evaluations: unknown[] }).evaluations).toHaveLength(1);
+    expect(failureAnalyses.status).toBe(200);
+    expect((failureAnalyses.body as { failureAnalyses: unknown[] }).failureAnalyses).toHaveLength(1);
+    expect(strategyAdjustments.status).toBe(200);
+    expect((strategyAdjustments.body as { strategyAdjustments: unknown[] }).strategyAdjustments).toHaveLength(0);
+  });
 });
 
 describe("schedule API endpoints", () => {

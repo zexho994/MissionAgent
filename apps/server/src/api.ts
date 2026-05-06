@@ -289,6 +289,37 @@ export async function handleApiRequest(
       }
     }
 
+    const feedbackSummaryMatch = request.path.match(/^\/api\/missions\/([^/]+)\/feedback-summary$/);
+    if (feedbackSummaryMatch) {
+      const missionId = feedbackSummaryMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        return json(200, { summary: deps.missions.getFeedbackSummary(missionId) });
+      }
+    }
+
+    const feedbackCollectionMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/feedback\/(evaluations|failure-analyses|strategy-adjustments)$/,
+    );
+    if (feedbackCollectionMatch) {
+      const missionId = feedbackCollectionMatch[1];
+      const collection = feedbackCollectionMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET" && collection === "evaluations") {
+        return json(200, { evaluations: deps.missions.getMissionOutcomeEvaluations(missionId) });
+      }
+      if (request.method === "GET" && collection === "failure-analyses") {
+        return json(200, { failureAnalyses: deps.missions.getTaskFailureAnalyses(missionId) });
+      }
+      if (request.method === "GET" && collection === "strategy-adjustments") {
+        return json(200, { strategyAdjustments: deps.missions.getStrategyAdjustments(missionId) });
+      }
+    }
+
     const scheduleProductActionMatch = request.path.match(
       /^\/api\/missions\/([^/]+)\/schedule\/(trigger-next|templates|pause|resume)$/,
     );
