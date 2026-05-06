@@ -8,6 +8,7 @@ export interface LlmCallOptions {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  idleTimeoutMs?: number;
   onStream?: (token: string) => void;
   extraBody?: Record<string, unknown>;
 }

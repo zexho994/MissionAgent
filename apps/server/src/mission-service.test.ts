@@ -268,6 +268,68 @@ describe("InMemoryMissionService", () => {
     }
   });
 
+  it("deduplicates persisted HR agents and remaps their messages on reload", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "digitalagent-store-"));
+    try {
+      const storageFile = join(dir, "mission-store.json");
+      const service = new InMemoryMissionService({ storageFile });
+      const mission = await service.createMission({ goal: "Run a mission" });
+      const stored = service.snapshot();
+      const owner = stored.agents.find((agent) => agent.missionId === mission.id && agent.role === "owner");
+      if (!owner) throw new Error("missing owner");
+      const firstHr = {
+        id: "agent_hr_first",
+        missionId: mission.id,
+        role: "hr",
+        name: "HR Agent",
+        responsibility: "Team assembly and agent coordination",
+        status: "running",
+        currentTaskId: undefined,
+        lastAction: "正在分析 MissionBrief 并招募团队",
+        avatarSeed: "hr",
+        sortOrder: 1,
+      };
+      const duplicateHr = {
+        ...firstHr,
+        id: "agent_hr_duplicate",
+        lastAction: "Analyzing MissionBrief and proposing team",
+        sortOrder: 2,
+      };
+      writeFileSync(storageFile, `${JSON.stringify({
+        schemaVersion: 1,
+        ...stored,
+        agents: [owner, firstHr, duplicateHr],
+        agentMessages: [
+          {
+            id: "message_bootstrap",
+            missionId: mission.id,
+            fromAgentId: firstHr.id,
+            type: "team_created",
+            content: "HR Agent 正在分析 MissionBrief、拆解需要的角色，并招募 Mission 团队。",
+            createdAt: "2026-05-06T09:00:00.000Z",
+          },
+          {
+            id: "message_proposal",
+            missionId: mission.id,
+            fromAgentId: duplicateHr.id,
+            type: "team_created",
+            content: "HR Agent proposes a team of 5 members.",
+            createdAt: "2026-05-06T09:01:00.000Z",
+          },
+        ],
+      }, null, 2)}\n`, "utf8");
+
+      const reloaded = new InMemoryMissionService({ storageFile });
+      const snapshot = reloaded.snapshot();
+      const hrAgents = snapshot.agents.filter((agent) => agent.missionId === mission.id && agent.role === "hr");
+
+      expect(hrAgents).toHaveLength(1);
+      expect(snapshot.agentMessages.find((message) => message.id === "message_proposal")?.fromAgentId).toBe(hrAgents[0]?.id);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("continues an existing mission conversation without creating a new mission", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "学习 harness 并生成知识图" });

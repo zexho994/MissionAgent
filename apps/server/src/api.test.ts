@@ -187,6 +187,36 @@ describe("handleApiRequest", () => {
     expect(snapshot.tasks.filter((task) => task.missionId === missionId)).toHaveLength(0);
   });
 
+  it("reuses the recruiting HR agent when async activation starts negotiation", async () => {
+    vi.useFakeTimers();
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
+    const missionId = await createMissionWithConfirmedPlan(missions);
+
+    const response = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/activate-async",
+        body: { missionId },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+    const recruitingHr = missions.snapshot().agents.find(
+      (agent) => agent.missionId === missionId && agent.role === "hr",
+    );
+
+    expect(response.status).toBe(202);
+    expect(recruitingHr).toBeDefined();
+
+    await vi.runAllTimersAsync();
+
+    const hrAgents = missions.snapshot().agents.filter(
+      (agent) => agent.missionId === missionId && agent.role === "hr",
+    );
+    expect(hrAgents).toHaveLength(1);
+    expect(hrAgents[0]?.id).toBe(recruitingHr?.id);
+    expect(missions.getNegotiation({ missionId })).toBeDefined();
+  });
+
   it("rejects async API activation before creating HR work when no MissionPlan is confirmed", async () => {
     const missions = new InMemoryMissionService();
     const mission = await missions.createMission({ goal: "Run a mission" });

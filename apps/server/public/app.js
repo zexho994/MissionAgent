@@ -323,14 +323,12 @@ function missionMenuItem(mission) {
 
 function renderHome() {
   const data = scoped();
-  const confirmPanel = renderConfirmPanel(data);
   $("app-view").innerHTML = `
     <section class="home-page">
       <div class="conversation-area">
         <div id="chat-stream" class="chat-stream">
           ${renderChatContent(data)}
         </div>
-        ${confirmPanel ? `<div class="confirm-panel">${confirmPanel}</div>` : ""}
         <form id="mission-form" class="composer">
           <textarea id="goal" rows="4" placeholder="${esc(uiConfig().emptyPrompt)}">${esc(defaultGoal(data))}</textarea>
           <button type="submit">${data.mission ? "补充给 Owner" : "发送给 Owner"}</button>
@@ -363,18 +361,40 @@ function renderChatContent(data) {
 
   const conversationMessages = data.messages.filter(
     (message) => message.type === "owner_followup" || message.type === "user_message" || message.type === "mission_brief"
-  );
+  ).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  // Track if we've rendered the brief to avoid duplicates
+  let briefRendered = false;
   for (const message of conversationMessages) {
     if (message.type === "mission_brief") {
-      parts.push(renderBriefMessage(data));
+      // Only render brief once - the first mission_brief message
+      if (!briefRendered) {
+        parts.push(renderBriefMessage(data));
+        briefRendered = true;
+      }
     } else {
       parts.push(renderConversationMessage(message));
-      // Add choice buttons after owner_followup messages with options
-      if (message.type === "owner_followup" && message.options && message.options.length > 0) {
-        parts.push(renderChoiceButtons(message.options));
-      }
     }
   }
+
+  // Collect options from the latest owner_followup message only
+  const ownerFollowupsWithOptions = conversationMessages
+    .filter((message) => message.type === "owner_followup" && message.options && message.options.length > 0);
+  const latestOwnerMessageWithOptions = ownerFollowupsWithOptions.length > 0
+    ? ownerFollowupsWithOptions[ownerFollowupsWithOptions.length - 1]
+    : null;
+  const latestOptions = latestOwnerMessageWithOptions?.options || [];
+
+  // Only show options if the latest owner question hasn't been answered yet
+  // Find latest owner_followup with options and check if there's a user message after it
+  const latestOwnerWithOptions = [...conversationMessages]
+    .reverse()
+    .find((m) => m.type === "owner_followup" && m.options && m.options.length > 0);
+  const latestUserMessage = [...conversationMessages]
+    .reverse()
+    .find((m) => m.type === "user_message");
+  const hasUserRespondedToLatestQuestion = latestOwnerWithOptions && latestUserMessage &&
+    new Date(latestUserMessage.createdAt) > new Date(latestOwnerWithOptions.createdAt);
 
   const ownerThinking = isOwnerThinking();
   if (!data.mission.brief && ownerThinking) {
@@ -390,6 +410,18 @@ function renderChatContent(data) {
       <div class="choice-row" style="margin-top: 12px;">
         <button type="button" data-confirm-brief>确认 MissionBrief 并继续</button>
         <button type="button" data-append="我想修改一些内容">需要修改</button>
+      </div>
+    `);
+  }
+
+  // Render latest owner_followup options as choice buttons at the bottom
+  // Only show options if user hasn't responded to the latest question
+  if (latestOptions.length > 0 && !hasUserRespondedToLatestQuestion) {
+    parts.push(`
+      <div class="confirm-grid" style="margin-top: 12px;">
+        ${latestOptions.map((option) => `
+          <button type="button" class="choice-option" data-fill-choice="${esc(option.value)}">${esc(option.value)}</button>
+        `).join("")}
       </div>
     `);
   }
@@ -488,7 +520,9 @@ function renderMissionPlanReview(data) {
 
 function renderConversationMessage(message) {
   const isUser = message.type === "user_message";
-  const content = isUser ? message.content : ownerBodyText(message.content);
+  // For owner messages with options, show full content so user sees the question
+  // For owner messages without options, also show full content
+  const content = isUser ? message.content : message.content;
   if (!content.trim()) return "";
   return `
     <div class="bubble ${isUser ? "user" : "owner"}">
@@ -515,7 +549,7 @@ function renderConfirmPanel(data) {
       <strong>${esc(ownerQuestionText(latestOwnerMessage.content) || "选择回复或输入自定义内容")}</strong>
       <div class="confirm-grid">
         ${latestOwnerMessage.options.map((option) => `
-          <button type="button" class="choice-option" data-fill-choice="${esc(option.value)}">${esc(option.label)}</button>
+          <button type="button" class="choice-option" data-fill-choice="${esc(option.value)}">${esc(option.value)}</button>
         `).join("")}
       </div>
     `;
@@ -758,6 +792,14 @@ function agentOutputText(data, agent) {
     const review = data.reviews.at(-1);
     return review ? `${review.decision}: ${review.comments[0] || "已完成审核"}` : "";
   }
+  if (agent.role === "hr") {
+    const message = data.messages.filter((item) => {
+      return agent.id === item.fromAgentId
+        && item.type === "team_created"
+        && !item.content.includes("正在分析 MissionBrief");
+    }).at(-1);
+    return message?.content;
+  }
   if (/worker|creator|operator|engineer|content|image|research/.test(agent.role)) {
     const artifact = data.artifacts.at(-1);
     return artifact ? `Artifact ${artifact.id.slice(-6)}` : "";
@@ -926,21 +968,15 @@ async function streamOwnerResponse(missionId, container) {
   state.streamingMissionId = missionId;
   const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
 
-  const responseBubble = container.querySelector('.owner.thinking');
-  if (!responseBubble) {
-    eventSource.close();
-    state.streamingMissionId = undefined;
-    return;
-  }
+  // Try to find the thinking bubble, but don't close SSE if it doesn't exist yet
+  // The 'done' event will still trigger refresh() to update the UI
+  let responseBubble = container.querySelector('.owner.thinking');
+  let contentEl = responseBubble?.querySelector('p');
 
-  const contentEl = responseBubble.querySelector('p');
-  if (!contentEl) {
-    eventSource.close();
-    state.streamingMissionId = undefined;
-    return;
+  // Set initial cursor if thinking bubble exists at start
+  if (contentEl && !contentEl.querySelector('.streaming-cursor')) {
+    contentEl.innerHTML = '<span class="streaming-cursor">▋</span>' + contentEl.textContent;
   }
-
-  contentEl.innerHTML = '<span class="streaming-cursor">▋</span>';
 
   eventSource.addEventListener('message', (event) => {
     try {
@@ -954,18 +990,29 @@ async function streamOwnerResponse(missionId, container) {
       }
 
       if (data.type === 'token' && data.content) {
-        const cursor = contentEl.querySelector('.streaming-cursor');
-        const text = contentEl.textContent.replace('▋', '') + data.content;
-        contentEl.innerHTML = esc(text) + '<span class="streaming-cursor">▋</span>';
-        const chatStream = $('chat-stream');
-        if (chatStream) chatStream.scrollTop = chatStream.scrollHeight;
+        // If we haven't found the thinking bubble yet, try again (DOM might have updated)
+        if (!responseBubble || !contentEl) {
+          responseBubble = container.querySelector('.owner.thinking');
+          contentEl = responseBubble?.querySelector('p');
+        }
+
+        if (contentEl) {
+          hasReceivedToken = true;
+          const cursor = contentEl.querySelector('.streaming-cursor');
+          const text = contentEl.textContent.replace('▋', '') + data.content;
+          contentEl.innerHTML = esc(text) + '<span class="streaming-cursor">▋</span>';
+          const chatStream = $('chat-stream');
+          if (chatStream) chatStream.scrollTop = chatStream.scrollHeight;
+        }
       }
 
       if (data.type === 'done') {
         eventSource.close();
         state.streamingMissionId = undefined;
-        const cursor = contentEl.querySelector('.streaming-cursor');
-        if (cursor) cursor.remove();
+        if (contentEl) {
+          const cursor = contentEl.querySelector('.streaming-cursor');
+          if (cursor) cursor.remove();
+        }
 
         setTimeout(async () => {
           await refresh();
@@ -1035,7 +1082,7 @@ function renderChoiceButtons(options) {
   return `
     <div class="choice-row" style="margin-top: 12px;">
       ${options.map(option => `
-        <button type="button" data-fill-choice="${esc(option.value)}">${esc(option.label)}</button>
+        <button type="button" class="choice-option" data-fill-choice="${esc(option.value)}">${esc(option.value)}</button>
       `).join('')}
     </div>
   `;

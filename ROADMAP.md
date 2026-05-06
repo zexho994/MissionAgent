@@ -116,9 +116,17 @@
 
 **目标**: 执行结果能驱动策略调整，形成"执行→监控→分析→调整→再执行"的闭环。
 
+### 5.0 反馈基础设施
+- [x] 反馈领域类型定义（`MissionOutcomeEvaluation`, `TaskFailureAnalysis`, `StrategyAdjustment`）
+- [x] 确定性反馈生成（执行结果/执行失败 → 反馈记录）
+- [x] 反馈持久化（随 Mission 状态恢复）
+- [x] 反馈 API（summary、evaluations、failure-analyses、strategy-adjustments）
+- [x] War Room 反馈面板展示
+
 ### 5.1 执行结果反馈
-- [ ] 任务完成后自动触发评估（不仅看Artifact质量，还看对Mission目标的贡献）
+- [x] 任务完成后自动触发评估（`submitExecutionResult()` → `buildExecutionResultFeedback()`）
 - [ ] 评估结果通知相关Agent（谁需要知道这个结果）
+- [x] 反馈记录持久化与查询（已完成，但尚未实现通知下游Agent）
 - [ ] 失败任务的自动重规划（不是简单重试，而是调整策略）
 
 ### 5.2 策略自适应

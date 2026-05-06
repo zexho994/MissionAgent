@@ -12,12 +12,20 @@ describe("HRAgent", () => {
 
   beforeEach(() => {
     mockLlm = {
-      call: async () => ({
-        content: "LLM response",
-        model: "test-model",
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-        finishReason: "stop",
-      }),
+      call: async (_messages, options) => {
+        const content = "LLM response";
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+          finishReason: "stop",
+        };
+      },
       stats: () => ({
         totalCalls: 0,
         totalPromptTokens: 0,
@@ -61,8 +69,8 @@ describe("HRAgent", () => {
         ],
       };
 
-      mockLlm.call = async () => ({
-        content: JSON.stringify({
+      mockLlm.call = async (_messages, options) => {
+        const content = JSON.stringify({
           requiredCapabilities: [
             "web_development",
             "ai_integration",
@@ -73,11 +81,19 @@ describe("HRAgent", () => {
           estimatedTeamSize: 4,
           priorityRoles: ["system_architect", "ai_engineer", "frontend_developer", "backend_developer"],
           complexity: "high",
-        }),
-        model: "test-model",
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-        finishReason: "stop",
-      });
+        });
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+          finishReason: "stop",
+        };
+      };
 
       const hrAgent = createHRAgent({ llm: mockLlm });
       const analysis = await hrAgent.receiveMissionBrief(complexBrief);
@@ -103,8 +119,8 @@ describe("HRAgent", () => {
         riskFactors: [],
       };
 
-      mockLlm.call = async () => ({
-        content: JSON.stringify([
+      mockLlm.call = async (_messages, options) => {
+        const content = JSON.stringify([
           {
             name: "System Architect",
             purpose: "Design the core system architecture",
@@ -118,11 +134,19 @@ describe("HRAgent", () => {
             successCriteria: ["Architecture approved", "Specifications complete"],
             budget: { maxRuntimeMinutes: 120, maxTasks: 5 },
           },
-        ]),
-        model: "test-model",
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-        finishReason: "stop",
-      });
+        ]);
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+          finishReason: "stop",
+        };
+      };
 
       const roleSpecs = await hrAgent.generateRoleSpecs("mission-123", analysis);
 
@@ -147,8 +171,8 @@ describe("HRAgent", () => {
         riskFactors: [],
       };
 
-      mockLlm.call = async () => ({
-        content: JSON.stringify([
+      mockLlm.call = async (_messages, options) => {
+        const content = JSON.stringify([
           {
             id: "role-1",
             name: "Research Agent",
@@ -160,11 +184,19 @@ describe("HRAgent", () => {
             successCriteria: ["Research complete"],
             budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
           },
-        ]),
-        model: "test-model",
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-        finishReason: "stop",
-      });
+        ]);
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+          finishReason: "stop",
+        };
+      };
 
       const roleSpecs = await hrAgent.generateRoleSpecs("mission-123", analysis);
 
@@ -245,34 +277,40 @@ describe("HRAgent", () => {
 
     it("should use MissionBrief context to generate mission-specific schedule plan", async () => {
       const calls: string[] = [];
-      mockLlm.call = async (messages) => {
+      mockLlm.call = async (messages, options) => {
         calls.push(messages.map((message) => message.content).join("\n"));
+        const content = JSON.stringify([
+          {
+            name: "Daily Xiaohongshu data check",
+            cronExpression: "0 9 * * *",
+            assigneeRole: "data_analyst",
+            taskDescription: "Check yesterday's Xiaohongshu follower and engagement data",
+            justification: "Daily data checks catch performance changes quickly",
+          },
+          {
+            name: "Biweekly Xiaohongshu strategy review",
+            cronExpression: "0 10 */14 * *",
+            assigneeRole: "content_strategist",
+            taskDescription: "Review two weeks of Xiaohongshu results and adjust the content plan",
+            justification: "Biweekly strategy reviews align cadence with content performance signal",
+          },
+          {
+            name: "Engagement drop alert",
+            assigneeRole: "data_analyst",
+            taskDescription: "Investigate engagement drop and propose corrective actions",
+            justification: "Large engagement drops require immediate analysis",
+            conditionDescription: "Engagement rate drops more than 20%",
+            conditionSourceRole: "data_analyst",
+            conditionEvaluatePrompt: "Return true if engagement rate dropped more than 20%.",
+          },
+        ]);
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
         return {
-          content: JSON.stringify([
-            {
-              name: "Daily Xiaohongshu data check",
-              cronExpression: "0 9 * * *",
-              assigneeRole: "data_analyst",
-              taskDescription: "Check yesterday's Xiaohongshu follower and engagement data",
-              justification: "Daily data checks catch performance changes quickly",
-            },
-            {
-              name: "Biweekly Xiaohongshu strategy review",
-              cronExpression: "0 10 */14 * *",
-              assigneeRole: "content_strategist",
-              taskDescription: "Review two weeks of Xiaohongshu results and adjust the content plan",
-              justification: "Biweekly strategy reviews align cadence with content performance signal",
-            },
-            {
-              name: "Engagement drop alert",
-              assigneeRole: "data_analyst",
-              taskDescription: "Investigate engagement drop and propose corrective actions",
-              justification: "Large engagement drops require immediate analysis",
-              conditionDescription: "Engagement rate drops more than 20%",
-              conditionSourceRole: "data_analyst",
-              conditionEvaluatePrompt: "Return true if engagement rate dropped more than 20%.",
-            },
-          ]),
+          content,
           model: "test-model",
           usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
           finishReason: "stop",
@@ -339,16 +377,24 @@ describe("HRAgent", () => {
 
       const ownerFeedback = "Reduce budget and focus on core features only";
 
-      mockLlm.call = async () => ({
-        content: JSON.stringify({
+      mockLlm.call = async (_messages, options) => {
+        const content = JSON.stringify({
           ...initialSpec,
           budget: { maxRuntimeMinutes: 120, maxTasks: 5 },
           responsibilities: ["Core feature development"],
-        }),
-        model: "test-model",
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-        finishReason: "stop",
-      });
+        });
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+          finishReason: "stop",
+        };
+      };
 
       const revisedSpec = await hrAgent.negotiateRoleSpec(
         "mission-123",
@@ -384,8 +430,8 @@ describe("HRAgent", () => {
 
       const ownerFeedback = "Too much scope for one role, suggest splitting";
 
-      mockLlm.call = async () => ({
-        content: JSON.stringify([
+      mockLlm.call = async (_messages, options) => {
+        const content = JSON.stringify([
           {
             ...initialSpec,
             id: "role-1a",
@@ -400,11 +446,19 @@ describe("HRAgent", () => {
             purpose: "Handle backend development",
             responsibilities: ["Backend", "API Testing"],
           },
-        ]),
-        model: "test-model",
-        usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-        finishReason: "stop",
-      });
+        ]);
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+          finishReason: "stop",
+        };
+      };
 
       const alternatives = await hrAgent.negotiateRoleSpec(
         "mission-123",

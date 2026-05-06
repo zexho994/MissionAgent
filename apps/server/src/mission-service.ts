@@ -2663,6 +2663,56 @@ export class InMemoryMissionService {
     for (const adjustment of (stored.strategyAdjustments ?? []).map(parseStoredStrategyAdjustment)) {
       this.strategyAdjustments.set(adjustment.id, adjustment);
     }
+    if (this.deduplicateHrAgents()) {
+      this.persist();
+    }
+  }
+
+  private deduplicateHrAgents(): boolean {
+    const canonicalHrByMission = new Map<string, WarRoomAgent>();
+    const duplicateToCanonical = new Map<string, string>();
+
+    for (const agent of [...this.agents.values()].sort((a, b) => a.sortOrder - b.sortOrder)) {
+      if (agent.role !== "hr") continue;
+      const canonical = canonicalHrByMission.get(agent.missionId);
+      if (!canonical) {
+        canonicalHrByMission.set(agent.missionId, agent);
+        continue;
+      }
+      duplicateToCanonical.set(agent.id, canonical.id);
+      this.agents.delete(agent.id);
+    }
+
+    if (duplicateToCanonical.size === 0) return false;
+
+    for (const message of [...this.agentMessages.values()]) {
+      const canonicalFromId = duplicateToCanonical.get(message.fromAgentId);
+      const canonicalToId = message.toAgentId ? duplicateToCanonical.get(message.toAgentId) : undefined;
+      if (!canonicalFromId && !canonicalToId) continue;
+      this.agentMessages.set(message.id, {
+        ...message,
+        fromAgentId: canonicalFromId ?? message.fromAgentId,
+        ...(message.toAgentId !== undefined ? { toAgentId: canonicalToId ?? message.toAgentId } : {}),
+      });
+    }
+
+    for (const relation of [...this.agentRelations.values()]) {
+      const canonicalFromId = duplicateToCanonical.get(relation.fromAgentId);
+      const canonicalToId = duplicateToCanonical.get(relation.toAgentId);
+      if (!canonicalFromId && !canonicalToId) continue;
+      const updated = {
+        ...relation,
+        fromAgentId: canonicalFromId ?? relation.fromAgentId,
+        toAgentId: canonicalToId ?? relation.toAgentId,
+      };
+      if (updated.fromAgentId === updated.toAgentId) {
+        this.agentRelations.delete(relation.id);
+      } else {
+        this.agentRelations.set(relation.id, updated);
+      }
+    }
+
+    return true;
   }
 
   private persist(): void {
