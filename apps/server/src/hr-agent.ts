@@ -5,7 +5,7 @@ import {
   type MissionBrief,
   type ValidationResult,
 } from "@digitalagent/core";
-import type { LlmService } from "@digitalagent/runtime";
+import type { LlmMessage, LlmService } from "@digitalagent/runtime";
 
 export interface MissionAnalysis {
   missionGoal: string;
@@ -51,6 +51,8 @@ export interface HRAgentOptions {
   llm: LlmService;
   maxTeamSize?: number;
   preferredTeamSize?: [number, number];
+  timeoutMs?: number;
+  idleTimeoutMs?: number;
 }
 
 export function createHRAgent(options: HRAgentOptions) {
@@ -58,6 +60,8 @@ export function createHRAgent(options: HRAgentOptions) {
     llm,
     maxTeamSize = 8,
     preferredTeamSize = [2, 5],
+    timeoutMs = 90000,
+    idleTimeoutMs = 30000,
   } = options;
 
   return {
@@ -67,17 +71,31 @@ export function createHRAgent(options: HRAgentOptions) {
     negotiateRoleSpec,
   };
 
+  async function llmCallStream(
+    messages: LlmMessage[],
+  ): Promise<string> {
+    let content = "";
+    await llm.call(messages, {
+      timeoutMs,
+      idleTimeoutMs,
+      onStream: (token: string) => {
+        content += token;
+      },
+    });
+    return content;
+  }
+
   async function receiveMissionBrief(brief: MissionBrief): Promise<MissionAnalysis> {
     const systemPrompt = buildHRAgentSystemPrompt();
     const userPrompt = buildMissionAnalysisPrompt(brief);
 
     try {
-      const response = await llm.call([
+      const content = await llmCallStream([
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ]);
 
-      const baseAnalysis = parseMissionAnalysis(response.content);
+      const baseAnalysis = parseMissionAnalysis(content);
       return {
         ...baseAnalysis,
         missionGoal: brief.goal,
@@ -100,12 +118,12 @@ export function createHRAgent(options: HRAgentOptions) {
     const userPrompt = buildRoleSpecsPrompt(missionId, analysis);
 
     try {
-      const response = await llm.call([
+      const content = await llmCallStream([
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ]);
 
-      const roleSpecs = parseRoleSpecs(response.content, missionId);
+      const roleSpecs = parseRoleSpecs(content, missionId);
 
       for (const spec of roleSpecs) {
         const validation = validateRoleSpec(spec);
@@ -163,13 +181,15 @@ export function createHRAgent(options: HRAgentOptions) {
     roleSpecs: RoleSpec[],
   ): Promise<SchedulePlanItem[]> {
     const fallback = designSchedulePlan(roleSpecs, brief);
+    const systemPrompt = buildHRAgentSystemPrompt();
+    const userPromptContent = buildSchedulePlanPrompt(brief, roleSpecs);
 
     try {
-      const response = await llm.call([
-        { role: "system", content: buildHRAgentSystemPrompt() },
-        { role: "user", content: buildSchedulePlanPrompt(brief, roleSpecs) },
+      const content = await llmCallStream([
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPromptContent },
       ]);
-      const parsed = parseSchedulePlan(response.content, roleSpecs);
+      const parsed = parseSchedulePlan(content, roleSpecs);
       return parsed.length > 0 ? parsed : fallback;
     } catch (error) {
       console.error("[HR Agent] schedulePlan generation failed, using fallback:", error instanceof Error ? error.message : String(error));
@@ -186,12 +206,12 @@ export function createHRAgent(options: HRAgentOptions) {
     const userPrompt = buildNegotiationPrompt(initialSpec, ownerFeedback);
 
     try {
-      const response = await llm.call([
+      const content = await llmCallStream([
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ]);
 
-      return parseNegotiationResponse(response.content, missionId, initialSpec);
+      return parseNegotiationResponse(content, missionId, initialSpec);
     } catch (error) {
       console.error("[HR Agent] negotiateRoleSpec failed, using fallback:", error instanceof Error ? error.message : String(error));
       return fallbackNegotiation(initialSpec, ownerFeedback);

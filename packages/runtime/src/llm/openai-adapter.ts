@@ -70,6 +70,7 @@ export class OpenAiLlmAdapter implements LlmService {
   async call(messages: LlmMessage[], options?: LlmCallOptions): Promise<LlmResponse> {
     const model = options?.model || this.defaultModel;
     const timeoutMs = options?.timeoutMs || this.timeoutMs;
+    const idleTimeoutMs = options?.idleTimeoutMs;
     const shouldStream = options?.onStream !== undefined;
 
     const body = {
@@ -109,7 +110,7 @@ export class OpenAiLlmAdapter implements LlmService {
         }
 
         if (shouldStream) {
-          return await this.handleStreamingResponse(response, options?.onStream!, model);
+          return await this.handleStreamingResponse(response, options?.onStream!, model, idleTimeoutMs);
         }
 
         const data = (await response.json()) as OpenAiChatResponse;
@@ -156,6 +157,7 @@ export class OpenAiLlmAdapter implements LlmService {
     response: Response,
     onStream: (token: string) => void,
     model: string,
+    idleTimeoutMs?: number,
   ): Promise<LlmResponse> {
     if (!response.body) {
       throw new Error("Response body is null");
@@ -168,10 +170,46 @@ export class OpenAiLlmAdapter implements LlmService {
     let finishReason = "unknown";
     let promptTokens = 0;
     let completionTokens = 0;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let resolveIdleAbort: (() => void) | undefined;
+    let idleTimerActive = false;
+
+    const startIdleTimer = (abortFn: () => void) => {
+      if (idleTimeoutMs && !idleTimerActive) {
+        idleTimerActive = true;
+        idleTimer = setTimeout(() => {
+          resolveIdleAbort = abortFn;
+        }, idleTimeoutMs);
+      }
+    };
+
+    const clearIdleTimer = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = undefined;
+      }
+      idleTimerActive = false;
+    };
 
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        startIdleTimer(() => {
+          reader.cancel().catch(() => {});
+        });
+
+        let readResult: ReadableStreamReadResult<Uint8Array>;
+        try {
+          readResult = await reader.read();
+        } catch (readError) {
+          if (resolveIdleAbort) {
+            throw new Error(`LLM stream idle timeout: no output for ${idleTimeoutMs}ms`);
+          }
+          throw readError;
+        }
+
+        clearIdleTimer();
+
+        const { done, value } = readResult;
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -213,6 +251,7 @@ export class OpenAiLlmAdapter implements LlmService {
         finishReason,
       };
     } finally {
+      clearIdleTimer();
       reader.releaseLock();
     }
   }

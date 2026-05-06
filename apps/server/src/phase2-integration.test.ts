@@ -21,12 +21,11 @@ describe("Phase 2 Integration Tests", () => {
   beforeEach(() => {
     llmCallCount = 0;
     mockLlm = {
-      call: async () => {
+      call: async (_messages, options) => {
         llmCallCount++;
         // First call is for mission analysis (returns object)
         if (llmCallCount === 1) {
-          return {
-            content: `Here's my analysis:
+          const content = `Here's my analysis:
 
 \`\`\`json
 {
@@ -36,15 +35,21 @@ describe("Phase 2 Integration Tests", () => {
   "complexity": "medium",
   "riskFactors": ["Time constraints"]
 }
-\`\`\``,
+\`\`\``;
+          if (options?.onStream) {
+            for (const char of content) {
+              options.onStream(char);
+            }
+          }
+          return {
+            content,
             model: "test-model",
             usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
             finishReason: "stop",
           };
         }
         // Subsequent calls are for role specs (returns array)
-        return {
-          content: `Here are the role specifications:
+        const content = `Here are the role specifications:
 
 \`\`\`json
 [
@@ -67,7 +72,14 @@ describe("Phase 2 Integration Tests", () => {
     "budget": { "maxRuntimeMinutes": 90, "maxTasks": 4 }
   }
 ]
-\`\`\``,
+\`\`\``;
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
+        return {
+          content,
           model: "test-model",
           usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
           finishReason: "stop",

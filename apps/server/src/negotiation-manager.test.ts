@@ -12,31 +12,43 @@ import type { AgentSystemConfig } from "./system-config.js";
 function makeTestDeps() {
   let callCount = 0;
   const llm: LlmService = {
-    call: async () => {
+    call: async (_messages, options) => {
       callCount += 1;
       if (callCount === 1) {
+        const content = JSON.stringify({
+          requiredCapabilities: ["data_analysis"],
+          estimatedTeamSize: 2,
+          priorityRoles: ["data_analyst", "content_strategist"],
+          complexity: "medium",
+          riskFactors: [],
+        });
+        if (options?.onStream) {
+          for (const char of content) {
+            options.onStream(char);
+          }
+        }
         return {
-          content: JSON.stringify({
-            requiredCapabilities: ["data_analysis"],
-            estimatedTeamSize: 2,
-            priorityRoles: ["data_analyst", "content_strategist"],
-            complexity: "medium",
-            riskFactors: [],
-          }),
+          content,
           model: "test",
           usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
           finishReason: "stop",
         };
       }
+      const content = JSON.stringify([{
+        name: "DataAnalyst",
+        purpose: "Analyze mission metrics",
+        responsibilities: ["Track KPIs", "Generate reports"],
+        allowedTools: ["web_search", "data_analyzer"],
+        successCriteria: ["KPIs tracked daily"],
+        budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+      }]);
+      if (options?.onStream) {
+        for (const char of content) {
+          options.onStream(char);
+        }
+      }
       return {
-        content: JSON.stringify([{
-          name: "DataAnalyst",
-          purpose: "Analyze mission metrics",
-          responsibilities: ["Track KPIs", "Generate reports"],
-          allowedTools: ["web_search", "data_analyzer"],
-          successCriteria: ["KPIs tracked daily"],
-          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        }]),
+        content,
         model: "test",
         usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
         finishReason: "stop",
