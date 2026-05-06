@@ -287,10 +287,19 @@ function renderAgentNode(data, agent, index) {
         <div class="body"></div>
       </div>
       <div class="agent-card">
-        <strong>${esc(agent.name || "Agent")}</strong>
-        <span>状态：${esc(agentStatusLabel(agent.status || "idle"))}</span>
-        <p>任务：${esc(taskTitle(data, agent.currentTaskId) || agent.responsibility)}</p>
-        <p>产出：${esc(agentOutputText(data, agent) || "等待产出")}</p>
+        <header class="agent-card-header">
+          <strong class="agent-name">${esc(shortAgentName(agent.name) || "Agent")}</strong>
+          <span class="agent-status status-${esc(agent.status || "idle")}">${esc(agentStatusLabel(agent.status || "idle"))}</span>
+        </header>
+        <div class="agent-role">${esc(agent.role)}</div>
+        <div class="agent-task">
+          <span class="field-label">任务</span>
+          <span class="field-value">${esc(taskTitle(data, agent.currentTaskId) || agent.responsibility || "—")}</span>
+        </div>
+        <div class="agent-output">
+          <span class="field-label">产出</span>
+          <span class="field-value">${esc(agentOutputText(data, agent) || "等待产出")}</span>
+        </div>
       </div>
     </article>
   `;
