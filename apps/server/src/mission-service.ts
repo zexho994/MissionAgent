@@ -1043,6 +1043,7 @@ export class InMemoryMissionService {
       review,
     });
     this.recordExecutionResultFeedback(feedback);
+    this.dispatchFeedbackEvent(mission, feedback.evaluation, feedback.failureAnalysis);
     this.tasks.set(resultTask.id, resultTask);
     const toolCall = this.toolCallByExecution(execution.id);
     this.toolCalls.set(toolCall.id, {
@@ -1171,6 +1172,7 @@ export class InMemoryMissionService {
       error: input.error,
     });
     this.recordExecutionFailureFeedback(feedback);
+    this.dispatchFeedbackEvent(mission, feedback.evaluation, feedback.failureAnalysis);
     this.appendTaskEvent({
       missionId: execution.missionId,
       taskId: execution.taskId,
@@ -2509,6 +2511,30 @@ export class InMemoryMissionService {
       sourceAgentId: owner.id,
     });
     this.knowledgeEntries.set(entry.id, entry);
+  }
+
+  private dispatchFeedbackEvent(
+    mission: Mission,
+    evaluation: MissionOutcomeEvaluation,
+    failureAnalysis?: TaskFailureAnalysis,
+  ): void {
+    if (!this.llm) {
+      return;  // Cannot dispatch without LLM
+    }
+    if (evaluation.outcome !== "blocked" && evaluation.outcome !== "regressed") {
+      return;  // Only dispatch for blocked/regressed
+    }
+    this.getConversationBus().dispatchEvent({
+      missionId: mission.id,
+      event: {
+        type: "feedback_evaluated",
+        missionId: mission.id,
+        taskId: evaluation.taskId,
+        evaluation,
+        failureAnalysis,
+        timestamp: new Date().toISOString(),
+      },
+    });
   }
 
   private agentByRole(missionId: string, role: WarRoomAgentRole): WarRoomAgent {
