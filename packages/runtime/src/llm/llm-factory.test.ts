@@ -38,6 +38,31 @@ describe("createLlmService", () => {
     expect(JSON.parse(String(capturedInit?.body))).toMatchObject({ model: "glm-4-flash" });
   });
 
+  it("creates an OpenAI-compatible service for MiniMax with MiniMax defaults", async () => {
+    let capturedUrl: RequestInfo | URL | undefined;
+    let capturedInit: RequestInit | undefined;
+    const llm = createLlmService({
+      provider: "minimax",
+      apiKey: "minimax-key",
+      fetch: async (input, init) => {
+        capturedUrl = input;
+        capturedInit = init;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => successResponse("ok"),
+          text: async () => "",
+        } as Response;
+      },
+    });
+
+    await llm.call([{ role: "user", content: "hello" }]);
+
+    expect(String(capturedUrl)).toBe("https://api.minimax.io/v1/chat/completions");
+    expect(capturedInit?.headers).toHaveProperty("authorization", "Bearer minimax-key");
+    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({ model: "MiniMax-M2.7-highspeed" });
+  });
+
   it("creates an Anthropic service for claude provider", async () => {
     let capturedUrl: RequestInfo | URL | undefined;
     const llm = createLlmService({
