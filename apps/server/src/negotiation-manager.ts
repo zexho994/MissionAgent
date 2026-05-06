@@ -52,19 +52,24 @@ export class NegotiationManager {
       throw new Error("Mission must have a brief before negotiation");
     }
 
-    const hrAgentId = createId("agent");
-    const hrAgentRecord: WarRoomAgent = {
-      id: hrAgentId,
-      missionId: mission.id,
-      role: "hr",
-      name: "HR Agent",
-      responsibility: "Team assembly and agent coordination",
-      status: "running",
-      currentTaskId: undefined,
-      lastAction: "Analyzing MissionBrief and proposing team",
-      avatarSeed: "hr",
-      sortOrder: 99,
-    };
+    const existingHr = [...this.agents.values()].find(
+      (agent) => agent.missionId === mission.id && agent.role === "hr",
+    );
+    const hrAgentId = existingHr?.id ?? createId("agent");
+    const hrAgentRecord: WarRoomAgent = existingHr
+      ? { ...existingHr, status: "running", lastAction: "Analyzing MissionBrief and proposing team" }
+      : {
+          id: hrAgentId,
+          missionId: mission.id,
+          role: "hr",
+          name: "HR Agent",
+          responsibility: "Team assembly and agent coordination",
+          status: "running",
+          currentTaskId: undefined,
+          lastAction: "Analyzing MissionBrief and proposing team",
+          avatarSeed: "hr",
+          sortOrder: 99,
+        };
     this.agents.set(hrAgentId, hrAgentRecord);
 
     const hrAgent = createHRAgent({ llm: this.llm });
