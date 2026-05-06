@@ -414,6 +414,9 @@ function renderChatContent(data) {
   const conversationMessages = data.messages.filter(
     (message) => message.type === "owner_followup" || message.type === "user_message" || message.type === "mission_brief" || message.type === "team_created"
   ).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const latestTeamProposal = [...conversationMessages]
+    .reverse()
+    .find((message) => message.type === "team_created" && !isRecruitingTeamMessage(message));
 
   // Track if we've rendered the brief to avoid duplicates
   let briefRendered = false;
@@ -425,6 +428,9 @@ function renderChatContent(data) {
         briefRendered = true;
       }
     } else if (message.type === "team_created") {
+      if (latestTeamProposal && message !== latestTeamProposal) {
+        continue;
+      }
       parts.push(renderTeamProposalCard(message, data));
     } else {
       parts.push(renderConversationMessage(message));
@@ -527,7 +533,7 @@ function renderTeamProposalCard(message, data) {
     return `
       <div class="bubble owner">
         <strong>HR Agent · 团队提案</strong>
-        <p>${esc(message.content)}</p>
+        <div class="markdown-body">${renderMarkdownContent(message.content)}</div>
       </div>
     `;
   }
@@ -535,7 +541,7 @@ function renderTeamProposalCard(message, data) {
   return `
     <div class="bubble owner team-proposal">
       <strong>HR Agent · 团队提案</strong>
-      <p>${esc(message.content)}</p>
+      <div class="markdown-body">${renderMarkdownContent(message.content)}</div>
       ${error}
       <div class="choice-row" style="margin-top: 12px;">
         <button type="button" data-confirm-negotiation>确认团队提案</button>
@@ -551,14 +557,19 @@ function renderTeamProposalCard(message, data) {
   `;
 }
 
+function isRecruitingTeamMessage(message) {
+  return message.content.includes("正在分析 MissionBrief");
+}
+
 function renderMissionPlanReview(data) {
   const plan = currentMissionPlan();
   const pending = isPlanPending();
   const planUi = currentPlanUiState();
-  const hasWarRoom = data.tasks.length > 0;
+  const isRecruiting = data.tasks.length === 0 && data.agents.some((agent) => agent.role === "hr" && agent.status === "running");
+  const hasExecutionTeam = data.agents.some((agent) => agent.role !== "owner" && agent.role !== "hr");
   const error = planUi.error ? `<p class="plan-error">${esc(planUi.error)}</p>` : "";
   if (!plan) {
-    const legacyWarRoomAction = hasWarRoom ? `
+    const legacyWarRoomAction = hasExecutionTeam ? `
         <div class="choice-row">
           <button type="button" data-open-existing-war-room ${pending ? "disabled" : ""}>进入作战室</button>
         </div>
@@ -606,7 +617,7 @@ function renderMissionPlanReview(data) {
         ` : ""}
       ` : `
         <div class="choice-row">
-          <button type="button" data-open-war-room ${pending ? "disabled" : ""}>${hasWarRoom ? "进入作战室" : "创建作战室"}</button>
+          <button type="button" data-open-war-room ${pending || isRecruiting ? "disabled" : ""}>${isRecruiting ? "招募中..." : (hasExecutionTeam ? "进入作战室" : "创建作战室")}</button>
         </div>
       `}
     </div>
@@ -620,11 +631,15 @@ function renderConversationMessage(message) {
   const isLong = content.length > 300;
   return `
     <div class="bubble ${isUser ? "user" : "owner"}" data-collapsible>
-      <div class="bubble-content" data-full><p>${esc(content)}</p></div>
-      ${isLong ? `<div class="bubble-collapsed" hidden><p>${esc(content.slice(0, 200))}...</p></div>` : ""}
+      <div class="bubble-content markdown-body" data-full>${renderMarkdownContent(content)}</div>
+      ${isLong ? `<div class="bubble-collapsed markdown-body" hidden>${renderMarkdownContent(`${content.slice(0, 200)}...`)}</div>` : ""}
       ${isLong ? `<button type="button" class="expand-button" data-toggle-collapse>展开</button>` : ""}
     </div>
   `;
+}
+
+function renderMarkdownContent(content) {
+  return DigitalAgentMarkdown.renderMarkdownMessage(content);
 }
 
 function renderConfirmPanel(data) {

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "prebuild": "pnpm --filter @digitalagent/core build && pnpm --filter @digitalagent/runtime build",
-    "build": "tsc && rm -rf dist/public && mkdir -p dist/public && cp -R public/. dist/public/",
+    "build": "tsc && rm -rf dist/public && mkdir -p dist/public/vendor && cp -R public/. dist/public/ && cp node_modules/marked/lib/marked.umd.js dist/public/vendor/marked.umd.js && cp node_modules/@highlightjs/cdn-assets/highlight.min.js dist/public/vendor/highlight.min.js && cp node_modules/@highlightjs/cdn-assets/styles/github.min.css dist/public/vendor/highlight-github.min.css",
     "pretest": "pnpm --filter @digitalagent/core build && pnpm --filter @digitalagent/runtime build",
     "dev": "pnpm build && node dist/server.js",
     "test": "vitest run",
@@ -15,8 +15,11 @@
   "dependencies": {
     "@digitalagent/core": "workspace:*",
     "@digitalagent/runtime": "workspace:*",
+    "@highlightjs/cdn-assets": "^11.11.1",
     "cron-parser": "^5.5.0",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "highlight.js": "^11.11.1",
+    "marked": "^18.0.3"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^4.1.5"
