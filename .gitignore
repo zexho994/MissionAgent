@@ -17,6 +17,8 @@ TEST-PLAN.md
 test-report.md
 test-*.js
 *-verified.png
+*.png
+test-results/
 
 # Environment files.
 .env
