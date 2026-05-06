@@ -10,6 +10,7 @@ const state = {
   pollingInterval: undefined,
   automationSummaryByMissionId: {},
   feedbackSummaryByMissionId: {},
+  strategyAdjustmentsByMissionId: {},
   autopilotDiagnosisByMissionId: {},
   scheduleRulesByMissionId: {},
   scheduleActionPending: false,
@@ -71,6 +72,12 @@ async function loadFeedbackState(missionId) {
   state.feedbackSummaryByMissionId[missionId] = result.summary;
 }
 
+async function loadStrategyAdjustments(missionId) {
+  if (!missionId) return;
+  const result = await api(`/api/missions/${missionId}/feedback/strategy-adjustments`);
+  state.strategyAdjustmentsByMissionId[missionId] = result.strategyAdjustments || [];
+}
+
 async function loadAutopilotDiagnosis(missionId) {
   if (!missionId) return;
   const result = await api(`/api/missions/${missionId}/autopilot-diagnosis`);
@@ -82,6 +89,7 @@ async function refreshMissionAutomation() {
   if (!mission) return;
   await loadAutomationState(mission.id);
   await loadFeedbackState(mission.id);
+  await loadStrategyAdjustments(mission.id);
   await loadAutopilotDiagnosis(mission.id);
 }
 
@@ -718,6 +726,7 @@ function bindChoiceButtons() {
           state.warTab = "overview";
           await loadAutomationState(mission.id);
           await loadFeedbackState(mission.id);
+          await loadStrategyAdjustments(mission.id);
           await loadAutopilotDiagnosis(mission.id);
           renderAll();
           startPolling();
@@ -734,6 +743,7 @@ function bindChoiceButtons() {
       state.draftMode = false;
       await loadAutomationState(mission.id);
       await loadFeedbackState(mission.id);
+      await loadStrategyAdjustments(mission.id);
       await loadAutopilotDiagnosis(mission.id);
       renderAll();
     });

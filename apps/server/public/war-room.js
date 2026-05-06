@@ -97,6 +97,7 @@ function renderWarOverview(data) {
     </div>
     ${renderAutomationPulse(data, state.automationSummaryByMissionId[data.mission.id])}
     ${renderFeedbackPanel(state.feedbackSummaryByMissionId[data.mission.id])}
+    ${renderStrategyAdjustmentsPanel(state.strategyAdjustmentsByMissionId[data.mission.id])}
     ${renderAutopilotDiagnosis(state.autopilotDiagnosisByMissionId[data.mission.id])}
     <div class="war-stage">
       <div class="stage-note">
@@ -152,6 +153,42 @@ function renderFeedbackPanel(summary) {
       </div>
       ${failure ? `<div class="feedback-note blocked"><strong>阻塞</strong><p>${esc(failure.summary)}</p></div>` : ""}
       ${adjustment ? `<div class="feedback-note"><strong>策略提案</strong><p>${esc(adjustment.proposedStrategy)}</p></div>` : ""}
+    </div>
+  `;
+}
+
+function renderStrategyAdjustmentsPanel(adjustments) {
+  if (!adjustments || adjustments.length === 0) {
+    return `
+      <div class="strategy-panel">
+        <div>
+          <span>策略调整</span>
+          <strong>暂无策略调整记录</strong>
+          <p>当 Mission 策略发生变更时，会在此处显示历史记录。</p>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="strategy-panel">
+      <div class="strategy-header">
+        <span>策略调整</span>
+      </div>
+      ${adjustments.map(adj => `
+        <div class="strategy-record">
+          <div class="strategy-rationale">${esc(adj.rationale)}</div>
+          <div class="strategy-diff">
+            <span class="strategy-from">${esc(adj.previousStrategy)}</span>
+            <span class="strategy-arrow">→</span>
+            <span class="strategy-to">${esc(adj.proposedStrategy)}</span>
+          </div>
+          <div class="strategy-meta">
+            ${adj.affectedAgentRoles.length > 0 ? `影响角色: ${adj.affectedAgentRoles.join(", ")}` : ""}
+            · ${new Date(adj.createdAt).toLocaleString()}
+          </div>
+        </div>
+      `).join("")}
     </div>
   `;
 }
