@@ -236,6 +236,7 @@ describe("InMemoryMissionService", () => {
         },
       },
       evidence: ["openclaw:local"],
+      sources: [],
     });
 
     const snapshot = service.snapshot();
@@ -372,6 +373,7 @@ describe("InMemoryMissionService", () => {
         },
       },
       evidence: ["openclaw:local"],
+      sources: [],
     });
 
     expect(result.artifact.taskId).toBe(task.id);
@@ -426,6 +428,7 @@ describe("InMemoryMissionService", () => {
         },
       },
       evidence: ["openclaw:local"],
+      sources: [],
     });
 
     const snapshot = service.snapshot();
@@ -454,6 +457,7 @@ describe("InMemoryMissionService", () => {
       executionId: execution.id,
       content: { openclaw: "" },
       evidence: ["openclaw:local"],
+      sources: [],
     });
 
     const snapshot = service.snapshot();
@@ -571,6 +575,7 @@ describe("InMemoryMissionService", () => {
       taskId: task.id,
       content: { text: "some text" },
       evidence: ["openclaw:local"],
+      sources: [],
     });
 
     expect(result.review.decision).toBe("reject");
@@ -601,6 +606,7 @@ describe("InMemoryMissionService", () => {
         },
       },
       evidence: ["openclaw:local"],
+      sources: [],
     });
 
     expect(service.snapshot().tasks[0]?.status).toBe("revision_needed");
@@ -1186,6 +1192,7 @@ describe("InMemoryMissionService", () => {
         },
       },
       evidence: ["openclaw:local"],
+      sources: [],
     });
 
     const diagnosis = service.getAutopilotDiagnosis(mission.id, {
@@ -1242,6 +1249,7 @@ describe("InMemoryMissionService", () => {
         },
       },
       evidence: ["openclaw:local"],
+      sources: [],
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 

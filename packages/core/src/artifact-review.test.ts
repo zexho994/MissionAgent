@@ -10,6 +10,7 @@ describe("artifact and review", () => {
         patterns: ["numbered hooks", "before-after title"],
       },
       evidence: ["https://example.com/note/1"],
+      sources: [],
       qualityScore: 0.82,
     });
 
