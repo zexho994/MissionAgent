@@ -17,6 +17,8 @@ const state = {
   scheduleError: "",
   planActionMissionId: undefined,
   planUiByMissionId: {},
+  negotiationUiByMissionId: {},
+  selectedTaskId: undefined,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -135,6 +137,29 @@ async function resumeAutomation(missionId) {
   }
 }
 
+async function updateStrategyAdjustmentStatus(missionId, adjustmentId, newStatus) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(
+      `/api/missions/${missionId}/feedback/strategy-adjustments/${adjustmentId}/status`,
+      { method: "PATCH", body: { status: newStatus } },
+    );
+    state.snapshot = result.snapshot;
+    if (missionId) {
+      await loadFeedbackState(missionId);
+    }
+    renderAll();
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+    renderAll();
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
 async function createScheduleTemplate(missionId, payload, runNow) {
   state.scheduleActionPending = true;
   state.scheduleError = "";
@@ -216,6 +241,21 @@ function planUiState(missionId) {
     };
   }
   return state.planUiByMissionId[missionId];
+}
+
+function negotiationUiState(missionId) {
+  if (!state.negotiationUiByMissionId[missionId]) {
+    state.negotiationUiByMissionId[missionId] = {
+      revisionOpen: false,
+      revisionFeedback: "",
+      error: "",
+    };
+  }
+  return state.negotiationUiByMissionId[missionId];
+}
+
+function hasTeamConfirmed(data) {
+  return data.agents.some((agent) => agent.role !== "owner" && agent.role !== "hr");
 }
 
 function missionHasWarRoomState(missionId) {
@@ -303,11 +343,19 @@ function renderMissionPopover() {
   `;
 
   popover.querySelectorAll("[data-select-mission]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       state.selectedMissionId = button.dataset.selectMission;
       state.draftMode = false;
-      state.view = missionHasWarRoomState(state.selectedMissionId) ? "mission" : "home";
+      const willEnterWarRoom = missionHasWarRoomState(state.selectedMissionId);
+      state.view = willEnterWarRoom ? "mission" : "home";
       state.popoverOpen = false;
+      if (willEnterWarRoom) {
+        await Promise.all([
+          loadAutomationState(state.selectedMissionId),
+          loadFeedbackState(state.selectedMissionId),
+          loadAutopilotDiagnosis(state.selectedMissionId),
+        ]);
+      }
       renderAll();
     });
   });
@@ -364,7 +412,7 @@ function renderChatContent(data) {
   `);
 
   const conversationMessages = data.messages.filter(
-    (message) => message.type === "owner_followup" || message.type === "user_message" || message.type === "mission_brief"
+    (message) => message.type === "owner_followup" || message.type === "user_message" || message.type === "mission_brief" || message.type === "team_created"
   ).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
   // Track if we've rendered the brief to avoid duplicates
@@ -376,6 +424,8 @@ function renderChatContent(data) {
         parts.push(renderBriefMessage(data));
         briefRendered = true;
       }
+    } else if (message.type === "team_created") {
+      parts.push(renderTeamProposalCard(message, data));
     } else {
       parts.push(renderConversationMessage(message));
     }
@@ -440,23 +490,63 @@ function renderChatContent(data) {
 function renderBriefMessage(data) {
   const brief = data.mission.brief;
   if (!brief) return "";
+  const fullContent = `
+    <strong>Owner Agent · MissionBrief</strong>
+    <div class="brief-summary">
+      <div><span>目标</span>${esc(brief.goal)}</div>
+      <div><span>范围</span>${esc(brief.scope)}</div>
+      ${brief.targetAudience ? `<div><span>目标人群</span>${esc(brief.targetAudience)}</div>` : ""}
+      ${brief.timeline ? `<div><span>时间线</span>${esc(brief.timeline)}</div>` : ""}
+    </div>
+    <div class="brief-metrics">
+      <strong>成功指标</strong>
+      ${brief.successMetrics.map((item) => `<div>${esc(item)}</div>`).join("")}
+    </div>
+    <div class="brief-constraints">
+      <strong>约束</strong>
+      ${brief.constraints.map((item) => `<div>${esc(item)}</div>`).join("")}
+    </div>
+  `;
+  const isLong = fullContent.length > 300;
   return `
-    <div class="bubble owner brief">
-      <strong>Owner Agent · MissionBrief</strong>
-      <div class="brief-summary">
-        <div><span>目标</span>${esc(brief.goal)}</div>
-        <div><span>范围</span>${esc(brief.scope)}</div>
-        ${brief.targetAudience ? `<div><span>目标人群</span>${esc(brief.targetAudience)}</div>` : ""}
-        ${brief.timeline ? `<div><span>时间线</span>${esc(brief.timeline)}</div>` : ""}
+    <div class="bubble owner brief" data-collapsible>
+      <div class="bubble-content" data-full>${fullContent}</div>
+      ${isLong ? `<div class="bubble-collapsed" hidden>${fullContent.slice(0, 200)}...</div>` : ""}
+      ${isLong ? `<button type="button" class="expand-button" data-toggle-collapse>展开</button>` : ""}
+    </div>
+  `;
+}
+
+function renderTeamProposalCard(message, data) {
+  const teamConfirmed = hasTeamConfirmed(data);
+  const negotiationUi = negotiationUiState(data.mission.id);
+  const error = negotiationUi.error ? `<p class="plan-error">${esc(negotiationUi.error)}</p>` : "";
+
+  if (teamConfirmed) {
+    // Team already confirmed, just show the message as a regular bubble
+    return `
+      <div class="bubble owner">
+        <strong>HR Agent · 团队提案</strong>
+        <p>${esc(message.content)}</p>
       </div>
-      <div class="brief-metrics">
-        <strong>成功指标</strong>
-        ${brief.successMetrics.map((item) => `<div>${esc(item)}</div>`).join("")}
+    `;
+  }
+
+  return `
+    <div class="bubble owner team-proposal">
+      <strong>HR Agent · 团队提案</strong>
+      <p>${esc(message.content)}</p>
+      ${error}
+      <div class="choice-row" style="margin-top: 12px;">
+        <button type="button" data-confirm-negotiation>确认团队提案</button>
+        <button type="button" data-toggle-negotiation-revision>提出修改建议</button>
       </div>
-      <div class="brief-constraints">
-        <strong>约束</strong>
-        ${brief.constraints.map((item) => `<div>${esc(item)}</div>`).join("")}
-      </div>
+      ${negotiationUi.revisionOpen ? `
+        <div class="plan-revision-box">
+          <textarea id="negotiation-revision-feedback" rows="3" placeholder="请描述你对团队提案的修改建议，例如：需要增加一个设计师、减少团队规模等">${esc(negotiationUi.revisionFeedback)}</textarea>
+          <button type="button" data-submit-negotiation-revision>提交修改建议</button>
+        </div>
+      ` : ""}
     </div>
   `;
 }
@@ -465,7 +555,7 @@ function renderMissionPlanReview(data) {
   const plan = currentMissionPlan();
   const pending = isPlanPending();
   const planUi = currentPlanUiState();
-  const hasWarRoom = missionHasWarRoomState(data.mission.id);
+  const hasWarRoom = data.tasks.length > 0;
   const error = planUi.error ? `<p class="plan-error">${esc(planUi.error)}</p>` : "";
   if (!plan) {
     const legacyWarRoomAction = hasWarRoom ? `
@@ -525,13 +615,14 @@ function renderMissionPlanReview(data) {
 
 function renderConversationMessage(message) {
   const isUser = message.type === "user_message";
-  // For owner messages with options, show full content so user sees the question
-  // For owner messages without options, also show full content
   const content = isUser ? message.content : message.content;
   if (!content.trim()) return "";
+  const isLong = content.length > 300;
   return `
-    <div class="bubble ${isUser ? "user" : "owner"}">
-      <p>${esc(content)}</p>
+    <div class="bubble ${isUser ? "user" : "owner"}" data-collapsible>
+      <div class="bubble-content" data-full><p>${esc(content)}</p></div>
+      ${isLong ? `<div class="bubble-collapsed" hidden><p>${esc(content.slice(0, 200))}...</p></div>` : ""}
+      ${isLong ? `<button type="button" class="expand-button" data-toggle-collapse>展开</button>` : ""}
     </div>
   `;
 }
@@ -773,6 +864,94 @@ function bindChoiceButtons() {
       renderAll();
     });
   });
+  document.querySelectorAll("[data-confirm-negotiation]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const negotiationUi = negotiationUiState(mission.id);
+      negotiationUi.error = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/negotiation/confirm`, {
+          method: "POST",
+          body: { missionId: mission.id },
+        });
+        state.snapshot = result.snapshot;
+        negotiationUi.revisionOpen = false;
+        negotiationUi.revisionFeedback = "";
+        await loadAutopilotDiagnosis(mission.id);
+      } catch (error) {
+        negotiationUi.error = error instanceof Error ? error.message : String(error);
+      }
+      renderAll();
+    });
+  });
+  document.querySelectorAll("[data-toggle-negotiation-revision]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const negotiationUi = negotiationUiState(mission.id);
+      negotiationUi.revisionOpen = !negotiationUi.revisionOpen;
+      renderAll();
+    });
+  });
+  const negotiationRevisionTextarea = $("negotiation-revision-feedback");
+  if (negotiationRevisionTextarea) {
+    negotiationRevisionTextarea.addEventListener("input", (event) => {
+      const mission = currentMission();
+      if (!mission) return;
+      negotiationUiState(mission.id).revisionFeedback = event.target.value;
+    });
+  }
+  document.querySelectorAll("[data-submit-negotiation-revision]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const negotiationUi = negotiationUiState(mission.id);
+      const feedback = negotiationUi.revisionFeedback.trim();
+      if (!feedback) {
+        negotiationUi.error = "请输入修改建议。";
+        renderAll();
+        return;
+      }
+      negotiationUi.error = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/negotiation/respond`, {
+          method: "POST",
+          body: { missionId: mission.id, feedback },
+        });
+        state.snapshot = result.snapshot;
+        negotiationUi.revisionOpen = false;
+        negotiationUi.revisionFeedback = "";
+      } catch (error) {
+        negotiationUi.error = error instanceof Error ? error.message : String(error);
+      }
+      renderAll();
+    });
+  });
+  // Collapsible bubble content
+  document.querySelectorAll("[data-toggle-collapse]").forEach((button) => {
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const bubble = button.closest("[data-collapsible]");
+      if (!bubble) return;
+      const fullContent = bubble.querySelector("[data-full]");
+      const collapsedContent = bubble.querySelector("[data-collapsed]");
+      const isCollapsed = bubble.classList.contains("is-collapsed");
+      if (isCollapsed) {
+        bubble.classList.remove("is-collapsed");
+        if (collapsedContent) collapsedContent.hidden = true;
+        if (fullContent) fullContent.hidden = false;
+        button.textContent = "收起";
+      } else {
+        bubble.classList.add("is-collapsed");
+        if (fullContent) fullContent.hidden = true;
+        if (collapsedContent) collapsedContent.hidden = false;
+        button.textContent = "展开";
+      }
+    });
+  });
   const ownerThinking = isOwnerThinking();
   const form = $("mission-form");
   if (form) {
@@ -860,7 +1039,15 @@ function latestOutputText(data) {
 }
 
 function outputItems(data) {
-  const artifactItems = data.artifacts.map((artifact) => `产物：${artifact.type} · 质量分 ${Math.round(artifact.qualityScore * 100)}`);
+  const artifactItems = data.artifacts.map((artifact) => {
+    let item = `产物：${artifact.type} · 质量分 ${Math.round((artifact.qualityScore || 0) * 100)}`;
+    if (artifact.sources && artifact.sources.length > 0) {
+      const sourceCount = artifact.sources.length;
+      const urlCount = artifact.sources.filter((s) => s && s.url).length;
+      item += ` · ${sourceCount}个来源${urlCount > 0 ? ` (${urlCount}个URL)` : ""}`;
+    }
+    return item;
+  });
   const reviewItems = data.reviews.map((review) => `审核：${review.decision} · ${review.comments[0] || "无补充说明"}`);
   return [...artifactItems, ...reviewItems];
 }
