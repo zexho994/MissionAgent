@@ -99,7 +99,8 @@ function renderWarRoom() {
     });
   });
   document.querySelectorAll(".task-card").forEach((card) => {
-    card.addEventListener("click", () => {
+    card.addEventListener("click", (e) => {
+      if ((e.target).closest(".task-run-btn")) return;
       const taskId = card.dataset.taskId;
       if (state.selectedTaskId === taskId) {
         state.selectedTaskId = undefined;
@@ -107,6 +108,16 @@ function renderWarRoom() {
         state.selectedTaskId = taskId;
       }
       renderWarRoom();
+    });
+  });
+  document.querySelectorAll("[data-run-task]").forEach((button) => {
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const missionId = button.dataset.missionId;
+      const taskId = button.dataset.runTask;
+      if (missionId && taskId) {
+        void runTask(missionId, taskId);
+      }
     });
   });
   const closeTaskDetail = document.querySelector("[data-close-task-detail]");
@@ -574,6 +585,11 @@ function renderTaskCard(data, task, artifact, agentById) {
   const isSelected = state.selectedTaskId === task.id;
   const assignee = task.assigneeAgentId ? agentById.get(task.assigneeAgentId) : null;
   const outputPreview = artifact ? artifactPreview(artifact) : null;
+  const isRunnable = task.status === "ready" || task.status === "queued" || task.status === "revision_needed";
+  const isRunning = task.status === "running";
+  const isCompleted = task.status === "completed" || task.status === "failed";
+  const execution = isRunning ? data.executions.find(e => e.taskId === task.id && e.status === "running") : null;
+  const review = artifact ? data.reviews.find(r => r.artifactId === artifact.id) : null;
 
   return `
     <article class="task-card ${isSelected ? "selected" : ""}" data-task-id="${esc(task.id)}">
@@ -582,7 +598,10 @@ function renderTaskCard(data, task, artifact, agentById) {
         ${assignee ? `<span class="task-assignee">${esc(assignee.name || assignee.role)}</span>` : ""}
       </header>
       <div class="task-title">${esc(task.title)}</div>
+      ${isRunning && execution ? `<div class="task-execution-status">执行中...</div>` : ""}
       ${outputPreview ? `<div class="task-output-preview">${esc(outputPreview)}</div>` : ""}
+      ${isCompleted && review ? `<div class="task-review-decision review-${esc(review.decision)}">${review.decision === "approve" ? "通过" : review.decision === "revise" ? "需修改" : "拒绝"}</div>` : ""}
+      ${isRunnable ? `<button type="button" class="task-run-btn" data-run-task="${esc(task.id)}" data-mission-id="${esc(task.missionId)}">执行</button>` : ""}
     </article>
   `;
 }

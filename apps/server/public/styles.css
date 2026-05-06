@@ -1466,6 +1466,42 @@ h1, h2, p { margin-top: 0; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.task-execution-status {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #2563eb;
+  font-weight: 500;
+}
+.task-review-decision {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  display: inline-block;
+}
+.task-review-decision.review-approve { background: #d1fae5; color: #065f46; }
+.task-review-decision.review-revise { background: #fef3c7; color: #b45309; }
+.task-review-decision.review-reject { background: #fee2e2; color: #b91c1c; }
+.task-run-btn {
+  margin-top: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  background: #2563eb;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.task-run-btn:hover {
+  background: #1d4ed8;
+}
+.task-run-btn:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
 .task-detail-panel {
   margin-top: 20px;
   border: 1px solid #d1d5db;

@@ -160,6 +160,26 @@ async function updateStrategyAdjustmentStatus(missionId, adjustmentId, newStatus
   }
 }
 
+async function runTask(missionId, taskId, message = "Execute the assigned task.") {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/openclaw/run`, {
+      method: "POST",
+      body: { missionId, taskId, message },
+    });
+    state.snapshot = result.snapshot;
+    renderAll();
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+    renderAll();
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
 async function createScheduleTemplate(missionId, payload, runNow) {
   state.scheduleActionPending = true;
   state.scheduleError = "";
