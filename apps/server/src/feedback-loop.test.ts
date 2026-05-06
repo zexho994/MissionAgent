@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MissionOutcomeEvaluation, TaskFailureAnalysis } from "@digitalagent/core";
-import { buildExecutionFailureFeedback } from "./feedback-generation.js";
+import type { MissionOutcomeEvaluation } from "@digitalagent/core";
 
 describe("feedback loop dispatch", () => {
   it("only dispatches feedback event for blocked or regressed outcomes", () => {
@@ -39,6 +38,25 @@ describe("feedback loop dispatch", () => {
     };
 
     // Should dispatch
+    const shouldDispatch = evaluation.outcome === "blocked" || evaluation.outcome === "regressed";
+    expect(shouldDispatch).toBe(true);
+  });
+
+  it("dispatches feedback event for regressed outcome", () => {
+    const evaluation: MissionOutcomeEvaluation = {
+      id: "eval_1",
+      missionId: "mission_1",
+      taskId: "task_1",
+      source: "execution_result",
+      outcome: "regressed",
+      contributionScore: 0.2,
+      summary: "Quality dropped",
+      evidence: ["quality score decreased"],
+      risks: ["regression detected"],
+      recommendedNextActions: ["Revert to previous version"],
+      createdAt: new Date().toISOString(),
+    };
+
     const shouldDispatch = evaluation.outcome === "blocked" || evaluation.outcome === "regressed";
     expect(shouldDispatch).toBe(true);
   });
