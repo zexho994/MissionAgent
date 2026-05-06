@@ -1088,7 +1088,7 @@ h1, h2, p { margin-top: 0; }
 .agent-node {
   position: relative;
   z-index: 2;
-  width: 150px;
+  min-width: 150px;
   display: grid;
   justify-items: center;
   gap: 14px;
@@ -1313,6 +1313,7 @@ h1, h2, p { margin-top: 0; }
   color: #596273;
   line-height: 1.4;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .agent-relation {
