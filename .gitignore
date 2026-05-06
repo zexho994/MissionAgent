@@ -21,3 +21,5 @@ test-*.js
 # Environment files.
 .env
 .env.*
+*.png
+apps/server/test-results/
