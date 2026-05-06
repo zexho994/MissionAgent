@@ -1,4 +1,4 @@
-import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
+import { createScheduleRule, type ScheduleRule, type Source } from "@digitalagent/core";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
 import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
 
@@ -210,6 +210,7 @@ export async function handleApiRequest(
           timeoutSeconds: 300,
         })
         .then((result) => {
+          const sources = extractSourcesFromOpenClawOutput(result.output);
           deps.missions.submitExecutionResult({
             executionId: execution.id,
             missionId,
@@ -219,6 +220,7 @@ export async function handleApiRequest(
               stderr: result.stderr,
             },
             evidence: ["openclaw:local"],
+            sources,
           });
         })
         .catch((error: unknown) => {
@@ -317,6 +319,31 @@ export async function handleApiRequest(
       }
       if (request.method === "GET" && collection === "strategy-adjustments") {
         return json(200, { strategyAdjustments: deps.missions.getStrategyAdjustments(missionId) });
+      }
+    }
+
+    const strategyAdjustmentStatusMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/feedback\/strategy-adjustments\/([^/]+)\/status$/,
+    );
+    if (strategyAdjustmentStatusMatch) {
+      const missionId = strategyAdjustmentStatusMatch[1];
+      const adjustmentId = strategyAdjustmentStatusMatch[2];
+      if (!missionId || !adjustmentId) {
+        return json(400, { error: "Mission ID and adjustment ID required" });
+      }
+      if (request.method === "PATCH") {
+        const body = expectObject(request.body);
+        const newStatus = expectString(body.status, "status");
+        const validStatuses = ["proposed", "accepted", "rejected", "superseded"];
+        if (!validStatuses.includes(newStatus)) {
+          return json(400, { error: `Invalid status. Must be one of: ${validStatuses.join(", ")}` });
+        }
+        const updated = deps.missions.updateStrategyAdjustmentStatus(
+          missionId,
+          adjustmentId,
+          newStatus as "proposed" | "accepted" | "rejected" | "superseded",
+        );
+        return json(200, { strategyAdjustment: updated, snapshot: deps.missions.snapshot() });
       }
     }
 
@@ -595,4 +622,104 @@ function buildOpenClawMessage(input: {
     "User instruction:",
     input.message,
   ].join("\n");
+}
+
+/**
+ * Extracts source information from OpenClaw agent output.
+ * The OpenClaw output may contain search results in various formats:
+ * - searchResults: Array of {url, title, snippet, searchKeyword}
+ * - sources: Array of {url, title, snippet}
+ * - webSearch: Object with searchKeyword and results
+ */
+function extractSourcesFromOpenClawOutput(output: unknown): Source[] {
+  const sources: Source[] = [];
+
+  if (!output || typeof output !== "object") {
+    return sources;
+  }
+
+  const record = output as Record<string, unknown>;
+
+  // Check for searchResults array
+  const searchResults = record.searchResults as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(searchResults)) {
+    for (const result of searchResults) {
+      if (result.url && typeof result.url === "string") {
+        const src: Source = { url: result.url };
+        if (typeof result.title === "string") src.title = result.title;
+        if (typeof result.snippet === "string") src.snippet = result.snippet;
+        if (typeof result.searchKeyword === "string") src.searchKeyword = result.searchKeyword;
+        sources.push(src);
+      }
+    }
+    if (sources.length > 0) {
+      return sources;
+    }
+  }
+
+  // Check for sources array
+  const directSources = record.sources as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(directSources)) {
+    for (const source of directSources) {
+      if (source.url && typeof source.url === "string") {
+        const src: Source = { url: source.url };
+        if (typeof source.title === "string") src.title = source.title;
+        if (typeof source.snippet === "string") src.snippet = source.snippet;
+        sources.push(src);
+      }
+    }
+    if (sources.length > 0) {
+      return sources;
+    }
+  }
+
+  // Check for webSearch object
+  const webSearch = record.webSearch as Record<string, unknown> | undefined;
+  if (webSearch && typeof webSearch === "object") {
+    const searchKeyword = typeof webSearch.searchKeyword === "string" ? webSearch.searchKeyword : undefined;
+    const results = webSearch.results as Array<Record<string, unknown>> | undefined;
+    if (Array.isArray(results)) {
+      for (const result of results) {
+        if (result.url && typeof result.url === "string") {
+          const src: Source = { url: result.url };
+          if (typeof result.title === "string") src.title = result.title;
+          if (typeof result.snippet === "string") src.snippet = result.snippet;
+          if (searchKeyword) src.searchKeyword = searchKeyword;
+          sources.push(src);
+        }
+      }
+    }
+  }
+
+  // Check payloads for source references (common pattern in OpenClaw outputs)
+  const payloads = record.payloads as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(payloads)) {
+    for (const payload of payloads) {
+      if (payload.sources && Array.isArray(payload.sources)) {
+        for (const source of payload.sources as Array<Record<string, unknown>>) {
+          if (source.url && typeof source.url === "string") {
+            const src: { url: string; title?: string; snippet?: string } = { url: source.url };
+            if (typeof source.title === "string") src.title = source.title;
+            if (typeof source.snippet === "string") src.snippet = source.snippet;
+            sources.push(src);
+          }
+        }
+      }
+      // Also check for searchResults within payload
+      const payloadSearchResults = payload.searchResults as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(payloadSearchResults)) {
+        for (const result of payloadSearchResults) {
+          if (result.url && typeof result.url === "string") {
+            const src: { url: string; title?: string; snippet?: string; searchKeyword?: string } = { url: result.url };
+            if (typeof result.title === "string") src.title = result.title;
+            if (typeof result.snippet === "string") src.snippet = result.snippet;
+            if (typeof result.searchKeyword === "string") src.searchKeyword = result.searchKeyword;
+            sources.push(src);
+          }
+        }
+      }
+    }
+  }
+
+  return sources;
 }

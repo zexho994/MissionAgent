@@ -1,11 +1,12 @@
 import { createId } from "./ids.js";
-import type { Artifact, ArtifactType, Review, ReviewDecision } from "./types.js";
+import type { Artifact, ArtifactType, Review, ReviewDecision, Source } from "./types.js";
 
 export interface CreateArtifactInput {
   taskId: string;
   type: ArtifactType;
   content: Record<string, unknown>;
   evidence: string[];
+  sources: Source[];
   qualityScore?: number;
 }
 
@@ -36,6 +37,7 @@ export function createArtifact(input: CreateArtifactInput): Artifact {
     type: input.type,
     content: { ...input.content },
     evidence: [...input.evidence],
+    sources: [...input.sources],
     ...(input.qualityScore === undefined ? {} : { qualityScore: input.qualityScore }),
     createdAt: new Date(),
   };

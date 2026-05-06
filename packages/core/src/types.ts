@@ -146,12 +146,20 @@ export interface Task {
 
 export type ArtifactType = "research_report" | "content_draft" | "metric_snapshot" | "execution_log";
 
+export interface Source {
+  url?: string;
+  title?: string;
+  snippet?: string;
+  searchKeyword?: string;
+}
+
 export interface Artifact {
   id: string;
   taskId: string;
   type: ArtifactType;
   content: Record<string, unknown>;
   evidence: string[];
+  sources: Source[];
   qualityScore?: number;
   createdAt: Date;
 }
