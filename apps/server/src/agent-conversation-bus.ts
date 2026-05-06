@@ -7,6 +7,7 @@ import type {
   ConversationThread,
 } from "./agent-conversation-types.js";
 import type { AgentMessage, AgentMessageType, MissionSnapshot, WarRoomAgent } from "./mission-service.js";
+import { createId } from "@digitalagent/core";
 import { findSuperiors } from "./agent-hierarchy.js";
 
 const CONVERSATION_TYPES = new Set<AgentMessageType>([
@@ -32,6 +33,10 @@ export class AgentConversationBus {
     maxConversationDepth: number;
     maxDiscussionRounds: number;
     cooldownMs: number;
+    missions: {
+      recordAcceptedStrategyAdjustment: (adjustment: import("@digitalagent/core").StrategyAdjustment) => void;
+      triggerHrTeamReevaluation: (missionId: string, triggeredByAdjustmentId: string) => Promise<void>;
+    };
   }) {}
 
   async dispatchEvent(input: {
@@ -103,6 +108,24 @@ export class AgentConversationBus {
           }
           if (response.action) {
             messageInput.metadata = { action: response.action };
+          }
+          // Execute propose_strategy_adjustment action
+          if (response.action?.type === "propose_strategy_adjustment" && response.action?.payload) {
+            const payload = response.action.payload as Record<string, unknown>;
+            const adjustment = {
+              id: createId("strategy_adjustment"),
+              missionId: input.missionId,
+              status: "accepted" as const,
+              previousStrategy: String(payload.previousStrategy ?? ""),
+              proposedStrategy: String(payload.proposedStrategy ?? ""),
+              rationale: String(payload.rationale ?? ""),
+              affectedAgentRoles: Array.isArray(payload.affectedAgentRoles) ? payload.affectedAgentRoles.map(String) : [],
+              proposedTaskGoals: Array.isArray(payload.proposedTaskGoals) ? payload.proposedTaskGoals.map(String) : [],
+              requiresHrReview: true,
+              createdAt: new Date().toISOString(),
+            };
+            this.deps.missions.recordAcceptedStrategyAdjustment(adjustment);
+            void this.deps.missions.triggerHrTeamReevaluation(input.missionId, adjustment.id);
           }
           lastMessage = this.deps.appendMessage(messageInput);
           this.deps.updateAgent(target.id, {
@@ -364,7 +387,7 @@ function parseAction(action: unknown): AgentConversationResponse["action"] {
   }
   const value = action as Record<string, unknown>;
   const type = value.type;
-  if (type !== "request_info" && type !== "notify_owner" && type !== "escalate" && type !== "acknowledge" && type !== "report_to_superior") {
+  if (type !== "request_info" && type !== "notify_owner" && type !== "escalate" && type !== "acknowledge" && type !== "report_to_superior" && type !== "propose_strategy_adjustment") {
     return { type: "acknowledge" };
   }
   const parsed: NonNullable<AgentConversationResponse["action"]> = { type };

@@ -1703,6 +1703,31 @@ export class InMemoryMissionService {
     return [...this.strategyAdjustments.values()].filter((record) => record.missionId === missionId);
   }
 
+  recordAcceptedStrategyAdjustment(adjustment: StrategyAdjustment): void {
+    if (adjustment.status !== "accepted") {
+      throw new Error("Only accepted strategy adjustments can be recorded directly");
+    }
+    this.strategyAdjustments.set(adjustment.id, adjustment);
+  }
+
+  async triggerHrTeamReevaluation(missionId: string, triggeredByAdjustmentId: string): Promise<void> {
+    const hrAgent = [...this.agents.values()].find(
+      (a) => a.missionId === missionId && a.role === "hr",
+    );
+    if (!hrAgent) return;  // No HR agent in this mission
+
+    const adjustment = this.strategyAdjustments.get(triggeredByAdjustmentId);
+    if (!adjustment) return;
+
+    this.appendMessage({
+      missionId,
+      fromAgentId: "system",
+      toAgentId: hrAgent.id,
+      type: "agent_request",
+      content: `Team re-evaluation requested based on strategy adjustment: ${adjustment.rationale}. Proposed strategy: ${adjustment.proposedStrategy}. Review whether current team composition can execute this strategy or if new roles/adjustments are needed. Respond via the conversation bus.`,
+    });
+  }
+
   getFeedbackSummary(missionId: string): FeedbackSummary {
     const evaluations = this.getMissionOutcomeEvaluations(missionId);
     const failureAnalyses = this.getTaskFailureAnalyses(missionId);
@@ -2100,6 +2125,7 @@ export class InMemoryMissionService {
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
         maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 5,
         cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
+        missions: this,
       });
     }
     return this.conversationBus;

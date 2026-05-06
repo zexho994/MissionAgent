@@ -106,6 +106,10 @@ function makeBusDeps(overrides?: {
     maxConversationDepth: 5,
     maxDiscussionRounds: 5,
     cooldownMs: 0,
+    missions: {
+      recordAcceptedStrategyAdjustment: () => {},
+      triggerHrTeamReevaluation: async () => {},
+    },
   });
 
   return { bus, messages, threads, resolvedThreadIds, agentUpdates };

@@ -37,7 +37,7 @@ export interface AgentConversationResponse {
   mentionedAgentIds?: string[];
   shouldPropagate: boolean;
   action?: {
-    type: "request_info" | "notify_owner" | "escalate" | "acknowledge" | "report_to_superior";
+    type: "request_info" | "notify_owner" | "escalate" | "acknowledge" | "report_to_superior" | "propose_strategy_adjustment";
     targetAgentId?: string;
     payload?: Record<string, unknown>;
   };
