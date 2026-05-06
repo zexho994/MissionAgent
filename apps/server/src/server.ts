@@ -33,6 +33,12 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/favicon.ico") {
+      res.writeHead(204, { "cache-control": "no-store" });
+      res.end();
+      return;
+    }
+
     await serveStatic(url.pathname, res);
   } catch (error) {
     writeJson(res, 500, {
