@@ -15,6 +15,55 @@ export interface MissionBrief {
   timeline?: string | undefined;
 }
 
+export type MissionPlanStatus = "draft" | "confirmed" | "superseded";
+
+export interface MissionPlanPhase {
+  name: string;
+  objective: string;
+  deliverables: string[];
+  successCriteria: string[];
+}
+
+export interface MissionPlanWorkstream {
+  name: string;
+  objective: string;
+  requiredRole: string;
+  responsibilities: string[];
+  firstTaskGoal: string;
+}
+
+export interface MissionPlanReportingLine {
+  fromRole: string;
+  toRole: string;
+  cadence: string;
+  purpose: string;
+}
+
+export interface MissionPlanScheduleRhythm {
+  name: string;
+  cadence: string;
+  ownerRole: string;
+  purpose: string;
+}
+
+export interface MissionPlan {
+  id: string;
+  missionId: string;
+  status: MissionPlanStatus;
+  createdAt: Date;
+  confirmedAt?: Date;
+  revision: number;
+  feedback?: string;
+  goal: string;
+  successMetrics: string[];
+  phases: MissionPlanPhase[];
+  workstreams: MissionPlanWorkstream[];
+  reportingLines: MissionPlanReportingLine[];
+  scheduleRhythms: MissionPlanScheduleRhythm[];
+  risks: string[];
+  checkpoints: string[];
+}
+
 export interface Mission {
   id: string;
   goal: string;
@@ -25,6 +74,8 @@ export interface Mission {
   createdAt: Date;
   brief?: MissionBrief;
   briefConfirmed?: boolean;
+  confirmedPlanId?: string;
+  scheduleRules: ScheduleRule[];
 }
 
 export interface RoleBudget {
@@ -90,6 +141,7 @@ export interface Task {
   artifactId?: string;
   reviewId?: string;
   failureReason?: string;
+  scheduleRuleId?: string;
 }
 
 export type ArtifactType = "research_report" | "content_draft" | "metric_snapshot" | "execution_log";
@@ -115,6 +167,71 @@ export interface Review {
   createdAt: Date;
 }
 
+export type MissionOutcomeEvaluationSource = "execution_result" | "execution_failure" | "manual";
+export type MissionOutcome = "advanced" | "neutral" | "blocked" | "regressed";
+
+export interface MissionOutcomeEvaluation {
+  id: string;
+  missionId: string;
+  taskId: string;
+  artifactId?: string;
+  reviewId?: string;
+  source: MissionOutcomeEvaluationSource;
+  outcome: MissionOutcome;
+  contributionScore: number;
+  summary: string;
+  evidence: string[];
+  risks: string[];
+  recommendedNextActions: string[];
+  createdAt: string;
+}
+
+export type TaskFailureType =
+  | "missing_information"
+  | "agent_mismatch"
+  | "unclear_task"
+  | "external_blocker"
+  | "low_quality_output"
+  | "execution_error";
+
+export type RecommendedRecovery =
+  | "ask_user"
+  | "revise_task"
+  | "split_task"
+  | "reassign_agent"
+  | "adjust_strategy";
+
+export interface TaskFailureAnalysis {
+  id: string;
+  missionId: string;
+  taskId: string;
+  artifactId?: string;
+  reviewId?: string;
+  failureType: TaskFailureType;
+  summary: string;
+  rootCause: string;
+  recommendedRecovery: RecommendedRecovery;
+  recommendedNextActions: string[];
+  createdAt: string;
+}
+
+export type StrategyAdjustmentStatus = "proposed" | "accepted" | "rejected" | "superseded";
+
+export interface StrategyAdjustment {
+  id: string;
+  missionId: string;
+  triggeredByEvaluationId?: string;
+  triggeredByFailureAnalysisId?: string;
+  status: StrategyAdjustmentStatus;
+  previousStrategy: string;
+  proposedStrategy: string;
+  rationale: string;
+  affectedAgentRoles: string[];
+  proposedTaskGoals: string[];
+  requiresHrReview: boolean;
+  createdAt: string;
+}
+
 export type TaskEvent =
   | { type: "contract.completed" }
   | { type: "dependencies.met" }
@@ -132,3 +249,36 @@ export type TaskEvent =
   | { type: "task.failed"; reason: string }
   | { type: "task.retry" }
   | { type: "task.cancelled" };
+
+// --- Schedule Types ---
+
+export interface CronTrigger {
+  type: "cron";
+  expression: string;
+  timezone: string;
+}
+
+export interface ConditionTrigger {
+  type: "condition";
+  description: string;
+  sourceAgentRole: string;
+  evaluatePrompt: string;
+}
+
+export type ScheduleTrigger = CronTrigger | ConditionTrigger;
+
+export interface ScheduleRule {
+  id: string;
+  name: string;
+  missionId: string;
+  enabled: boolean;
+  trigger: ScheduleTrigger;
+  taskTemplate: {
+    title: string;
+    contract: TaskContract;
+    assigneeRole: string;
+    priority: "low" | "normal" | "high";
+  };
+  maxConcurrent: number;
+  metadata: Record<string, unknown>;
+}

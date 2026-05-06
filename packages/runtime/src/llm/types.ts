@@ -9,6 +9,7 @@ export interface LlmCallOptions {
   maxTokens?: number;
   timeoutMs?: number;
   onStream?: (token: string) => void;
+  extraBody?: Record<string, unknown>;
 }
 
 export interface LlmResponse {

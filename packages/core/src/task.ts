@@ -7,6 +7,7 @@ export interface CreateTaskInput {
   dependencies: string[];
   contract: TaskContract;
   approvalRequired: boolean;
+  scheduleRuleId?: string;
 }
 
 export function createTask(input: CreateTaskInput): Task {
@@ -22,6 +23,9 @@ export function createTask(input: CreateTaskInput): Task {
   if (input.contract.successCriteria.length === 0) {
     throw new Error("Task contract requires at least one success criterion");
   }
+  if (input.scheduleRuleId !== undefined && !input.scheduleRuleId.trim()) {
+    throw new Error("Task scheduleRuleId must be non-empty when provided");
+  }
 
   return {
     id: createId("task"),
@@ -36,5 +40,6 @@ export function createTask(input: CreateTaskInput): Task {
       successCriteria: [...input.contract.successCriteria],
     },
     approvalRequired: input.approvalRequired,
+    ...(input.scheduleRuleId === undefined ? {} : { scheduleRuleId: input.scheduleRuleId }),
   };
 }

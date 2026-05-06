@@ -47,6 +47,7 @@ function makeTestDeps() {
 
   const agents = new Map<string, WarRoomAgent>();
   const agentRelations = new Map<string, AgentRelation>();
+  const missions = new Map<string, Mission>();
   const tasks = new Map<string, import("@digitalagent/core").Task>();
   const agentMessages = new Map<string, AgentMessage>();
   const config = {
@@ -55,7 +56,7 @@ function makeTestDeps() {
     uiStrings: { teamPlannerDescription: "", initialTask: { title: "", objective: "" } },
   } as unknown as AgentSystemConfig;
 
-  return { llm, config, agents, agentRelations, tasks, agentMessages };
+  return { llm, config, agents, agentRelations, missions, tasks, agentMessages };
 }
 
 function makeMissionWithBrief(): Mission {
@@ -100,6 +101,7 @@ describe("NegotiationManager", () => {
   beforeEach(() => {
     deps = makeTestDeps();
     mission = makeMissionWithBrief();
+    deps.missions.set(mission.id, mission);
     addOwner(deps.agents, mission.id);
   });
 
@@ -240,6 +242,18 @@ describe("NegotiationManager", () => {
       expect(hrAgent?.name).toBe("HR Agent");
       expect(hrAgent?.status).toBe("done");
       expect([...deps.tasks.values()]).toHaveLength(1);
+      expect(deps.missions.get(mission.id)?.scheduleRules.length).toBeGreaterThan(0);
+    });
+
+    it("uses configured default timezone for schedule rules", async () => {
+      deps.config.scheduler = { defaultTimezone: "UTC" };
+      const manager = new NegotiationManager(deps);
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+
+      manager.confirmNegotiation({ missionId: mission.id }, mission);
+
+      const cronRule = deps.missions.get(mission.id)?.scheduleRules.find((rule) => rule.trigger.type === "cron");
+      expect(cronRule?.trigger).toMatchObject({ timezone: "UTC" });
     });
 
     it("should propagate toolPermissions from RoleSpec to worker agents", async () => {

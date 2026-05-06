@@ -8,6 +8,7 @@ export class FakeLlmAdapter implements LlmService {
   private totalCompletionTokens = 0;
   private lastCallAt: string | undefined;
   private lastMessages: LlmMessage[] = [];
+  private lastOptions: LlmCallOptions | undefined;
 
   constructor(handler: (messages: LlmMessage[]) => string) {
     this.handler = handler;
@@ -17,6 +18,7 @@ export class FakeLlmAdapter implements LlmService {
     this.callCount += 1;
     this.lastCallAt = new Date().toISOString();
     this.lastMessages = [...messages];
+    this.lastOptions = options;
 
     const content = this.handler(messages);
     const promptTokens = messages.reduce((sum, message) => sum + message.content.length, 0);
@@ -54,5 +56,9 @@ export class FakeLlmAdapter implements LlmService {
 
   getLastMessages(): LlmMessage[] {
     return this.lastMessages;
+  }
+
+  getLastOptions(): LlmCallOptions | undefined {
+    return this.lastOptions;
   }
 }

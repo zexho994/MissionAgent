@@ -1,5 +1,6 @@
+import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
-import type { InMemoryMissionService } from "./mission-service.js";
+import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
 
 export interface ApiRequest {
   method: string;
@@ -230,6 +231,235 @@ export async function handleApiRequest(
       return json(202, { execution, snapshot: deps.missions.snapshot() });
     }
 
+    const planMatch = request.path.match(/^\/api\/missions\/([^/]+)\/plan(?:\/(generate|confirm))?$/);
+    if (planMatch) {
+      const missionId = planMatch[1];
+      const action = planMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !action) {
+        const plan = deps.missions.getMissionPlan({ missionId });
+        return json(200, plan ? { plan } : {});
+      }
+
+      if (request.method === "POST" && action === "generate") {
+        const body = expectObject(request.body ?? {});
+        const feedback = body.feedback === undefined ? undefined : expectString(body.feedback, "feedback");
+        const plan = await deps.missions.generateMissionPlan({
+          missionId,
+          ...(feedback !== undefined ? { feedback } : {}),
+        });
+        return json(200, { plan, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "confirm") {
+        const body = expectObject(request.body);
+        const planId = expectString(body.planId, "planId");
+        const mission = deps.missions.confirmMissionPlan({ missionId, planId });
+        const plan = deps.missions.getMissionPlan({ missionId });
+        return json(200, { mission, plan, snapshot: deps.missions.snapshot() });
+      }
+    }
+
+    const autopilotDiagnosisMatch = request.path.match(/^\/api\/missions\/([^/]+)\/autopilot-diagnosis$/);
+    if (autopilotDiagnosisMatch) {
+      const missionId = autopilotDiagnosisMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        const openclawHealth = await deps.openclaw.health();
+        const diagnosis = deps.missions.getAutopilotDiagnosis(missionId, {
+          hasExecutionRunner: openclawHealth.available,
+        });
+        return json(200, { diagnosis });
+      }
+    }
+
+    const automationSummaryMatch = request.path.match(/^\/api\/missions\/([^/]+)\/automation-summary$/);
+    if (automationSummaryMatch) {
+      const missionId = automationSummaryMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        return json(200, { summary: deps.missions.getAutomationSummary(missionId) });
+      }
+    }
+
+    const feedbackSummaryMatch = request.path.match(/^\/api\/missions\/([^/]+)\/feedback-summary$/);
+    if (feedbackSummaryMatch) {
+      const missionId = feedbackSummaryMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        return json(200, { summary: deps.missions.getFeedbackSummary(missionId) });
+      }
+    }
+
+    const feedbackCollectionMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/feedback\/(evaluations|failure-analyses|strategy-adjustments)$/,
+    );
+    if (feedbackCollectionMatch) {
+      const missionId = feedbackCollectionMatch[1];
+      const collection = feedbackCollectionMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET" && collection === "evaluations") {
+        return json(200, { evaluations: deps.missions.getMissionOutcomeEvaluations(missionId) });
+      }
+      if (request.method === "GET" && collection === "failure-analyses") {
+        return json(200, { failureAnalyses: deps.missions.getTaskFailureAnalyses(missionId) });
+      }
+      if (request.method === "GET" && collection === "strategy-adjustments") {
+        return json(200, { strategyAdjustments: deps.missions.getStrategyAdjustments(missionId) });
+      }
+    }
+
+    const scheduleProductActionMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/schedule\/(trigger-next|templates|pause|resume)$/,
+    );
+    if (scheduleProductActionMatch) {
+      const missionId = scheduleProductActionMatch[1];
+      const action = scheduleProductActionMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "POST" && action === "trigger-next") {
+        const task = deps.missions.triggerNextScheduleRule(missionId);
+        return json(200, { task, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "templates") {
+        const body = expectObject(request.body);
+        const templateType = expectString(body.templateType, "templateType");
+        let input: ScheduleTemplateRequest;
+        if (templateType === "daily_check" || templateType === "weekly_review") {
+          input = {
+            templateType,
+            assigneeRole: expectString(body.assigneeRole, "assigneeRole"),
+            taskGoal: expectString(body.taskGoal, "taskGoal"),
+          };
+        } else if (templateType === "condition_response") {
+          input = {
+            templateType,
+            sourceAgentRole: expectString(body.sourceAgentRole, "sourceAgentRole"),
+            condition: expectString(body.condition, "condition"),
+            responseAssigneeRole: expectString(body.responseAssigneeRole, "responseAssigneeRole"),
+            responseTaskGoal: expectString(body.responseTaskGoal, "responseTaskGoal"),
+          };
+        } else {
+          throw new Error(`Unsupported schedule template: ${templateType}`);
+        }
+        const rule = deps.missions.createScheduleRuleFromTemplate(missionId, input);
+        return json(201, { rule, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "pause") {
+        deps.missions.pauseMissionAutomation(missionId);
+        return json(200, { summary: deps.missions.getAutomationSummary(missionId), snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "resume") {
+        deps.missions.resumeMissionAutomation(missionId);
+        return json(200, { summary: deps.missions.getAutomationSummary(missionId), snapshot: deps.missions.snapshot() });
+      }
+    }
+
+    const scheduleMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/schedule(?:\/([^/]+)(?:\/(trigger))?)?$/,
+    );
+    if (scheduleMatch) {
+      const missionId = scheduleMatch[1];
+      const ruleId = scheduleMatch[2];
+      const action = scheduleMatch[3];
+
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !ruleId) {
+        const rules = deps.missions.getScheduleRules(missionId).map((rule) => ({
+          ...rule,
+          nextRunAt: deps.missions.getScheduleRuleNextRunAt(missionId, rule.id),
+        }));
+        return json(200, { rules });
+      }
+
+      if (request.method === "POST" && !ruleId) {
+        const body = expectObject(request.body);
+        const trigger = expectObject(body.trigger);
+        const template = expectObject(body.taskTemplate);
+        const contract = expectObject(template.contract);
+        const triggerType = expectString(trigger.type, "trigger.type");
+
+        if (triggerType !== "cron" && triggerType !== "condition") {
+          return json(400, { error: "trigger must be cron or condition" });
+        }
+
+        const rule = createScheduleRule({
+          name: expectString(body.name, "name"),
+          missionId,
+          enabled: body.enabled !== false,
+          trigger: triggerType === "cron"
+            ? {
+                type: "cron",
+                expression: expectString(trigger.expression, "trigger.expression"),
+                timezone: expectString(trigger.timezone ?? "UTC", "trigger.timezone"),
+              }
+            : {
+                type: "condition",
+                description: expectString(trigger.description, "trigger.description"),
+                sourceAgentRole: expectString(trigger.sourceAgentRole, "trigger.sourceAgentRole"),
+                evaluatePrompt: expectString(trigger.evaluatePrompt, "trigger.evaluatePrompt"),
+              },
+          taskTemplate: {
+            title: expectString(template.title, "taskTemplate.title"),
+            contract: {
+              objective: expectString(contract.objective, "taskTemplate.contract.objective"),
+              input: expectRecord(contract.input ?? {}, "taskTemplate.contract.input"),
+              outputSchema: expectRecord(contract.outputSchema ?? {}, "taskTemplate.contract.outputSchema"),
+              successCriteria: expectStringArray(contract.successCriteria ?? [], "taskTemplate.contract.successCriteria"),
+            },
+            assigneeRole: expectString(template.assigneeRole, "taskTemplate.assigneeRole"),
+            priority: parsePriority(template.priority),
+          },
+          maxConcurrent: typeof body.maxConcurrent === "number" ? body.maxConcurrent : 1,
+          metadata: expectRecord(body.metadata ?? {}, "metadata"),
+        });
+
+        deps.missions.addScheduleRule(missionId, rule);
+        return json(201, { rule, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "PATCH" && ruleId && !action) {
+        const body = expectObject(request.body);
+        const existing = deps.missions.getScheduleRules(missionId).find((rule) => rule.id === ruleId);
+        if (!existing) {
+          throw new Error(`Schedule rule not found: ${ruleId}`);
+        }
+        const patch = parseScheduleRulePatch(body);
+        deps.missions.updateScheduleRule(missionId, ruleId, patch);
+        const updated = deps.missions.getScheduleRules(missionId).find((rule) => rule.id === ruleId);
+        return json(200, { rule: updated, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "DELETE" && ruleId && !action) {
+        deps.missions.removeScheduleRule(missionId, ruleId);
+        return json(200, { snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && ruleId && action === "trigger") {
+        deps.missions.triggerScheduleRule(missionId, ruleId);
+        return json(200, { triggered: true, snapshot: deps.missions.snapshot() });
+      }
+    }
+
     return json(404, { error: "Not found" });
   } catch (error) {
     return json(400, {
@@ -261,6 +491,85 @@ function expectStringArray(value: unknown, field: string): string[] {
     throw new Error(`${field} must be a string array`);
   }
   return [...value];
+}
+
+function expectRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parsePriority(value: unknown): "low" | "normal" | "high" {
+  if (value === "low" || value === "normal" || value === "high") {
+    return value;
+  }
+  return "normal";
+}
+
+function parseScheduleRulePatch(body: Record<string, unknown>): Partial<ScheduleRule> {
+  const allowed = new Set(["name", "enabled", "trigger", "taskTemplate", "maxConcurrent", "metadata"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unsupported schedule patch field: ${key}`);
+    }
+  }
+
+  const patch: Partial<ScheduleRule> = {};
+  if (body.name !== undefined) {
+    patch.name = expectString(body.name, "name");
+  }
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean") {
+      throw new Error("enabled must be a boolean");
+    }
+    patch.enabled = body.enabled;
+  }
+  if (body.trigger !== undefined) {
+    const trigger = expectObject(body.trigger);
+    const triggerType = expectString(trigger.type, "trigger.type");
+    if (triggerType !== "cron" && triggerType !== "condition") {
+      throw new Error("trigger must be cron or condition");
+    }
+    patch.trigger = triggerType === "cron"
+      ? {
+          type: "cron",
+          expression: expectString(trigger.expression, "trigger.expression"),
+          timezone: expectString(trigger.timezone, "trigger.timezone"),
+        }
+      : {
+          type: "condition",
+          description: expectString(trigger.description, "trigger.description"),
+          sourceAgentRole: expectString(trigger.sourceAgentRole, "trigger.sourceAgentRole"),
+          evaluatePrompt: expectString(trigger.evaluatePrompt, "trigger.evaluatePrompt"),
+        };
+  }
+  if (body.taskTemplate !== undefined) {
+    const template = expectObject(body.taskTemplate);
+    const contract = expectObject(template.contract);
+    patch.taskTemplate = {
+      title: expectString(template.title, "taskTemplate.title"),
+      contract: {
+        objective: expectString(contract.objective, "taskTemplate.contract.objective"),
+        input: expectRecord(contract.input ?? {}, "taskTemplate.contract.input"),
+        outputSchema: expectRecord(contract.outputSchema ?? {}, "taskTemplate.contract.outputSchema"),
+        successCriteria: expectStringArray(contract.successCriteria ?? [], "taskTemplate.contract.successCriteria"),
+      },
+      assigneeRole: expectString(template.assigneeRole, "taskTemplate.assigneeRole"),
+      priority: parsePriority(template.priority),
+    };
+  }
+  if (body.maxConcurrent !== undefined) {
+    if (typeof body.maxConcurrent !== "number") {
+      throw new Error("maxConcurrent must be a number");
+    }
+    patch.maxConcurrent = body.maxConcurrent;
+  }
+  if (body.metadata !== undefined) {
+    patch.metadata = expectRecord(body.metadata, "metadata");
+  }
+
+  return patch;
 }
 
 function buildOpenClawMessage(input: {

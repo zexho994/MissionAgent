@@ -1,7 +1,9 @@
 import {
+  createScheduleRule,
   createId,
   createTask,
   type Mission,
+  type ScheduleRule,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
 import { createHRAgent, type TeamProposal } from "./hr-agent.js";
@@ -17,6 +19,7 @@ export interface NegotiationManagerOptions {
   config: AgentSystemConfig;
   agents: Map<string, WarRoomAgent>;
   agentRelations: Map<string, AgentRelation>;
+  missions: Map<string, Mission>;
   tasks: Map<string, import("@digitalagent/core").Task>;
   agentMessages: Map<string, AgentMessage>;
   maxRounds?: number;
@@ -27,6 +30,7 @@ export class NegotiationManager {
   private readonly config: AgentSystemConfig;
   private readonly agents: Map<string, WarRoomAgent>;
   private readonly agentRelations: Map<string, AgentRelation>;
+  private readonly missions: Map<string, Mission>;
   private readonly tasks: Map<string, import("@digitalagent/core").Task>;
   private readonly agentMessages: Map<string, AgentMessage>;
   private readonly maxRounds: number;
@@ -37,6 +41,7 @@ export class NegotiationManager {
     this.config = options.config;
     this.agents = options.agents;
     this.agentRelations = options.agentRelations;
+    this.missions = options.missions;
     this.tasks = options.tasks;
     this.agentMessages = options.agentMessages;
     this.maxRounds = options.maxRounds ?? 3;
@@ -65,7 +70,7 @@ export class NegotiationManager {
     const hrAgent = createHRAgent({ llm: this.llm });
     const analysis = await hrAgent.receiveMissionBrief(mission.brief);
     const roleSpecs = await hrAgent.generateRoleSpecs(mission.id, analysis);
-    const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs);
+    const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
 
     const owner = this.agentByRole(mission.id, "owner");
     const ownerContext: OwnerContext = {
@@ -137,7 +142,7 @@ export class NegotiationManager {
       proposal.roles.map((spec) => hrAgent.negotiateRoleSpec(mission.id, spec, input.feedback)),
     );
     const flatSpecs = revisedSpecs.flat();
-    const revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs);
+    const revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
 
     const updatedContext: OwnerContext = {
       ...ownerContext,
@@ -217,6 +222,12 @@ export class NegotiationManager {
       this.agentRelations.set(relation.id, relation);
     }
 
+    const scheduleRules = this.createScheduleRulesFromProposal(mission, proposal);
+    this.missions.set(mission.id, {
+      ...mission,
+      scheduleRules,
+    });
+
     this.appendMessage({
       missionId: mission.id,
       fromAgentId: hrAgentId,
@@ -225,6 +236,43 @@ export class NegotiationManager {
     });
 
     return mission;
+  }
+
+  private createScheduleRulesFromProposal(mission: Mission, proposal: TeamProposal): ScheduleRule[] {
+    return (proposal.schedulePlan ?? []).map((planItem) => {
+      const trigger = planItem.cronExpression
+        ? {
+            type: "cron" as const,
+            expression: planItem.cronExpression,
+            timezone: planItem.timezone ?? this.config.scheduler?.defaultTimezone ?? "Asia/Shanghai",
+          }
+        : {
+            type: "condition" as const,
+            description: planItem.conditionDescription ?? "",
+            sourceAgentRole: planItem.conditionSourceRole ?? planItem.assigneeRole,
+            evaluatePrompt: planItem.conditionEvaluatePrompt ?? `Check if: ${planItem.conditionDescription ?? ""}`,
+          };
+
+      return createScheduleRule({
+        name: planItem.name,
+        missionId: mission.id,
+        enabled: true,
+        trigger,
+        taskTemplate: {
+          title: planItem.taskDescription,
+          contract: {
+            objective: planItem.taskDescription,
+            input: {},
+            outputSchema: { report: "object" },
+            successCriteria: [`Complete: ${planItem.taskDescription}`],
+          },
+          assigneeRole: planItem.assigneeRole,
+          priority: "normal",
+        },
+        maxConcurrent: 1,
+        metadata: { justification: planItem.justification },
+      });
+    });
   }
 
   getNegotiation(input: { missionId: string }): { proposal: TeamProposal; previousFeedback: string[] } | undefined {

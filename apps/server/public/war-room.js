@@ -28,6 +28,58 @@ function renderWarRoom() {
       renderWarRoom();
     });
   });
+
+  const triggerNext = document.querySelector("[data-trigger-next]");
+  if (triggerNext) {
+    triggerNext.addEventListener("click", () => {
+      const mission = currentMission();
+      if (mission) void triggerNextSchedule(mission.id);
+    });
+  }
+  const toggleAutomation = document.querySelector("[data-toggle-automation]");
+  if (toggleAutomation) {
+    toggleAutomation.addEventListener("click", () => {
+      const mission = currentMission();
+      if (!mission) return;
+      if (toggleAutomation.dataset.toggleAutomation === "resume") {
+        void resumeAutomation(mission.id);
+      } else {
+        void pauseAutomation(mission.id);
+      }
+    });
+  }
+  const toggleScheduleForm = document.querySelector("[data-toggle-schedule-form]");
+  if (toggleScheduleForm) {
+    toggleScheduleForm.addEventListener("click", () => {
+      state.scheduleFormOpen = !state.scheduleFormOpen;
+      renderWarRoom();
+    });
+  }
+  const scheduleTemplateForm = document.querySelector("#schedule-template-form");
+  if (scheduleTemplateForm) {
+    scheduleTemplateForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const mission = currentMission();
+      if (!mission) return;
+      const formData = new FormData(scheduleTemplateForm);
+      const templateType = formData.get("templateType");
+      const runNow = formData.get("runNow") === "on";
+      const payload = templateType === "condition_response"
+        ? {
+            templateType,
+            sourceAgentRole: formData.get("sourceAgentRole"),
+            condition: formData.get("condition"),
+            responseAssigneeRole: formData.get("responseAssigneeRole"),
+            responseTaskGoal: formData.get("responseTaskGoal"),
+          }
+        : {
+            templateType,
+            assigneeRole: formData.get("assigneeRole"),
+            taskGoal: formData.get("taskGoal"),
+          };
+      void createScheduleTemplate(mission.id, payload, runNow);
+    });
+  }
 }
 
 function warNavButton(tab, label) {
@@ -43,6 +95,9 @@ function renderWarOverview(data) {
       </div>
       <span>${missionStateText(data.executions)}</span>
     </div>
+    ${renderAutomationPulse(data, state.automationSummaryByMissionId[data.mission.id])}
+    ${renderFeedbackPanel(state.feedbackSummaryByMissionId[data.mission.id])}
+    ${renderAutopilotDiagnosis(state.autopilotDiagnosisByMissionId[data.mission.id])}
     <div class="war-stage">
       <div class="stage-note">
         <strong>War Room</strong>
@@ -64,6 +119,135 @@ function renderWarOverview(data) {
         <strong>最近产出</strong>
         <p>${esc(latestOutputText(data))}</p>
       </div>
+    </div>
+  `;
+}
+
+function renderFeedbackPanel(summary) {
+  if (!summary) {
+    return `
+      <div class="feedback-panel">
+        <div>
+          <span>反馈闭环</span>
+          <strong>正在读取反馈状态</strong>
+          <p>系统会在任务完成或失败后记录 Mission 层面的学习结果。</p>
+        </div>
+      </div>
+    `;
+  }
+  const evaluation = summary.latestEvaluation;
+  const failure = summary.latestFailureAnalysis;
+  const adjustment = summary.latestStrategyAdjustment;
+  return `
+    <div class="feedback-panel">
+      <div class="feedback-main">
+        <span>反馈闭环</span>
+        <strong>${evaluation ? esc(evaluation.summary) : "还没有任务反馈"}</strong>
+        <p>${evaluation ? `结果：${esc(evaluation.outcome)} · 贡献度 ${Math.round(evaluation.contributionScore * 100)}%` : "完成或失败一个任务后，这里会显示系统学到了什么。"}</p>
+      </div>
+      <div class="feedback-stats">
+        <div><strong>${summary.counts.evaluations}</strong><span>评估</span></div>
+        <div><strong>${summary.counts.failureAnalyses}</strong><span>失败分析</span></div>
+        <div><strong>${summary.counts.strategyAdjustments}</strong><span>策略提案</span></div>
+      </div>
+      ${failure ? `<div class="feedback-note blocked"><strong>阻塞</strong><p>${esc(failure.summary)}</p></div>` : ""}
+      ${adjustment ? `<div class="feedback-note"><strong>策略提案</strong><p>${esc(adjustment.proposedStrategy)}</p></div>` : ""}
+    </div>
+  `;
+}
+
+function renderAutopilotDiagnosis(diagnosis) {
+  if (!diagnosis) {
+    return `
+      <section class="autopilot-diagnosis">
+        <div class="autopilot-diagnosis-main">
+          <span>Autopilot 状态</span>
+          <strong>正在读取 Autopilot 诊断。</strong>
+          <p>等待当前 Mission 的自动运行前置条件。</p>
+        </div>
+      </section>
+    `;
+  }
+
+  const blocker = diagnosis.blockers[0];
+  const nextAction = blocker?.nextAction || (diagnosis.ready ? "保持现有运行节奏，继续观察执行结果。" : "等待系统更新下一步建议。");
+  const signals = diagnosis.signals;
+  return `
+    <section class="autopilot-diagnosis ${diagnosis.ready ? "ready" : ""}">
+      <div class="autopilot-diagnosis-main">
+        <span>Autopilot 状态</span>
+        <strong>${esc(autopilotStageText(diagnosis.stage))}</strong>
+        <p>${blocker ? esc(blocker.message) : "当前没有阻塞项。"}</p>
+      </div>
+      <div class="autopilot-next">
+        <span>下一步建议</span>
+        <p>${esc(nextAction)}</p>
+      </div>
+      <div class="autopilot-signals">
+        ${renderAutopilotSignal("Brief 已确认", signals.briefConfirmed)}
+        ${renderAutopilotSignal("计划已就绪", signals.hasPlan)}
+        ${renderAutopilotSignal("团队已就绪", signals.teamReady)}
+        ${renderAutopilotSignal("初始任务", signals.hasInitialTasks)}
+        ${renderAutopilotSignal("执行器", signals.hasExecutionRunner)}
+        ${renderAutopilotSignal("运行节奏", signals.hasScheduleRules)}
+        ${renderAutopilotSignal("正在执行", signals.hasRunningExecution)}
+      </div>
+    </section>
+  `;
+}
+
+function renderAutopilotSignal(label, ok) {
+  return `<span class="autopilot-signal ${ok ? "ok" : "warn"}">${ok ? "OK" : "!"} ${esc(label)}</span>`;
+}
+
+function autopilotStageText(stage) {
+  const stageText = {
+    briefing: "等待 Brief 确认",
+    missing_plan: "缺少执行计划",
+    team_not_ready: "团队未就绪",
+    missing_initial_tasks: "缺少初始任务",
+    missing_execution_runner: "缺少执行器",
+    missing_schedule: "缺少运行节奏",
+    ready: "已准备自动运行",
+    running: "正在执行",
+    blocked: "执行受阻",
+  };
+  return stageText[stage] || stage;
+}
+
+function renderAutomationPulse(data, summary) {
+  if (!summary) {
+    return `
+      <div class="automation-pulse">
+        <div>
+          <strong>自动运行</strong>
+          <p>正在读取 Mission 自动运行状态。</p>
+        </div>
+      </div>
+    `;
+  }
+
+  const next = summary.nextAction;
+  const current = summary.currentScheduledTasks || [];
+  const paused = summary.automationPaused;
+  const actionDisabled = state.scheduleActionPending ? "disabled" : "";
+  return `
+    <div class="automation-pulse ${paused ? "paused" : ""}">
+      <div class="pulse-main">
+        <span class="pulse-label">${paused ? "自动运行已暂停" : "下一次自动动作"}</span>
+        <strong>${next ? esc(next.ruleName) : "还没有自动运行节奏"}</strong>
+        <p>${next ? `${esc(formatTime(next.nextRunAt))} · ${esc(next.assigneeRole)} · ${esc(next.taskTitle)}` : "去定时任务页添加每日检查或每周复盘。"}</p>
+      </div>
+      <div class="pulse-side">
+        <span>当前运行</span>
+        <strong>${current.length ? `${current.length} 个任务` : "无排队任务"}</strong>
+        <p>${summary.lastTrigger ? esc(summary.lastTrigger.message) : "暂无触发记录"}</p>
+      </div>
+      <div class="pulse-actions">
+        <button type="button" data-trigger-next ${actionDisabled}>${state.scheduleActionPending ? "处理中..." : "立即触发下一步"}</button>
+        <button type="button" data-toggle-automation="${paused ? "resume" : "pause"}" ${actionDisabled}>${paused ? "恢复自动运行" : "暂停自动运行"}</button>
+      </div>
+      ${state.scheduleError ? `<div class="inline-error">${esc(state.scheduleError)}</div>` : ""}
     </div>
   `;
 }
@@ -135,6 +319,13 @@ function renderWarTab(data) {
   if (state.warTab === "conversations") {
     return renderConversationFeed(data);
   }
+  if (state.warTab === "schedule") {
+    return renderScheduleTab(
+      data,
+      state.scheduleRulesByMissionId[data.mission.id] || [],
+      state.automationSummaryByMissionId[data.mission.id],
+    );
+  }
   const map = {
     agents: {
       title: "Agents 看板",
@@ -168,6 +359,126 @@ function renderWarTab(data) {
         ${content.items.length ? content.items.map((item) => `<div>${esc(item)}</div>`).join("") : `<div>暂无数据</div>`}
       </div>
     </div>
+  `;
+}
+
+function renderScheduleTab(data, rules, summary) {
+  const disabled = state.scheduleActionPending ? "disabled" : "";
+  return `
+    <div class="tab-panel schedule-panel">
+      <div class="schedule-head">
+        <div>
+          <h1>定时任务</h1>
+          <p>把 Mission 的日常检查、周复盘和条件响应固化成自动执行规则。</p>
+        </div>
+        <button type="button" data-toggle-schedule-form ${disabled}>${state.scheduleFormOpen ? "收起" : "新增规则"}</button>
+      </div>
+      ${state.scheduleError ? `<div class="inline-error">${esc(state.scheduleError)}</div>` : ""}
+      ${renderTriggerHistory(summary)}
+      ${state.scheduleFormOpen ? renderScheduleTemplateForm(data) : ""}
+      <div class="schedule-rules">
+        ${rules.length ? rules.map((rule) => renderScheduleRuleCard(data, rule)).join("") : `<div class="empty-state">暂无定时规则。新增每日检查、每周复盘或条件响应后，这里会显示运行节奏。</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderScheduleRuleCard(data, rule) {
+  const trigger = rule.trigger.type === "cron"
+    ? `Cron：${rule.trigger.expression} · ${rule.trigger.timezone}${rule.nextRunAt ? ` · 下次 ${formatTime(rule.nextRunAt)}` : ""}`
+    : `条件：${rule.trigger.description} · 来源 ${rule.trigger.sourceAgentRole}`;
+  const agent = data.agents.find((candidate) => candidate.role === rule.taskTemplate.assigneeRole);
+  return `
+    <article class="schedule-rule-card ${rule.enabled ? "" : "paused"}">
+      <header>
+        <div>
+          <strong>${esc(rule.name)}</strong>
+          <span>${esc(trigger)}</span>
+        </div>
+        <span class="schedule-rule-state">${rule.enabled ? "启用" : "暂停"}</span>
+      </header>
+      <dl>
+        <div>
+          <dt>负责人</dt>
+          <dd>${esc(agent ? `${agent.name} / ${rule.taskTemplate.assigneeRole}` : rule.taskTemplate.assigneeRole)}</dd>
+        </div>
+        <div>
+          <dt>任务</dt>
+          <dd>${esc(rule.taskTemplate.title)}</dd>
+        </div>
+      </dl>
+    </article>
+  `;
+}
+
+function renderTriggerHistory(summary) {
+  const current = summary?.currentScheduledTasks || [];
+  return `
+    <section class="schedule-history">
+      <div>
+        <span>最近触发</span>
+        <strong>${summary?.lastTrigger ? esc(summary.lastTrigger.ruleName) : "暂无触发记录"}</strong>
+        <p>${summary?.lastTrigger ? `${esc(formatTime(summary.lastTrigger.createdAt))} · ${esc(summary.lastTrigger.status)} · ${esc(summary.lastTrigger.message)}` : "手动或自动触发后会记录在这里。"}</p>
+      </div>
+      <div>
+        <span>当前排队</span>
+        <strong>${current.length ? `${current.length} 个任务` : "无排队任务"}</strong>
+        <p>${current.length ? current.map((task) => esc(`${statusLabel(task.status)}：${task.title}`)).join("<br>") : "没有未完成的定时任务。"}</p>
+      </div>
+    </section>
+  `;
+}
+
+function renderScheduleTemplateForm(data) {
+  const roleOptions = data.agents
+    .map((agent) => agent.role)
+    .filter((role, index, roles) => roles.indexOf(role) === index)
+    .map((role) => `<option value="${esc(role)}">${esc(role)}</option>`)
+    .join("");
+  return `
+    <form id="schedule-template-form" class="schedule-template-form">
+      <label>
+        <span>模板</span>
+        <select name="templateType">
+          <option value="daily_check">每日检查</option>
+          <option value="weekly_review">每周复盘</option>
+          <option value="condition_response">条件响应</option>
+        </select>
+      </label>
+      <div class="schedule-form-grid">
+        <label>
+          <span>负责人</span>
+          <select name="assigneeRole">${roleOptions}</select>
+        </label>
+        <label>
+          <span>任务目标</span>
+          <input name="taskGoal" type="text" placeholder="例如：检查昨天的增长指标并给出下一步动作">
+        </label>
+        <label>
+          <span>来源角色</span>
+          <select name="sourceAgentRole">${roleOptions}</select>
+        </label>
+        <label>
+          <span>触发条件</span>
+          <input name="condition" type="text" placeholder="例如：核心指标连续两天下降">
+        </label>
+        <label>
+          <span>响应负责人</span>
+          <select name="responseAssigneeRole">${roleOptions}</select>
+        </label>
+        <label>
+          <span>响应任务目标</span>
+          <input name="responseTaskGoal" type="text" placeholder="例如：诊断异常并提出修正方案">
+        </label>
+      </div>
+      <div class="schedule-form-actions">
+        <label class="schedule-run-now">
+          <input name="runNow" type="checkbox">
+          <span>创建后立即运行一次</span>
+        </label>
+        <button type="submit" ${state.scheduleActionPending ? "disabled" : ""}>${state.scheduleActionPending ? "创建中..." : "创建规则"}</button>
+      </div>
+    </form>
   `;
 }
 

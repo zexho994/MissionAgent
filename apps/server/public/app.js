@@ -8,6 +8,15 @@ const state = {
   popoverOpen: false,
   streamingMissionId: undefined,
   pollingInterval: undefined,
+  automationSummaryByMissionId: {},
+  feedbackSummaryByMissionId: {},
+  autopilotDiagnosisByMissionId: {},
+  scheduleRulesByMissionId: {},
+  scheduleActionPending: false,
+  scheduleFormOpen: false,
+  scheduleError: "",
+  planActionMissionId: undefined,
+  planUiByMissionId: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -15,6 +24,7 @@ const $ = (id) => document.getElementById(id);
 function emptySnapshot() {
   return {
     missions: [],
+    plans: [],
     tasks: [],
     artifacts: [],
     reviews: [],
@@ -23,9 +33,14 @@ function emptySnapshot() {
     agentMessages: [],
     threads: [],
     taskEvents: [],
+    scheduleTriggerEvents: [],
     toolCalls: [],
     decisions: [],
     agentRelations: [],
+    knowledgeEntries: [],
+    missionOutcomeEvaluations: [],
+    taskFailureAnalyses: [],
+    strategyAdjustments: [],
   };
 }
 
@@ -40,6 +55,107 @@ async function api(path, options = {}) {
   return json;
 }
 
+async function loadAutomationState(missionId) {
+  if (!missionId) return;
+  const [summaryResult, scheduleResult] = await Promise.all([
+    api(`/api/missions/${missionId}/automation-summary`),
+    api(`/api/missions/${missionId}/schedule`),
+  ]);
+  state.automationSummaryByMissionId[missionId] = summaryResult.summary;
+  state.scheduleRulesByMissionId[missionId] = scheduleResult.rules;
+}
+
+async function loadFeedbackState(missionId) {
+  if (!missionId) return;
+  const result = await api(`/api/missions/${missionId}/feedback-summary`);
+  state.feedbackSummaryByMissionId[missionId] = result.summary;
+}
+
+async function loadAutopilotDiagnosis(missionId) {
+  if (!missionId) return;
+  const result = await api(`/api/missions/${missionId}/autopilot-diagnosis`);
+  state.autopilotDiagnosisByMissionId[missionId] = result.diagnosis;
+}
+
+async function refreshMissionAutomation() {
+  const mission = currentMission();
+  if (!mission) return;
+  await loadAutomationState(mission.id);
+  await loadFeedbackState(mission.id);
+  await loadAutopilotDiagnosis(mission.id);
+}
+
+async function triggerNextSchedule(missionId) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/trigger-next`, { method: "POST", body: {} });
+    state.snapshot = result.snapshot;
+    await loadAutomationState(missionId);
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
+async function pauseAutomation(missionId) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/pause`, { method: "POST", body: {} });
+    state.snapshot = result.snapshot;
+    state.automationSummaryByMissionId[missionId] = result.summary;
+    await loadAutomationState(missionId);
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
+async function resumeAutomation(missionId) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/resume`, { method: "POST", body: {} });
+    state.snapshot = result.snapshot;
+    state.automationSummaryByMissionId[missionId] = result.summary;
+    await loadAutomationState(missionId);
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
+async function createScheduleTemplate(missionId, payload, runNow) {
+  state.scheduleActionPending = true;
+  state.scheduleError = "";
+  renderAll();
+  try {
+    const result = await api(`/api/missions/${missionId}/schedule/templates`, { method: "POST", body: payload });
+    state.snapshot = result.snapshot;
+    if (runNow) {
+      const trigger = await api(`/api/missions/${missionId}/schedule/${result.rule.id}/trigger`, { method: "POST", body: {} });
+      state.snapshot = trigger.snapshot || state.snapshot;
+    }
+    await loadAutomationState(missionId);
+    state.scheduleFormOpen = false;
+  } catch (error) {
+    state.scheduleError = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.scheduleActionPending = false;
+    renderAll();
+  }
+}
+
 async function refresh() {
   state.config = await api("/api/config");
   const health = await api("/api/health");
@@ -51,6 +167,9 @@ async function refresh() {
 
   state.snapshot = await api("/api/snapshot");
   syncSelectedMission();
+  if (state.view === "mission" && currentMission()) {
+    await refreshMissionAutomation();
+  }
   renderAll();
 }
 
@@ -70,6 +189,45 @@ function syncSelectedMission() {
 function currentMission() {
   if (state.draftMode) return undefined;
   return state.snapshot.missions.find((mission) => mission.id === state.selectedMissionId);
+}
+
+function currentMissionPlan() {
+  const mission = currentMission();
+  if (!mission) return undefined;
+  const latestDraft = [...state.snapshot.plans]
+    .filter((plan) => plan.missionId === mission.id && plan.status === "draft")
+    .sort((a, b) => b.revision - a.revision)[0];
+  if (latestDraft) return latestDraft;
+  if (!mission.confirmedPlanId) return undefined;
+  return state.snapshot.plans.find((plan) => plan.id === mission.confirmedPlanId);
+}
+
+function isPlanPending() {
+  const mission = currentMission();
+  return Boolean(mission && state.planActionMissionId === mission.id);
+}
+
+function planUiState(missionId) {
+  if (!state.planUiByMissionId[missionId]) {
+    state.planUiByMissionId[missionId] = {
+      revisionOpen: false,
+      revisionFeedback: "",
+      error: "",
+    };
+  }
+  return state.planUiByMissionId[missionId];
+}
+
+function currentPlanUiState() {
+  const mission = currentMission();
+  if (!mission) {
+    return {
+      revisionOpen: false,
+      revisionFeedback: "",
+      error: "",
+    };
+  }
+  return planUiState(mission.id);
 }
 
 function scoped() {
@@ -237,11 +395,7 @@ function renderChatContent(data) {
   }
 
   if (data.mission.briefConfirmed) {
-    parts.push(`
-      <div class="choice-row" style="margin-top: 12px;">
-        <button type="button" data-open-war-room>${data.tasks.length > 0 ? "进入作战室" : "确认并创建作战室"}</button>
-      </div>
-    `);
+    parts.push(renderMissionPlanReview(data));
   }
 
   return parts.join("");
@@ -267,6 +421,67 @@ function renderBriefMessage(data) {
         <strong>约束</strong>
         ${brief.constraints.map((item) => `<div>${esc(item)}</div>`).join("")}
       </div>
+    </div>
+  `;
+}
+
+function renderMissionPlanReview(data) {
+  const plan = currentMissionPlan();
+  const pending = isPlanPending();
+  const planUi = currentPlanUiState();
+  const error = planUi.error ? `<p class="plan-error">${esc(planUi.error)}</p>` : "";
+  if (!plan) {
+    const legacyWarRoomAction = data.tasks.length > 0 ? `
+        <div class="choice-row">
+          <button type="button" data-open-existing-war-room ${pending ? "disabled" : ""}>进入作战室</button>
+        </div>
+      ` : "";
+    return `
+      <div class="mission-plan-card">
+        <strong>Owner Agent · MissionPlan</strong>
+        ${error}
+        <button type="button" data-generate-plan ${pending ? "disabled" : ""}>${pending ? "正在生成计划..." : "生成执行计划"}</button>
+        ${legacyWarRoomAction}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="mission-plan-card">
+      <strong>Owner Agent · MissionPlan</strong>
+      <div class="plan-summary">
+        <div><span>目标</span>${esc(plan.goal)}</div>
+        <div><span>状态</span>${plan.status === "confirmed" ? "已确认" : `草稿 v${esc(String(plan.revision))}`}</div>
+      </div>
+      <div class="plan-section">
+        <strong>阶段</strong>
+        ${plan.phases.map((phase) => `<p>${esc(phase.name)}：${esc(phase.objective)}</p>`).join("")}
+      </div>
+      <div class="plan-section">
+        <strong>工作流</strong>
+        ${plan.workstreams.map((stream) => `<p>${esc(stream.requiredRole)}：${esc(stream.firstTaskGoal)}</p>`).join("")}
+      </div>
+      <div class="plan-section">
+        <strong>节奏</strong>
+        ${plan.scheduleRhythms.map((rhythm) => `<p>${esc(rhythm.name)} · ${esc(rhythm.cadence)} · ${esc(rhythm.ownerRole)}</p>`).join("")}
+      </div>
+      ${error}
+      ${plan.status === "draft" ? `
+        <div class="choice-row">
+          <button type="button" data-confirm-plan="${esc(plan.id)}" ${pending ? "disabled" : ""}>确认 MissionPlan</button>
+          <button type="button" data-toggle-plan-revision ${pending ? "disabled" : ""}>提出修改建议</button>
+        </div>
+        ${planUi.revisionOpen ? `
+          <div class="plan-revision-box">
+            <textarea id="plan-revision-feedback" rows="3" placeholder="修改建议">${esc(planUi.revisionFeedback)}</textarea>
+            <button type="button" data-submit-plan-revision="${esc(plan.id)}" ${pending ? "disabled" : ""}>重新生成计划</button>
+          </div>
+        ` : ""}
+      ` : `
+        <div class="choice-row">
+          <button type="button" data-open-war-room ${pending ? "disabled" : ""}>${data.tasks.length > 0 ? "进入作战室" : "创建作战室"}</button>
+        </div>
+      `}
     </div>
   `;
 }
@@ -364,27 +579,146 @@ function bindChoiceButtons() {
       }
     });
   });
+  document.querySelectorAll("[data-generate-plan]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      state.planActionMissionId = mission.id;
+      planUiState(mission.id).error = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: {} });
+        state.snapshot = result.snapshot;
+        const planUi = planUiState(mission.id);
+        planUi.revisionOpen = false;
+        planUi.revisionFeedback = "";
+      } catch (error) {
+        planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
+      } finally {
+        state.planActionMissionId = undefined;
+        renderAll();
+      }
+    });
+  });
+  document.querySelectorAll("[data-confirm-plan]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const planId = button.getAttribute("data-confirm-plan");
+      if (!planId) throw new Error("Missing MissionPlan id");
+      state.planActionMissionId = mission.id;
+      planUiState(mission.id).error = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/plan/confirm`, { method: "POST", body: { planId } });
+        state.snapshot = result.snapshot;
+        await loadAutopilotDiagnosis(mission.id);
+      } catch (error) {
+        planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
+      } finally {
+        state.planActionMissionId = undefined;
+        renderAll();
+      }
+    });
+  });
+  document.querySelectorAll("[data-toggle-plan-revision]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const planUi = planUiState(mission.id);
+      planUi.revisionOpen = !planUi.revisionOpen;
+      renderAll();
+    });
+  });
+  const revisionTextarea = $("plan-revision-feedback");
+  if (revisionTextarea) {
+    revisionTextarea.addEventListener("input", (event) => {
+      const mission = currentMission();
+      if (!mission) return;
+      planUiState(mission.id).revisionFeedback = event.target.value;
+    });
+  }
+  document.querySelectorAll("[data-submit-plan-revision]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const planUi = planUiState(mission.id);
+      const feedback = planUi.revisionFeedback.trim();
+      if (!feedback) {
+        planUi.error = "请输入修改建议。";
+        renderAll();
+        return;
+      }
+      state.planActionMissionId = mission.id;
+      planUi.error = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: { feedback } });
+        state.snapshot = result.snapshot;
+        planUi.revisionOpen = false;
+        planUi.revisionFeedback = "";
+      } catch (error) {
+        planUi.error = error instanceof Error ? error.message : String(error);
+      } finally {
+        state.planActionMissionId = undefined;
+        renderAll();
+      }
+    });
+  });
   document.querySelectorAll("[data-open-war-room]").forEach((button) => {
     button.addEventListener("click", async () => {
       const mission = currentMission();
       if (!mission) return;
       if (scoped().tasks.length === 0) {
-        const activation = api("/api/missions/activate-async", {
-          method: "POST",
-          body: { missionId: mission.id },
-        });
-        state.view = "mission";
-        state.draftMode = false;
-        state.warTab = "overview";
+        state.planActionMissionId = mission.id;
+        planUiState(mission.id).error = "";
         renderAll();
-        startPolling();
-        const result = await activation;
-        state.snapshot = result.snapshot;
+        try {
+          const result = await api("/api/missions/activate-async", {
+            method: "POST",
+            body: { missionId: mission.id },
+          });
+          state.snapshot = result.snapshot;
+          state.view = "mission";
+          state.draftMode = false;
+          state.warTab = "overview";
+          await loadAutomationState(mission.id);
+          await loadFeedbackState(mission.id);
+          await loadAutopilotDiagnosis(mission.id);
+          renderAll();
+          startPolling();
+        } catch (error) {
+          planUiState(mission.id).error = `作战室创建失败：${error instanceof Error ? error.message : String(error)}`;
+          renderAll();
+        } finally {
+          state.planActionMissionId = undefined;
+          renderAll();
+        }
+        return;
+      }
+      state.view = "mission";
+      state.draftMode = false;
+      await loadAutomationState(mission.id);
+      await loadFeedbackState(mission.id);
+      await loadAutopilotDiagnosis(mission.id);
+      renderAll();
+    });
+  });
+  document.querySelectorAll("[data-open-existing-war-room]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      if (scoped().tasks.length === 0) {
+        planUiState(mission.id).error = "请先生成并确认 MissionPlan。";
         renderAll();
         return;
       }
       state.view = "mission";
       state.draftMode = false;
+      state.warTab = "overview";
+      await loadAutomationState(mission.id);
+      await loadFeedbackState(mission.id);
+      await loadAutopilotDiagnosis(mission.id);
       renderAll();
     });
   });
@@ -665,10 +999,21 @@ function startPolling() {
 
       const hasChanges = JSON.stringify(currentData.messages) !== JSON.stringify(newSnapshot.agentMessages.filter(m => m.missionId === state.selectedMissionId)) ||
                         JSON.stringify(currentData.agents.map(a => a.status)) !== JSON.stringify(newSnapshot.agents.filter(a => a.missionId === state.selectedMissionId).map(a => a.status));
+      const feedbackChanged = state.selectedMissionId && (
+        JSON.stringify((state.snapshot.missionOutcomeEvaluations || []).filter(record => record.missionId === state.selectedMissionId)) !==
+          JSON.stringify((newSnapshot.missionOutcomeEvaluations || []).filter(record => record.missionId === state.selectedMissionId)) ||
+        JSON.stringify((state.snapshot.taskFailureAnalyses || []).filter(record => record.missionId === state.selectedMissionId)) !==
+          JSON.stringify((newSnapshot.taskFailureAnalyses || []).filter(record => record.missionId === state.selectedMissionId)) ||
+        JSON.stringify((state.snapshot.strategyAdjustments || []).filter(record => record.missionId === state.selectedMissionId)) !==
+          JSON.stringify((newSnapshot.strategyAdjustments || []).filter(record => record.missionId === state.selectedMissionId))
+      );
 
-      if (hasChanges) {
+      if (hasChanges || feedbackChanged) {
         state.snapshot = newSnapshot;
         syncSelectedMission();
+        if (state.selectedMissionId) {
+          await loadFeedbackState(state.selectedMissionId);
+        }
         renderAll();
       }
     } catch (error) {

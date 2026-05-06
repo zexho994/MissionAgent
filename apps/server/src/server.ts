@@ -15,6 +15,7 @@ const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data",
 const llm = createLlmServiceFromEnv(process.env);
 
 const missions = new InMemoryMissionService({ storageFile: dataFile, llm });
+missions.restoreSchedulers();
 const openclawOptions: OpenClawCliAdapterOptions = {
   command: "openclaw",
 };
@@ -29,6 +30,12 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname.startsWith("/api/")) {
       await handleApi(req, res, `${url.pathname}${url.search}`);
+      return;
+    }
+
+    if (url.pathname === "/favicon.ico") {
+      res.writeHead(204, { "cache-control": "no-store" });
+      res.end();
       return;
     }
 
