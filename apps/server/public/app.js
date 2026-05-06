@@ -218,6 +218,11 @@ function planUiState(missionId) {
   return state.planUiByMissionId[missionId];
 }
 
+function missionHasWarRoomState(missionId) {
+  return state.snapshot.tasks.some((task) => task.missionId === missionId)
+    || state.snapshot.agents.some((agent) => agent.missionId === missionId && agent.role !== "owner");
+}
+
 function currentPlanUiState() {
   const mission = currentMission();
   if (!mission) {
@@ -301,8 +306,7 @@ function renderMissionPopover() {
     button.addEventListener("click", () => {
       state.selectedMissionId = button.dataset.selectMission;
       state.draftMode = false;
-      const hasTasks = state.snapshot.tasks.some((task) => task.missionId === state.selectedMissionId);
-      state.view = hasTasks ? "mission" : "home";
+      state.view = missionHasWarRoomState(state.selectedMissionId) ? "mission" : "home";
       state.popoverOpen = false;
       renderAll();
     });
@@ -461,9 +465,10 @@ function renderMissionPlanReview(data) {
   const plan = currentMissionPlan();
   const pending = isPlanPending();
   const planUi = currentPlanUiState();
+  const hasWarRoom = missionHasWarRoomState(data.mission.id);
   const error = planUi.error ? `<p class="plan-error">${esc(planUi.error)}</p>` : "";
   if (!plan) {
-    const legacyWarRoomAction = data.tasks.length > 0 ? `
+    const legacyWarRoomAction = hasWarRoom ? `
         <div class="choice-row">
           <button type="button" data-open-existing-war-room ${pending ? "disabled" : ""}>进入作战室</button>
         </div>
@@ -511,7 +516,7 @@ function renderMissionPlanReview(data) {
         ` : ""}
       ` : `
         <div class="choice-row">
-          <button type="button" data-open-war-room ${pending ? "disabled" : ""}>${data.tasks.length > 0 ? "进入作战室" : "创建作战室"}</button>
+          <button type="button" data-open-war-room ${pending ? "disabled" : ""}>${hasWarRoom ? "进入作战室" : "创建作战室"}</button>
         </div>
       `}
     </div>
@@ -703,7 +708,7 @@ function bindChoiceButtons() {
     button.addEventListener("click", async () => {
       const mission = currentMission();
       if (!mission) return;
-      if (scoped().tasks.length === 0) {
+      if (!missionHasWarRoomState(mission.id)) {
         state.planActionMissionId = mission.id;
         planUiState(mission.id).error = "";
         renderAll();
@@ -742,7 +747,7 @@ function bindChoiceButtons() {
     button.addEventListener("click", async () => {
       const mission = currentMission();
       if (!mission) return;
-      if (scoped().tasks.length === 0) {
+      if (!missionHasWarRoomState(mission.id)) {
         planUiState(mission.id).error = "请先生成并确认 MissionPlan。";
         renderAll();
         return;

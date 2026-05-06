@@ -52,20 +52,8 @@ export class NegotiationManager {
       throw new Error("Mission must have a brief before negotiation");
     }
 
-    const hrAgentId = createId("agent");
-    const hrAgentRecord: WarRoomAgent = {
-      id: hrAgentId,
-      missionId: mission.id,
-      role: "hr",
-      name: "HR Agent",
-      responsibility: "Team assembly and agent coordination",
-      status: "running",
-      currentTaskId: undefined,
-      lastAction: "Analyzing MissionBrief and proposing team",
-      avatarSeed: "hr",
-      sortOrder: 99,
-    };
-    this.agents.set(hrAgentId, hrAgentRecord);
+    const hrAgentRecord = this.getOrCreateHrAgent(mission.id);
+    const hrAgentId = hrAgentRecord.id;
 
     const hrAgent = createHRAgent({ llm: this.llm });
     const analysis = await hrAgent.receiveMissionBrief(mission.brief);
@@ -96,6 +84,26 @@ export class NegotiationManager {
     });
 
     return proposal;
+  }
+
+  private getOrCreateHrAgent(missionId: string): WarRoomAgent {
+    const existing = [...this.agents.values()].find((agent) => agent.missionId === missionId && agent.role === "hr");
+    const hrAgentRecord: WarRoomAgent = {
+      ...(existing ?? {
+        id: createId("agent"),
+        missionId,
+        role: "hr",
+        name: "HR Agent",
+        responsibility: "Team assembly and agent coordination",
+        currentTaskId: undefined,
+        avatarSeed: "hr",
+        sortOrder: 99,
+      }),
+      status: "running",
+      lastAction: "Analyzing MissionBrief and proposing team",
+    };
+    this.agents.set(hrAgentRecord.id, hrAgentRecord);
+    return hrAgentRecord;
   }
 
   async respondToNegotiation(input: { missionId: string; feedback: string }, mission: Mission): Promise<{ proposal: TeamProposal; summary?: NegotiationSummary }> {
