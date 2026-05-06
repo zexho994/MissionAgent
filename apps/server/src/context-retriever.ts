@@ -1,6 +1,6 @@
 import type { Artifact, Mission, Task } from "@digitalagent/core";
 import type { AgentMessage, WarRoomAgent } from "./mission-service.js";
-import type { ContextSnippet } from "./agent-conversation-types.js";
+import type { BusEvent, ContextSnippet } from "./agent-conversation-types.js";
 import type { KnowledgeEntry } from "./knowledge-base.js";
 
 export interface ContextRetrieverSnapshot {
@@ -20,6 +20,7 @@ export class ContextRetriever {
     agentId: string;
     currentTopic: string;
     threadId?: string;
+    activeEvents?: BusEvent[];
   }): ContextSnippet[] {
     const snapshot = this.getSnapshot();
     const mission = snapshot.missions.find((candidate) => candidate.id === input.missionId);
@@ -92,6 +93,26 @@ export class ContextRetriever {
         createdAt: entry.createdAt,
       }));
     snippets.push(...knowledgeSnippets);
+
+    // Inject feedback event context if present
+    if (input.activeEvents) {
+      for (const event of input.activeEvents) {
+        if (event.type === "feedback_evaluated") {
+          const feedbackSnippet: ContextSnippet = {
+            source: "feedback",
+            sourceId: event.evaluation.id,
+            summary: `[${event.evaluation.outcome.toUpperCase()}] ${event.evaluation.summary}${
+              event.failureAnalysis
+                ? ` | Failure: ${event.failureAnalysis.failureType} — ${event.failureAnalysis.rootCause}`
+                : ""
+            }`,
+            relevance: 1.0,
+            createdAt: event.timestamp,
+          };
+          snippets.unshift(feedbackSnippet);
+        }
+      }
+    }
 
     return snippets
       .sort((a, b) => b.relevance - a.relevance || b.createdAt.localeCompare(a.createdAt))

@@ -177,6 +177,7 @@ export class AgentConversationBus {
       agentId: input.target.id,
       currentTopic: input.thread.topic,
       threadId: input.thread.id,
+      activeEvents: [input.event],
     });
     const threadMessages = snapshot.agentMessages
       .filter((message) => message.threadId === input.thread.id)
