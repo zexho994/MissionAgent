@@ -10,6 +10,10 @@ describe("feedback event dispatch", () => {
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
 
+    // Capture message count before submission
+    const snapshotBefore = service.snapshot();
+    const messageCountBefore = snapshotBefore.agentMessages.length;
+
     // Submit a revise result (builds blocked evaluation)
     service.submitExecutionResult({
       missionId: mission.id,
@@ -20,18 +24,14 @@ describe("feedback event dispatch", () => {
     });
 
     // Verify evaluation is blocked or regressed
-    const snapshot = service.snapshot();
-    const eval_ = snapshot.missionOutcomeEvaluations.find(
+    const snapshotAfter = service.snapshot();
+    const eval_ = snapshotAfter.missionOutcomeEvaluations.find(
       (e) => e.taskId === task!.id,
     );
     expect(eval_?.outcome).toMatch(/^(blocked|regressed)$/);
 
-    // Verify message was dispatched to Owner (check agentMessages)
-    const ownerAgent = snapshot.agents.find((a) => a.role === "owner");
-    const ownerMessages = snapshot.agentMessages.filter(
-      (m) => m.fromAgentId === ownerAgent?.id || m.toAgentId === ownerAgent?.id,
-    );
-    // The dispatch sends a feedback_evaluated event which generates a message
-    expect(snapshot.agentMessages.length).toBeGreaterThan(0);
+    // Verify message count increased as a result of the dispatch
+    // Note: dispatchFeedbackEvent is a no-op when no LLM is configured
+    expect(snapshotAfter.agentMessages.length).toBeGreaterThan(messageCountBefore);
   });
 });
