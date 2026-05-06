@@ -17,6 +17,7 @@ import {
   type RecommendedRecovery,
   type Review,
   type ScheduleRule,
+  type Source,
   type StrategyAdjustment,
   type StrategyAdjustmentStatus,
   type Task,
@@ -67,6 +68,7 @@ export interface SubmitExecutionResultRequest {
   taskId: string;
   content: Record<string, unknown>;
   evidence: string[];
+  sources: Source[];
 }
 
 export interface StartExecutionRequest {
@@ -1012,6 +1014,7 @@ export class InMemoryMissionService {
       type: "execution_log",
       content: input.content,
       evidence: input.evidence,
+      sources: input.sources,
       qualityScore: qualityResult.score,
     });
     const submittedTask = transitionTask(runningTask, {
@@ -1699,6 +1702,34 @@ export class InMemoryMissionService {
   getStrategyAdjustments(missionId: string): StrategyAdjustment[] {
     this.requireMission(missionId);
     return [...this.strategyAdjustments.values()].filter((record) => record.missionId === missionId);
+  }
+
+  updateStrategyAdjustmentStatus(
+    missionId: string,
+    adjustmentId: string,
+    newStatus: StrategyAdjustmentStatus,
+  ): StrategyAdjustment {
+    this.requireMission(missionId);
+    const adjustment = this.strategyAdjustments.get(adjustmentId);
+    if (!adjustment) {
+      throw new Error(`Strategy adjustment not found: ${adjustmentId}`);
+    }
+    if (adjustment.missionId !== missionId) {
+      throw new Error(`Strategy adjustment does not belong to mission: ${missionId}`);
+    }
+    const validTransitions: Record<StrategyAdjustmentStatus, StrategyAdjustmentStatus[]> = {
+      proposed: ["accepted", "rejected"],
+      accepted: ["superseded"],
+      rejected: [],
+      superseded: [],
+    };
+    if (!validTransitions[adjustment.status].includes(newStatus)) {
+      throw new Error(`Cannot transition from ${adjustment.status} to ${newStatus}`);
+    }
+    const updated: StrategyAdjustment = { ...adjustment, status: newStatus };
+    this.strategyAdjustments.set(adjustmentId, updated);
+    this.persist();
+    return updated;
   }
 
   getFeedbackSummary(missionId: string): FeedbackSummary {
@@ -2602,6 +2633,31 @@ export class InMemoryMissionService {
       notifyStream: (id, event) => this.notifyStreamListeners(id, event as any),
       persist: () => this.persist(),
     });
+
+    // If isCreation=true and Owner didn't produce a MissionBrief (e.g., output task content directly),
+    // re-prompt using buildSummaryRequest to ensure the mission gets a brief
+    if (input.isCreation) {
+      const mission = this.missions.get(input.missionId);
+      if (mission && !mission.brief) {
+        const history = this.agentMessagesForMission(input.missionId);
+        const summaryMessages = buildSummaryRequest(input.systemPrompt, history);
+        await runOwnerLlmStreaming(this.llm!, {
+          missionId: input.missionId,
+          ownerId: input.owner.id,
+          systemPrompt: input.systemPrompt,
+          userMessage: undefined,
+          llmMessages: summaryMessages,
+          isCreation: false,
+        }, {
+          getMission: (id) => this.missions.get(id),
+          setMission: (m) => this.missions.set(m.id, m),
+          appendMessage: (msg) => this.appendMessage(msg as any),
+          updateAgent: (id, patch) => this.updateAgent(id, patch as any),
+          notifyStream: (id, event) => this.notifyStreamListeners(id, event as any),
+          persist: () => this.persist(),
+        });
+      }
+    }
   }
 
   private loadFromFile(): void {
