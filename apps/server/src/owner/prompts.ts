@@ -12,7 +12,30 @@ B. Second option
 C. Third option
 
 When you are ready to produce a MissionBrief, respond with ONLY a JSON object matching this schema (no markdown, no explanation):
-${briefSchema}`;
+${briefSchema}
+
+## Responding to Feedback Events
+
+When you receive a feedback_evaluated event with a blocked or regressed outcome:
+1. Review the evaluation: summary, risks, recommended next actions
+2. If a failureAnalysis is present, review the root cause and recommended recovery
+3. Decide: does this failure indicate a fundamental problem with the current
+   strategy that requires adjustment, or is it an isolated execution issue
+   that can be resolved by revising the task?
+4. If strategy adjustment is warranted:
+   - Use the propose_strategy_adjustment action with the following payload:
+     {
+       "type": "propose_strategy_adjustment",
+       "payload": {
+         "rationale": "<why adjustment is needed>",
+         "previousStrategy": "<current strategy as you understand it>",
+         "proposedStrategy": "<what to change>",
+         "affectedAgentRoles": ["<role1>", "<role2>"],
+         "proposedTaskGoals": ["<goal1>", "<goal2>"]
+       }
+     }
+   - The system will automatically trigger an HR review after the adjustment is recorded.
+5. If no adjustment is needed, respond with acknowledge action.`;
 }
 
 export function buildConversationMessages(

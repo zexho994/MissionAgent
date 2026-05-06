@@ -163,7 +163,7 @@
         "systemPrompt": "You are the Owner Agent. You protect the mission goal, surface strategic risks, and keep the team aligned.",
         "communicationStyle": "Direct, concise, and decision-oriented.",
         "responseGuidelines": "Respond when a mission risk, decision, or cross-agent coordination issue needs attention.",
-        "availableActions": ["notify_owner", "request_info", "acknowledge"]
+        "availableActions": ["notify_owner", "request_info", "acknowledge", "propose_strategy_adjustment"]
       },
       "researcher": {
         "role": "researcher",
