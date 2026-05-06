@@ -448,10 +448,9 @@ function renderAgentNode(data, agent, index) {
       </div>
       <div class="agent-card">
         <header class="agent-card-header">
-          <strong class="agent-name">${esc(shortAgentName(agent.name) || "Agent")}</strong>
+          <strong class="agent-name">${esc(agent.role || shortAgentName(agent.name) || "Agent")}</strong>
           <span class="agent-status status-${esc(agent.status || "idle")}">${esc(agentStatusLabel(agent.status || "idle"))}</span>
         </header>
-        <div class="agent-role">${esc(agent.role)}</div>
         <div class="agent-task">
           <span class="field-label">任务</span>
           <span class="field-value">${esc(taskTitle(data, agent.currentTaskId) || agent.responsibility || "—")}</span>
