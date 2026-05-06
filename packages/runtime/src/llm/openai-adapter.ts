@@ -8,6 +8,7 @@ export interface OpenAiAdapterOptions {
   maxRetries?: number;
   timeoutMs?: number;
   fetch?: typeof fetch;
+  defaultExtraBody?: Record<string, unknown>;
 }
 
 interface OpenAiChatResponse {
@@ -50,6 +51,7 @@ export class OpenAiLlmAdapter implements LlmService {
   private readonly maxRetries: number;
   private readonly timeoutMs: number;
   private readonly fetchFn: typeof fetch;
+  private readonly defaultExtraBody: Record<string, unknown>;
   private callCount = 0;
   private totalPromptTokens = 0;
   private totalCompletionTokens = 0;
@@ -62,6 +64,7 @@ export class OpenAiLlmAdapter implements LlmService {
     this.maxRetries = options.maxRetries ?? 2;
     this.timeoutMs = options.timeoutMs ?? 30000;
     this.fetchFn = options.fetch || fetch;
+    this.defaultExtraBody = options.defaultExtraBody ?? {};
   }
 
   async call(messages: LlmMessage[], options?: LlmCallOptions): Promise<LlmResponse> {
@@ -78,6 +81,8 @@ export class OpenAiLlmAdapter implements LlmService {
       ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options?.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
       ...(shouldStream ? { stream: true } : {}),
+      ...this.defaultExtraBody,
+      ...(options?.extraBody ?? {}),
     };
 
     let lastError: Error | undefined;

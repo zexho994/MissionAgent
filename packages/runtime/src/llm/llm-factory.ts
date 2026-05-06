@@ -2,7 +2,7 @@ import { AnthropicLlmAdapter } from "./anthropic-adapter.js";
 import type { LlmService } from "./llm-service.js";
 import { OpenAiLlmAdapter } from "./openai-adapter.js";
 
-export type LlmProvider = "openai" | "glm" | "claude" | "anthropic";
+export type LlmProvider = "openai" | "glm" | "claude" | "anthropic" | "minimax";
 
 export interface CreateLlmServiceOptions {
   provider: LlmProvider;
@@ -20,7 +20,10 @@ export interface CreateLlmServiceFromEnvOptions {
   fetch?: typeof fetch;
 }
 
-const providerDefaults: Record<Exclude<LlmProvider, "claude">, { baseUrl: string; model: string }> = {
+const providerDefaults: Record<
+  Exclude<LlmProvider, "claude">,
+  { baseUrl: string; model: string; extraBody?: Record<string, unknown> }
+> = {
   openai: {
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
@@ -32,6 +35,11 @@ const providerDefaults: Record<Exclude<LlmProvider, "claude">, { baseUrl: string
   anthropic: {
     baseUrl: "https://api.anthropic.com/v1",
     model: "claude-3-5-haiku-latest",
+  },
+  minimax: {
+    baseUrl: "https://api.minimax.io/v1",
+    model: "MiniMax-M2.7-highspeed",
+    extraBody: { reasoning_split: true },
   },
 };
 
@@ -45,6 +53,8 @@ export function createLlmService(options: CreateLlmServiceOptions): LlmService {
       return createOpenAiCompatibleService(options, providerDefaults.openai);
     case "glm":
       return createOpenAiCompatibleService(options, providerDefaults.glm);
+    case "minimax":
+      return createOpenAiCompatibleService(options, providerDefaults.minimax);
     case "claude":
     case "anthropic":
       return new AnthropicLlmAdapter({
@@ -85,12 +95,13 @@ export function createLlmServiceFromEnv(
 
 function createOpenAiCompatibleService(
   options: CreateLlmServiceOptions,
-  defaults: { baseUrl: string; model: string },
+  defaults: { baseUrl: string; model: string; extraBody?: Record<string, unknown> },
 ): LlmService {
   return new OpenAiLlmAdapter({
     apiKey: options.apiKey,
     baseUrl: options.baseUrl ?? defaults.baseUrl,
     defaultModel: options.model ?? defaults.model,
+    defaultExtraBody: defaults.extraBody ?? {},
     ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
@@ -104,6 +115,7 @@ function normalizeProvider(provider: string): LlmProvider {
     case "glm":
     case "claude":
     case "anthropic":
+    case "minimax":
       return normalized;
     default:
       throw new Error(`Unsupported LLM provider: ${provider}`);

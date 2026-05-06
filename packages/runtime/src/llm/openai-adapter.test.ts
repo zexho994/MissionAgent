@@ -60,6 +60,33 @@ describe("OpenAiLlmAdapter", () => {
     expect(response.usage.totalTokens).toBe(30);
   });
 
+  it("merges default and per-call extra body fields", async () => {
+    let capturedInit: RequestInit | undefined;
+    const adapter = new OpenAiLlmAdapter({
+      apiKey: "test-key",
+      baseUrl: "https://api.test.com/v1",
+      defaultExtraBody: { reasoning_split: true },
+      fetch: async (_input, init) => {
+        capturedInit = init;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => successResponse("ok").body,
+          text: async () => "",
+        } as Response;
+      },
+    });
+
+    await adapter.call([{ role: "user", content: "Say hello" }], {
+      extraBody: { response_format: { type: "json_object" } },
+    });
+
+    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
+      reasoning_split: true,
+      response_format: { type: "json_object" },
+    });
+  });
+
   it("tracks call stats", async () => {
     const adapter = new OpenAiLlmAdapter({
       apiKey: "test-key",

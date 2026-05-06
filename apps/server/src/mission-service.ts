@@ -10,15 +10,30 @@ import {
   type Artifact,
   type Mission,
   type MissionBrief,
+  type MissionOutcome,
+  type MissionOutcomeEvaluation,
+  type MissionOutcomeEvaluationSource,
+  type MissionPlan,
+  type RecommendedRecovery,
   type Review,
   type ScheduleRule,
+  type StrategyAdjustment,
+  type StrategyAdjustmentStatus,
   type Task,
+  type TaskFailureAnalysis,
+  type TaskFailureType,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadAgentSystemConfig, type AgentSystemConfig } from "./system-config.js";
-import { buildOwnerSystemPrompt, buildConversationMessages, buildSummaryRequest } from "./owner/index.js";
+import {
+  buildMissionPlanMessages,
+  buildOwnerSystemPrompt,
+  buildConversationMessages,
+  buildSummaryRequest,
+  parseMissionPlanDraft,
+} from "./owner/index.js";
 import type { TeamProposal } from "./hr-agent.js";
 import { NegotiationManager, type NegotiationSummary } from "./negotiation-manager.js";
 import { planMissionTeam, matcherFor, type MissionTeamPlan } from "./team-planning.js";
@@ -33,6 +48,12 @@ import type { BusEvent, ConversationThread } from "./agent-conversation-types.js
 import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
 import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
+import {
+  buildExecutionFailureFeedback,
+  buildExecutionResultFeedback,
+  type ExecutionFailureFeedback,
+  type ExecutionResultFeedback,
+} from "./feedback-generation.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -198,6 +219,75 @@ export interface AutomationSummary {
   };
 }
 
+export interface FeedbackSummary {
+  missionId: string;
+  latestEvaluation?: MissionOutcomeEvaluation;
+  latestFailureAnalysis?: TaskFailureAnalysis;
+  latestStrategyAdjustment?: StrategyAdjustment;
+  counts: {
+    evaluations: number;
+    failureAnalyses: number;
+    strategyAdjustments: number;
+  };
+}
+
+export type AutopilotStage =
+  | "briefing"
+  | "missing_plan"
+  | "team_not_ready"
+  | "missing_initial_tasks"
+  | "missing_execution_runner"
+  | "missing_schedule"
+  | "ready"
+  | "running"
+  | "blocked";
+
+export type AutopilotBlockerCode =
+  | "brief_not_confirmed"
+  | "mission_plan_missing"
+  | "team_not_ready"
+  | "initial_tasks_missing"
+  | "execution_runner_missing"
+  | "schedule_rules_missing"
+  | "execution_blocked";
+
+export interface AutopilotBlocker {
+  code: AutopilotBlockerCode;
+  message: string;
+  nextAction: string;
+}
+
+export interface AutopilotDiagnosisSignals {
+  briefConfirmed: boolean;
+  hasPlan: boolean;
+  teamReady: boolean;
+  hasInitialTasks: boolean;
+  hasExecutionRunner: boolean;
+  hasScheduleRules: boolean;
+  hasRunningExecution: boolean;
+}
+
+export interface AutopilotDiagnosis {
+  missionId: string;
+  stage: AutopilotStage;
+  ready: boolean;
+  blockers: AutopilotBlocker[];
+  signals: AutopilotDiagnosisSignals;
+}
+
+export interface AutopilotRuntimeSignals {
+  hasExecutionRunner: boolean;
+}
+
+function assertAutopilotRuntimeSignals(runtime: AutopilotRuntimeSignals): void {
+  if (!runtime || typeof runtime !== "object") {
+    throw new Error("Autopilot runtime signals must be provided");
+  }
+  if (typeof runtime.hasExecutionRunner !== "boolean") {
+    throw new Error("Autopilot runtime signal hasExecutionRunner must be boolean");
+  }
+}
+
 export type ScheduleTemplateRequest =
   | {
       templateType: "daily_check" | "weekly_review";
@@ -239,6 +329,7 @@ export interface DecisionRecord {
 
 export interface MissionSnapshot {
   missions: Mission[];
+  plans: MissionPlan[];
   tasks: Task[];
   artifacts: Artifact[];
   reviews: Review[];
@@ -252,6 +343,9 @@ export interface MissionSnapshot {
   toolCalls: ToolCallRecord[];
   decisions: DecisionRecord[];
   knowledgeEntries: KnowledgeEntry[];
+  missionOutcomeEvaluations: MissionOutcomeEvaluation[];
+  taskFailureAnalyses: TaskFailureAnalysis[];
+  strategyAdjustments: StrategyAdjustment[];
 }
 
 interface StoredMissionSnapshot extends MissionSnapshot {
@@ -282,6 +376,128 @@ function applyAutomationTogglePause(rule: ScheduleRule): ScheduleRule {
   };
 }
 
+function expectStoredString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} is required`);
+  }
+  return value;
+}
+
+function expectStoredNumber(value: unknown, label: string): number {
+  if (typeof value !== "number") {
+    throw new Error(`${label} must be a number`);
+  }
+  return value;
+}
+
+function expectStoredStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new Error(`${label} must be a string array`);
+  }
+  return [...value];
+}
+
+function expectStoredOneOf<T extends string>(value: unknown, label: string, allowed: readonly T[]): T {
+  const stored = expectStoredString(value, label);
+  if (!(allowed as readonly string[]).includes(stored)) {
+    throw new Error(`${label} must be one of: ${allowed.join(", ")}`);
+  }
+  return stored as T;
+}
+
+function expectStoredScore(value: unknown, label: string): number {
+  const score = expectStoredNumber(value, label);
+  if (score < 0 || score > 1) {
+    throw new Error(`${label} must be between 0 and 1`);
+  }
+  return score;
+}
+
+function expectStoredBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+function expectStoredObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseStoredMissionOutcomeEvaluation(value: unknown): MissionOutcomeEvaluation {
+  const record = expectStoredObject(value, "missionOutcomeEvaluation");
+  return {
+    id: expectStoredString(record.id, "missionOutcomeEvaluation.id"),
+    missionId: expectStoredString(record.missionId, "missionOutcomeEvaluation.missionId"),
+    taskId: expectStoredString(record.taskId, "missionOutcomeEvaluation.taskId"),
+    ...(record.artifactId === undefined ? {} : { artifactId: expectStoredString(record.artifactId, "missionOutcomeEvaluation.artifactId") }),
+    ...(record.reviewId === undefined ? {} : { reviewId: expectStoredString(record.reviewId, "missionOutcomeEvaluation.reviewId") }),
+    source: expectStoredOneOf<MissionOutcomeEvaluationSource>(record.source, "missionOutcomeEvaluation.source", ["execution_result", "execution_failure", "manual"]),
+    outcome: expectStoredOneOf<MissionOutcome>(record.outcome, "missionOutcomeEvaluation.outcome", ["advanced", "neutral", "blocked", "regressed"]),
+    contributionScore: expectStoredScore(record.contributionScore, "missionOutcomeEvaluation.contributionScore"),
+    summary: expectStoredString(record.summary, "missionOutcomeEvaluation.summary"),
+    evidence: expectStoredStringArray(record.evidence, "missionOutcomeEvaluation.evidence"),
+    risks: expectStoredStringArray(record.risks, "missionOutcomeEvaluation.risks"),
+    recommendedNextActions: expectStoredStringArray(record.recommendedNextActions, "missionOutcomeEvaluation.recommendedNextActions"),
+    createdAt: expectStoredString(record.createdAt, "missionOutcomeEvaluation.createdAt"),
+  };
+}
+
+function parseStoredTaskFailureAnalysis(value: unknown): TaskFailureAnalysis {
+  const record = expectStoredObject(value, "taskFailureAnalysis");
+  return {
+    id: expectStoredString(record.id, "taskFailureAnalysis.id"),
+    missionId: expectStoredString(record.missionId, "taskFailureAnalysis.missionId"),
+    taskId: expectStoredString(record.taskId, "taskFailureAnalysis.taskId"),
+    ...(record.artifactId === undefined ? {} : { artifactId: expectStoredString(record.artifactId, "taskFailureAnalysis.artifactId") }),
+    ...(record.reviewId === undefined ? {} : { reviewId: expectStoredString(record.reviewId, "taskFailureAnalysis.reviewId") }),
+    failureType: expectStoredOneOf<TaskFailureType>(record.failureType, "taskFailureAnalysis.failureType", [
+      "missing_information",
+      "agent_mismatch",
+      "unclear_task",
+      "external_blocker",
+      "low_quality_output",
+      "execution_error",
+    ]),
+    summary: expectStoredString(record.summary, "taskFailureAnalysis.summary"),
+    rootCause: expectStoredString(record.rootCause, "taskFailureAnalysis.rootCause"),
+    recommendedRecovery: expectStoredOneOf<RecommendedRecovery>(record.recommendedRecovery, "taskFailureAnalysis.recommendedRecovery", [
+      "ask_user",
+      "revise_task",
+      "split_task",
+      "reassign_agent",
+      "adjust_strategy",
+    ]),
+    recommendedNextActions: expectStoredStringArray(record.recommendedNextActions, "taskFailureAnalysis.recommendedNextActions"),
+    createdAt: expectStoredString(record.createdAt, "taskFailureAnalysis.createdAt"),
+  };
+}
+
+function parseStoredStrategyAdjustment(value: unknown): StrategyAdjustment {
+  const record = expectStoredObject(value, "strategyAdjustment");
+  return {
+    id: expectStoredString(record.id, "strategyAdjustment.id"),
+    missionId: expectStoredString(record.missionId, "strategyAdjustment.missionId"),
+    ...(record.triggeredByEvaluationId === undefined
+      ? {}
+      : { triggeredByEvaluationId: expectStoredString(record.triggeredByEvaluationId, "strategyAdjustment.triggeredByEvaluationId") }),
+    ...(record.triggeredByFailureAnalysisId === undefined
+      ? {}
+      : { triggeredByFailureAnalysisId: expectStoredString(record.triggeredByFailureAnalysisId, "strategyAdjustment.triggeredByFailureAnalysisId") }),
+    status: expectStoredOneOf<StrategyAdjustmentStatus>(record.status, "strategyAdjustment.status", ["proposed", "accepted", "rejected", "superseded"]),
+    previousStrategy: expectStoredString(record.previousStrategy, "strategyAdjustment.previousStrategy"),
+    proposedStrategy: expectStoredString(record.proposedStrategy, "strategyAdjustment.proposedStrategy"),
+    rationale: expectStoredString(record.rationale, "strategyAdjustment.rationale"),
+    affectedAgentRoles: expectStoredStringArray(record.affectedAgentRoles, "strategyAdjustment.affectedAgentRoles"),
+    proposedTaskGoals: expectStoredStringArray(record.proposedTaskGoals, "strategyAdjustment.proposedTaskGoals"),
+    requiresHrReview: expectStoredBoolean(record.requiresHrReview, "strategyAdjustment.requiresHrReview"),
+    createdAt: expectStoredString(record.createdAt, "strategyAdjustment.createdAt"),
+  };
+}
+
 export interface MissionServiceOptions {
   storageFile?: string | undefined;
   configFile?: string | undefined;
@@ -301,6 +517,7 @@ export interface StreamSubscription {
 
 export class InMemoryMissionService {
   private readonly missions = new Map<string, Mission>();
+  private readonly plans = new Map<string, MissionPlan>();
   private readonly tasks = new Map<string, Task>();
   private readonly artifacts = new Map<string, Artifact>();
   private readonly reviews = new Map<string, Review>();
@@ -314,6 +531,9 @@ export class InMemoryMissionService {
   private readonly toolCalls = new Map<string, ToolCallRecord>();
   private readonly decisions = new Map<string, DecisionRecord>();
   private readonly knowledgeEntries = new Map<string, KnowledgeEntry>();
+  private readonly missionOutcomeEvaluations = new Map<string, MissionOutcomeEvaluation>();
+  private readonly taskFailureAnalyses = new Map<string, TaskFailureAnalysis>();
+  private readonly strategyAdjustments = new Map<string, StrategyAdjustment>();
   private readonly storageFile: string | undefined;
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
@@ -449,6 +669,7 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
+    this.assertMissionPlanReadyForActivation(mission.id);
     const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
     if (existingTask) {
       return mission;
@@ -481,6 +702,7 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
+    this.assertMissionPlanReadyForActivation(mission.id);
     const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
     if (existingTask) {
       return mission;
@@ -592,6 +814,110 @@ export class InMemoryMissionService {
     });
     this.persist();
     return updated;
+  }
+
+  async generateMissionPlan(input: { missionId: string; feedback?: string }): Promise<MissionPlan> {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (!mission.brief || mission.briefConfirmed !== true) {
+      throw new Error("MissionBrief must be confirmed before generating a MissionPlan");
+    }
+    if (!this.llm) {
+      throw new Error("LLM is required to generate a MissionPlan");
+    }
+
+    const response = await this.llm.call(
+      buildMissionPlanMessages({
+        brief: mission.brief,
+        ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+      }),
+      {
+        maxTokens: 3000,
+        timeoutMs: 90000,
+      },
+    );
+    const draft = parseMissionPlanDraft(response.content);
+    const existingPlans = [...this.plans.values()].filter((plan) => plan.missionId === mission.id);
+    const revision = existingPlans.length + 1;
+
+    for (const plan of existingPlans) {
+      if (plan.status === "draft") {
+        this.plans.set(plan.id, { ...plan, status: "superseded" });
+      }
+    }
+
+    const plan: MissionPlan = {
+      id: createId("plan"),
+      missionId: mission.id,
+      status: "draft",
+      createdAt: new Date(),
+      revision,
+      ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+      ...draft,
+    };
+    this.plans.set(plan.id, plan);
+    const owner = this.agentByRole(mission.id, "owner");
+    this.appendMessage({
+      missionId: mission.id,
+      fromAgentId: owner.id,
+      type: "task_plan",
+      content: `Owner generated MissionPlan revision ${plan.revision}.`,
+    });
+    this.persist();
+    return plan;
+  }
+
+  confirmMissionPlan(input: { missionId: string; planId: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const plan = this.plans.get(input.planId);
+    if (!plan || plan.missionId !== mission.id) {
+      throw new Error(`MissionPlan not found in mission: ${input.planId}`);
+    }
+    if (plan.status !== "draft") {
+      throw new Error(`Only draft MissionPlan can be confirmed: ${input.planId}`);
+    }
+
+    for (const candidate of this.plans.values()) {
+      if (candidate.missionId === mission.id && candidate.id !== plan.id && candidate.status === "confirmed") {
+        this.plans.set(candidate.id, { ...candidate, status: "superseded" });
+      }
+    }
+
+    const confirmed: MissionPlan = {
+      ...plan,
+      status: "confirmed",
+      confirmedAt: plan.confirmedAt ?? new Date(),
+    };
+    this.plans.set(confirmed.id, confirmed);
+    const updatedMission: Mission = {
+      ...mission,
+      confirmedPlanId: confirmed.id,
+    };
+    this.missions.set(updatedMission.id, updatedMission);
+    this.persist();
+    return updatedMission;
+  }
+
+  getMissionPlan(input: { missionId: string; planId?: string }): MissionPlan | undefined {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (input.planId !== undefined) {
+      const plan = this.plans.get(input.planId);
+      return plan?.missionId === mission.id ? plan : undefined;
+    }
+    const latestDraft = this.getLatestDraftMissionPlan(mission.id);
+    if (latestDraft) {
+      return latestDraft;
+    }
+    if (!mission.confirmedPlanId) return undefined;
+    return this.getConfirmedMissionPlan(mission);
   }
 
   startExecution(input: StartExecutionRequest): Execution {
@@ -710,6 +1036,13 @@ export class InMemoryMissionService {
 
     this.artifacts.set(artifact.id, artifact);
     this.reviews.set(review.id, review);
+    const feedback = buildExecutionResultFeedback({
+      mission,
+      task: resultTask,
+      artifact,
+      review,
+    });
+    this.recordExecutionResultFeedback(feedback);
     this.tasks.set(resultTask.id, resultTask);
     const toolCall = this.toolCallByExecution(execution.id);
     this.toolCalls.set(toolCall.id, {
@@ -757,6 +1090,13 @@ export class InMemoryMissionService {
       actorAgentId: reviewer.id,
       type: "review.completed",
       summary: `Reviewer returned ${review.decision}.`,
+    });
+    this.appendTaskEvent({
+      missionId: mission.id,
+      taskId: task.id,
+      actorAgentId: reviewer.id,
+      type: "feedback.evaluated",
+      summary: feedback.evaluation.summary,
     });
     this.executions.set(execution.id, {
       ...execution,
@@ -820,6 +1160,24 @@ export class InMemoryMissionService {
       type: "execution.failed",
       summary: input.error,
     });
+    const mission = this.requireMission(execution.missionId);
+    const task = this.tasks.get(execution.taskId);
+    if (!task || task.missionId !== mission.id) {
+      throw new Error(`Task not found in mission: ${execution.taskId}`);
+    }
+    const feedback = buildExecutionFailureFeedback({
+      mission,
+      task,
+      error: input.error,
+    });
+    this.recordExecutionFailureFeedback(feedback);
+    this.appendTaskEvent({
+      missionId: execution.missionId,
+      taskId: execution.taskId,
+      actorAgentId: worker.id,
+      type: "feedback.evaluated",
+      summary: feedback.evaluation.summary,
+    });
     this.persist();
     void this.dispatchToBus({
       type: "execution_failed",
@@ -830,9 +1188,152 @@ export class InMemoryMissionService {
     return failed;
   }
 
+  getAutopilotDiagnosis(missionId: string, runtime: AutopilotRuntimeSignals): AutopilotDiagnosis {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    assertAutopilotRuntimeSignals(runtime);
+
+    const missionExecutions = [...this.executions.values()].filter((execution) => execution.missionId === missionId);
+    const missionAgents = [...this.agents.values()].filter((agent) => agent.missionId === missionId);
+    const executableTasks = [...this.tasks.values()].filter(
+      (task) =>
+        task.missionId === missionId &&
+        task.status !== "completed" &&
+        task.status !== "failed" &&
+        task.status !== "cancelled",
+    );
+
+    const latestExecutionByTask = new Map<string, Execution>();
+    for (const execution of missionExecutions) {
+      const existing = latestExecutionByTask.get(execution.taskId);
+      if (!existing) {
+        latestExecutionByTask.set(execution.taskId, execution);
+        continue;
+      }
+      const executionTime = execution.completedAt ?? execution.startedAt;
+      const existingTime = existing.completedAt ?? existing.startedAt;
+      if (executionTime >= existingTime) {
+        latestExecutionByTask.set(execution.taskId, execution);
+      }
+    }
+
+    const latestExecutions = [...latestExecutionByTask.values()];
+    const hasRunningExecution = missionExecutions.some((execution) => execution.status === "running");
+    const hasFailedExecution = latestExecutions.some((execution) => execution.status === "failed");
+    const hasBlockedExecutionAgent = missionAgents.some(
+      (agent) => agent.role !== "owner" && agent.role !== "hr" && agent.status === "blocked",
+    );
+    const signals: AutopilotDiagnosisSignals = {
+      briefConfirmed: mission.briefConfirmed === true,
+      hasPlan: this.hasConfirmedMissionPlan(mission),
+      teamReady: missionAgents.some(
+        (agent) => agent.role !== "owner" && agent.role !== "hr" && agent.status !== "blocked" && agent.status !== "done",
+      ),
+      hasInitialTasks: executableTasks.length > 0,
+      hasExecutionRunner: runtime.hasExecutionRunner,
+      hasScheduleRules: mission.scheduleRules.length > 0,
+      hasRunningExecution,
+    };
+    const prerequisitesReady =
+      signals.briefConfirmed &&
+      signals.hasPlan &&
+      signals.teamReady &&
+      signals.hasInitialTasks &&
+      signals.hasExecutionRunner &&
+      signals.hasScheduleRules;
+
+    const blockers: AutopilotBlocker[] = [];
+    if (prerequisitesReady && (hasFailedExecution || hasBlockedExecutionAgent)) {
+      blockers.push({
+        code: "execution_blocked",
+        message: "The latest execution for a task failed, or an execution team agent is blocked.",
+        nextAction: "Inspect the unresolved failed execution or blocked execution agent, fix the root cause, then retry the task.",
+      });
+    }
+    if (!signals.briefConfirmed) {
+      blockers.push({
+        code: "brief_not_confirmed",
+        message: "MissionBrief has not been confirmed.",
+        nextAction: "Confirm the MissionBrief before starting autopilot bootstrap.",
+      });
+    }
+    if (signals.briefConfirmed && !signals.hasPlan) {
+      blockers.push({
+        code: "mission_plan_missing",
+        message: "MissionBrief is confirmed, but no confirmed MissionPlan exists.",
+        nextAction: "Generate and confirm a MissionPlan before treating the mission as autopilot-ready.",
+      });
+    }
+    if (signals.briefConfirmed && signals.hasPlan && !signals.teamReady) {
+      blockers.push({
+        code: "team_not_ready",
+        message: "No execution team agent exists for this mission.",
+        nextAction: "Assemble the mission team so non-owner execution agents are available.",
+      });
+    }
+    if (signals.briefConfirmed && signals.hasPlan && signals.teamReady && !signals.hasInitialTasks) {
+      blockers.push({
+        code: "initial_tasks_missing",
+        message: "No executable initial mission task exists.",
+        nextAction: "Create an initial task before runner or schedule readiness can be evaluated.",
+      });
+    }
+    if (signals.briefConfirmed && signals.hasPlan && signals.teamReady && signals.hasInitialTasks && !signals.hasExecutionRunner) {
+      blockers.push({
+        code: "execution_runner_missing",
+        message: "Executable tasks exist, but no execution runner is available.",
+        nextAction: "Provide an execution runner availability signal before launching autopilot execution.",
+      });
+    }
+    if (
+      signals.briefConfirmed &&
+      signals.hasPlan &&
+      signals.teamReady &&
+      signals.hasInitialTasks &&
+      signals.hasExecutionRunner &&
+      !signals.hasScheduleRules
+    ) {
+      blockers.push({
+        code: "schedule_rules_missing",
+        message: "No schedule rules are registered for this mission.",
+        nextAction: "Register at least one schedule rule after the mission is otherwise ready.",
+      });
+    }
+
+    let stage: AutopilotStage = "ready";
+    if (!signals.briefConfirmed) {
+      stage = "briefing";
+    } else if (!signals.hasPlan) {
+      stage = "missing_plan";
+    } else if (!signals.teamReady) {
+      stage = "team_not_ready";
+    } else if (!signals.hasInitialTasks) {
+      stage = "missing_initial_tasks";
+    } else if (!signals.hasExecutionRunner) {
+      stage = "missing_execution_runner";
+    } else if (!signals.hasScheduleRules) {
+      stage = "missing_schedule";
+    } else if (hasFailedExecution || hasBlockedExecutionAgent) {
+      stage = "blocked";
+    } else if (signals.hasRunningExecution) {
+      stage = "running";
+    }
+
+    return {
+      missionId,
+      stage,
+      ready: stage === "ready" || stage === "running",
+      blockers,
+      signals,
+    };
+  }
+
   snapshot(): MissionSnapshot {
     return {
       missions: [...this.missions.values()],
+      plans: [...this.plans.values()],
       tasks: [...this.tasks.values()],
       artifacts: [...this.artifacts.values()],
       reviews: [...this.reviews.values()],
@@ -846,6 +1347,9 @@ export class InMemoryMissionService {
       toolCalls: [...this.toolCalls.values()],
       decisions: [...this.decisions.values()],
       knowledgeEntries: [...this.knowledgeEntries.values()],
+      missionOutcomeEvaluations: [...this.missionOutcomeEvaluations.values()],
+      taskFailureAnalyses: [...this.taskFailureAnalyses.values()],
+      strategyAdjustments: [...this.strategyAdjustments.values()],
     };
   }
 
@@ -1178,7 +1682,44 @@ export class InMemoryMissionService {
               createdAt: lastTriggerEvent.createdAt,
             },
           }
-        : {}),
+      : {}),
+    };
+  }
+
+  getMissionOutcomeEvaluations(missionId: string): MissionOutcomeEvaluation[] {
+    this.requireMission(missionId);
+    return [...this.missionOutcomeEvaluations.values()].filter((record) => record.missionId === missionId);
+  }
+
+  getTaskFailureAnalyses(missionId: string): TaskFailureAnalysis[] {
+    this.requireMission(missionId);
+    return [...this.taskFailureAnalyses.values()].filter((record) => record.missionId === missionId);
+  }
+
+  getStrategyAdjustments(missionId: string): StrategyAdjustment[] {
+    this.requireMission(missionId);
+    return [...this.strategyAdjustments.values()].filter((record) => record.missionId === missionId);
+  }
+
+  getFeedbackSummary(missionId: string): FeedbackSummary {
+    const evaluations = this.getMissionOutcomeEvaluations(missionId);
+    const failureAnalyses = this.getTaskFailureAnalyses(missionId);
+    const strategyAdjustments = this.getStrategyAdjustments(missionId);
+    const byCreatedAt = <T extends { createdAt: string }>(records: T[]) =>
+      [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const latestEvaluation = byCreatedAt(evaluations)[0];
+    const latestFailureAnalysis = byCreatedAt(failureAnalyses)[0];
+    const latestStrategyAdjustment = byCreatedAt(strategyAdjustments)[0];
+    return {
+      missionId,
+      ...(latestEvaluation === undefined ? {} : { latestEvaluation }),
+      ...(latestFailureAnalysis === undefined ? {} : { latestFailureAnalysis }),
+      ...(latestStrategyAdjustment === undefined ? {} : { latestStrategyAdjustment }),
+      counts: {
+        evaluations: evaluations.length,
+        failureAnalyses: failureAnalyses.length,
+        strategyAdjustments: strategyAdjustments.length,
+      },
     };
   }
 
@@ -1370,6 +1911,54 @@ export class InMemoryMissionService {
         }
       },
     };
+  }
+
+  private hasConfirmedMissionPlan(mission: Mission): boolean {
+    if (this.getLatestDraftMissionPlan(mission.id)) {
+      return false;
+    }
+    if (!mission.confirmedPlanId) {
+      return false;
+    }
+    const plan = this.getConfirmedMissionPlan(mission);
+    return plan.status === "confirmed";
+  }
+
+  assertMissionPlanReadyForActivation(missionId: string): MissionPlan {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    if (this.getLatestDraftMissionPlan(mission.id)) {
+      throw new Error(`Mission requires a confirmed MissionPlan before activation: ${mission.id}`);
+    }
+    if (!mission.confirmedPlanId) {
+      throw new Error(`Mission requires a confirmed MissionPlan before activation: ${mission.id}`);
+    }
+    return this.getConfirmedMissionPlan(mission);
+  }
+
+  private getLatestDraftMissionPlan(missionId: string): MissionPlan | undefined {
+    return [...this.plans.values()]
+      .filter((plan) => plan.missionId === missionId && plan.status === "draft")
+      .sort((a, b) => b.revision - a.revision)[0];
+  }
+
+  private getConfirmedMissionPlan(mission: Mission): MissionPlan {
+    if (!mission.confirmedPlanId) {
+      throw new Error(`Mission has no confirmed MissionPlan: ${mission.id}`);
+    }
+    const plan = this.plans.get(mission.confirmedPlanId);
+    if (!plan) {
+      throw new Error(`Confirmed MissionPlan not found: ${mission.confirmedPlanId}`);
+    }
+    if (plan.missionId !== mission.id) {
+      throw new Error(`Confirmed MissionPlan belongs to a different mission: ${mission.confirmedPlanId}`);
+    }
+    if (plan.status !== "confirmed") {
+      throw new Error(`Confirmed MissionPlan is not confirmed: ${mission.confirmedPlanId}`);
+    }
+    return plan;
   }
 
   private notifyStreamListeners(missionId: string, event: Parameters<StreamEventListener>[0]): void {
@@ -1874,6 +2463,54 @@ export class InMemoryMissionService {
     this.taskEvents.set(event.id, event);
   }
 
+  private requireMission(missionId: string): Mission {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    return mission;
+  }
+
+  private recordExecutionResultFeedback(feedback: ExecutionResultFeedback): void {
+    this.missionOutcomeEvaluations.set(feedback.evaluation.id, feedback.evaluation);
+    if (feedback.failureAnalysis) {
+      this.taskFailureAnalyses.set(feedback.failureAnalysis.id, feedback.failureAnalysis);
+    }
+    if (feedback.strategyAdjustment) {
+      this.strategyAdjustments.set(feedback.strategyAdjustment.id, feedback.strategyAdjustment);
+    }
+    this.recordFeedbackKnowledge(feedback.evaluation);
+  }
+
+  private recordExecutionFailureFeedback(feedback: ExecutionFailureFeedback): void {
+    this.missionOutcomeEvaluations.set(feedback.evaluation.id, feedback.evaluation);
+    this.taskFailureAnalyses.set(feedback.failureAnalysis.id, feedback.failureAnalysis);
+    this.recordFeedbackKnowledge(feedback.evaluation);
+  }
+
+  private recordFeedbackKnowledge(evaluation: MissionOutcomeEvaluation): void {
+    const key = `feedback:${evaluation.taskId}:${evaluation.id}`;
+    const existing = [...this.knowledgeEntries.values()].find(
+      (entry) => entry.missionId === evaluation.missionId && entry.key === key,
+    );
+    if (existing) {
+      throw new Error(`Feedback knowledge already exists: ${key}`);
+    }
+    const owner = [...this.agents.values()].find(
+      (agent) => agent.missionId === evaluation.missionId && agent.role === "owner",
+    );
+    if (!owner) {
+      throw new Error(`Owner agent not found for feedback knowledge: ${evaluation.missionId}`);
+    }
+    const entry = createKnowledgeEntry({
+      missionId: evaluation.missionId,
+      key,
+      value: `${evaluation.outcome}: ${evaluation.summary}`,
+      sourceAgentId: owner.id,
+    });
+    this.knowledgeEntries.set(entry.id, entry);
+  }
+
   private agentByRole(missionId: string, role: WarRoomAgentRole): WarRoomAgent {
     const agent = [...this.agents.values()].find((candidate) => candidate.missionId === missionId && candidate.role === role);
     if (!agent) {
@@ -1987,6 +2624,15 @@ export class InMemoryMissionService {
         scheduleRules: (mission as Mission & { scheduleRules?: ScheduleRule[] }).scheduleRules ?? [],
       });
     }
+    for (const plan of stored.plans ?? []) {
+      const restoredPlan: MissionPlan = {
+        ...plan,
+        createdAt: new Date(plan.createdAt),
+        ...(plan.confirmedAt !== undefined ? { confirmedAt: new Date(plan.confirmedAt) } : {}),
+        ...(plan.feedback !== undefined ? { feedback: plan.feedback } : {}),
+      };
+      this.plans.set(restoredPlan.id, restoredPlan);
+    }
     for (const task of stored.tasks) this.tasks.set(task.id, task);
     for (const artifact of stored.artifacts) this.artifacts.set(artifact.id, { ...artifact, createdAt: new Date(artifact.createdAt) });
     for (const review of stored.reviews) this.reviews.set(review.id, { ...review, createdAt: new Date(review.createdAt) });
@@ -2008,6 +2654,15 @@ export class InMemoryMissionService {
     for (const call of stored.toolCalls) this.toolCalls.set(call.id, call);
     for (const decision of stored.decisions) this.decisions.set(decision.id, decision);
     for (const entry of stored.knowledgeEntries ?? []) this.knowledgeEntries.set(entry.id, entry);
+    for (const evaluation of (stored.missionOutcomeEvaluations ?? []).map(parseStoredMissionOutcomeEvaluation)) {
+      this.missionOutcomeEvaluations.set(evaluation.id, evaluation);
+    }
+    for (const analysis of (stored.taskFailureAnalyses ?? []).map(parseStoredTaskFailureAnalysis)) {
+      this.taskFailureAnalyses.set(analysis.id, analysis);
+    }
+    for (const adjustment of (stored.strategyAdjustments ?? []).map(parseStoredStrategyAdjustment)) {
+      this.strategyAdjustments.set(adjustment.id, adjustment);
+    }
   }
 
   private persist(): void {

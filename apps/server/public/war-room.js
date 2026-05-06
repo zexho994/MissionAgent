@@ -96,6 +96,8 @@ function renderWarOverview(data) {
       <span>${missionStateText(data.executions)}</span>
     </div>
     ${renderAutomationPulse(data, state.automationSummaryByMissionId[data.mission.id])}
+    ${renderFeedbackPanel(state.feedbackSummaryByMissionId[data.mission.id])}
+    ${renderAutopilotDiagnosis(state.autopilotDiagnosisByMissionId[data.mission.id])}
     <div class="war-stage">
       <div class="stage-note">
         <strong>War Room</strong>
@@ -119,6 +121,98 @@ function renderWarOverview(data) {
       </div>
     </div>
   `;
+}
+
+function renderFeedbackPanel(summary) {
+  if (!summary) {
+    return `
+      <div class="feedback-panel">
+        <div>
+          <span>反馈闭环</span>
+          <strong>正在读取反馈状态</strong>
+          <p>系统会在任务完成或失败后记录 Mission 层面的学习结果。</p>
+        </div>
+      </div>
+    `;
+  }
+  const evaluation = summary.latestEvaluation;
+  const failure = summary.latestFailureAnalysis;
+  const adjustment = summary.latestStrategyAdjustment;
+  return `
+    <div class="feedback-panel">
+      <div class="feedback-main">
+        <span>反馈闭环</span>
+        <strong>${evaluation ? esc(evaluation.summary) : "还没有任务反馈"}</strong>
+        <p>${evaluation ? `结果：${esc(evaluation.outcome)} · 贡献度 ${Math.round(evaluation.contributionScore * 100)}%` : "完成或失败一个任务后，这里会显示系统学到了什么。"}</p>
+      </div>
+      <div class="feedback-stats">
+        <div><strong>${summary.counts.evaluations}</strong><span>评估</span></div>
+        <div><strong>${summary.counts.failureAnalyses}</strong><span>失败分析</span></div>
+        <div><strong>${summary.counts.strategyAdjustments}</strong><span>策略提案</span></div>
+      </div>
+      ${failure ? `<div class="feedback-note blocked"><strong>阻塞</strong><p>${esc(failure.summary)}</p></div>` : ""}
+      ${adjustment ? `<div class="feedback-note"><strong>策略提案</strong><p>${esc(adjustment.proposedStrategy)}</p></div>` : ""}
+    </div>
+  `;
+}
+
+function renderAutopilotDiagnosis(diagnosis) {
+  if (!diagnosis) {
+    return `
+      <section class="autopilot-diagnosis">
+        <div class="autopilot-diagnosis-main">
+          <span>Autopilot 状态</span>
+          <strong>正在读取 Autopilot 诊断。</strong>
+          <p>等待当前 Mission 的自动运行前置条件。</p>
+        </div>
+      </section>
+    `;
+  }
+
+  const blocker = diagnosis.blockers[0];
+  const nextAction = blocker?.nextAction || (diagnosis.ready ? "保持现有运行节奏，继续观察执行结果。" : "等待系统更新下一步建议。");
+  const signals = diagnosis.signals;
+  return `
+    <section class="autopilot-diagnosis ${diagnosis.ready ? "ready" : ""}">
+      <div class="autopilot-diagnosis-main">
+        <span>Autopilot 状态</span>
+        <strong>${esc(autopilotStageText(diagnosis.stage))}</strong>
+        <p>${blocker ? esc(blocker.message) : "当前没有阻塞项。"}</p>
+      </div>
+      <div class="autopilot-next">
+        <span>下一步建议</span>
+        <p>${esc(nextAction)}</p>
+      </div>
+      <div class="autopilot-signals">
+        ${renderAutopilotSignal("Brief 已确认", signals.briefConfirmed)}
+        ${renderAutopilotSignal("计划已就绪", signals.hasPlan)}
+        ${renderAutopilotSignal("团队已就绪", signals.teamReady)}
+        ${renderAutopilotSignal("初始任务", signals.hasInitialTasks)}
+        ${renderAutopilotSignal("执行器", signals.hasExecutionRunner)}
+        ${renderAutopilotSignal("运行节奏", signals.hasScheduleRules)}
+        ${renderAutopilotSignal("正在执行", signals.hasRunningExecution)}
+      </div>
+    </section>
+  `;
+}
+
+function renderAutopilotSignal(label, ok) {
+  return `<span class="autopilot-signal ${ok ? "ok" : "warn"}">${ok ? "OK" : "!"} ${esc(label)}</span>`;
+}
+
+function autopilotStageText(stage) {
+  const stageText = {
+    briefing: "等待 Brief 确认",
+    missing_plan: "缺少执行计划",
+    team_not_ready: "团队未就绪",
+    missing_initial_tasks: "缺少初始任务",
+    missing_execution_runner: "缺少执行器",
+    missing_schedule: "缺少运行节奏",
+    ready: "已准备自动运行",
+    running: "正在执行",
+    blocked: "执行受阻",
+  };
+  return stageText[stage] || stage;
 }
 
 function renderAutomationPulse(data, summary) {

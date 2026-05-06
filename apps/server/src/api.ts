@@ -231,6 +231,53 @@ export async function handleApiRequest(
       return json(202, { execution, snapshot: deps.missions.snapshot() });
     }
 
+    const planMatch = request.path.match(/^\/api\/missions\/([^/]+)\/plan(?:\/(generate|confirm))?$/);
+    if (planMatch) {
+      const missionId = planMatch[1];
+      const action = planMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !action) {
+        const plan = deps.missions.getMissionPlan({ missionId });
+        return json(200, plan ? { plan } : {});
+      }
+
+      if (request.method === "POST" && action === "generate") {
+        const body = expectObject(request.body ?? {});
+        const feedback = body.feedback === undefined ? undefined : expectString(body.feedback, "feedback");
+        const plan = await deps.missions.generateMissionPlan({
+          missionId,
+          ...(feedback !== undefined ? { feedback } : {}),
+        });
+        return json(200, { plan, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && action === "confirm") {
+        const body = expectObject(request.body);
+        const planId = expectString(body.planId, "planId");
+        const mission = deps.missions.confirmMissionPlan({ missionId, planId });
+        const plan = deps.missions.getMissionPlan({ missionId });
+        return json(200, { mission, plan, snapshot: deps.missions.snapshot() });
+      }
+    }
+
+    const autopilotDiagnosisMatch = request.path.match(/^\/api\/missions\/([^/]+)\/autopilot-diagnosis$/);
+    if (autopilotDiagnosisMatch) {
+      const missionId = autopilotDiagnosisMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        const openclawHealth = await deps.openclaw.health();
+        const diagnosis = deps.missions.getAutopilotDiagnosis(missionId, {
+          hasExecutionRunner: openclawHealth.available,
+        });
+        return json(200, { diagnosis });
+      }
+    }
+
     const automationSummaryMatch = request.path.match(/^\/api\/missions\/([^/]+)\/automation-summary$/);
     if (automationSummaryMatch) {
       const missionId = automationSummaryMatch[1];
@@ -239,6 +286,37 @@ export async function handleApiRequest(
       }
       if (request.method === "GET") {
         return json(200, { summary: deps.missions.getAutomationSummary(missionId) });
+      }
+    }
+
+    const feedbackSummaryMatch = request.path.match(/^\/api\/missions\/([^/]+)\/feedback-summary$/);
+    if (feedbackSummaryMatch) {
+      const missionId = feedbackSummaryMatch[1];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET") {
+        return json(200, { summary: deps.missions.getFeedbackSummary(missionId) });
+      }
+    }
+
+    const feedbackCollectionMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/feedback\/(evaluations|failure-analyses|strategy-adjustments)$/,
+    );
+    if (feedbackCollectionMatch) {
+      const missionId = feedbackCollectionMatch[1];
+      const collection = feedbackCollectionMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (request.method === "GET" && collection === "evaluations") {
+        return json(200, { evaluations: deps.missions.getMissionOutcomeEvaluations(missionId) });
+      }
+      if (request.method === "GET" && collection === "failure-analyses") {
+        return json(200, { failureAnalyses: deps.missions.getTaskFailureAnalyses(missionId) });
+      }
+      if (request.method === "GET" && collection === "strategy-adjustments") {
+        return json(200, { strategyAdjustments: deps.missions.getStrategyAdjustments(missionId) });
       }
     }
 
