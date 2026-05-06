@@ -9,6 +9,7 @@ const state = {
   streamingMissionId: undefined,
   pollingInterval: undefined,
   automationSummaryByMissionId: {},
+  feedbackSummaryByMissionId: {},
   autopilotDiagnosisByMissionId: {},
   scheduleRulesByMissionId: {},
   scheduleActionPending: false,
@@ -36,6 +37,10 @@ function emptySnapshot() {
     toolCalls: [],
     decisions: [],
     agentRelations: [],
+    knowledgeEntries: [],
+    missionOutcomeEvaluations: [],
+    taskFailureAnalyses: [],
+    strategyAdjustments: [],
   };
 }
 
@@ -60,6 +65,12 @@ async function loadAutomationState(missionId) {
   state.scheduleRulesByMissionId[missionId] = scheduleResult.rules;
 }
 
+async function loadFeedbackState(missionId) {
+  if (!missionId) return;
+  const result = await api(`/api/missions/${missionId}/feedback-summary`);
+  state.feedbackSummaryByMissionId[missionId] = result.summary;
+}
+
 async function loadAutopilotDiagnosis(missionId) {
   if (!missionId) return;
   const result = await api(`/api/missions/${missionId}/autopilot-diagnosis`);
@@ -70,6 +81,7 @@ async function refreshMissionAutomation() {
   const mission = currentMission();
   if (!mission) return;
   await loadAutomationState(mission.id);
+  await loadFeedbackState(mission.id);
   await loadAutopilotDiagnosis(mission.id);
 }
 
@@ -671,6 +683,7 @@ function bindChoiceButtons() {
           state.draftMode = false;
           state.warTab = "overview";
           await loadAutomationState(mission.id);
+          await loadFeedbackState(mission.id);
           await loadAutopilotDiagnosis(mission.id);
           renderAll();
           startPolling();
@@ -686,6 +699,7 @@ function bindChoiceButtons() {
       state.view = "mission";
       state.draftMode = false;
       await loadAutomationState(mission.id);
+      await loadFeedbackState(mission.id);
       await loadAutopilotDiagnosis(mission.id);
       renderAll();
     });
@@ -703,6 +717,7 @@ function bindChoiceButtons() {
       state.draftMode = false;
       state.warTab = "overview";
       await loadAutomationState(mission.id);
+      await loadFeedbackState(mission.id);
       await loadAutopilotDiagnosis(mission.id);
       renderAll();
     });

@@ -96,6 +96,7 @@ function renderWarOverview(data) {
       <span>${missionStateText(data.executions)}</span>
     </div>
     ${renderAutomationPulse(data, state.automationSummaryByMissionId[data.mission.id])}
+    ${renderFeedbackPanel(state.feedbackSummaryByMissionId[data.mission.id])}
     ${renderAutopilotDiagnosis(state.autopilotDiagnosisByMissionId[data.mission.id])}
     <div class="war-stage">
       <div class="stage-note">
@@ -118,6 +119,39 @@ function renderWarOverview(data) {
         <strong>最近产出</strong>
         <p>${esc(latestOutputText(data))}</p>
       </div>
+    </div>
+  `;
+}
+
+function renderFeedbackPanel(summary) {
+  if (!summary) {
+    return `
+      <div class="feedback-panel">
+        <div>
+          <span>反馈闭环</span>
+          <strong>正在读取反馈状态</strong>
+          <p>系统会在任务完成或失败后记录 Mission 层面的学习结果。</p>
+        </div>
+      </div>
+    `;
+  }
+  const evaluation = summary.latestEvaluation;
+  const failure = summary.latestFailureAnalysis;
+  const adjustment = summary.latestStrategyAdjustment;
+  return `
+    <div class="feedback-panel">
+      <div class="feedback-main">
+        <span>反馈闭环</span>
+        <strong>${evaluation ? esc(evaluation.summary) : "还没有任务反馈"}</strong>
+        <p>${evaluation ? `结果：${esc(evaluation.outcome)} · 贡献度 ${Math.round(evaluation.contributionScore * 100)}%` : "完成或失败一个任务后，这里会显示系统学到了什么。"}</p>
+      </div>
+      <div class="feedback-stats">
+        <div><strong>${summary.counts.evaluations}</strong><span>评估</span></div>
+        <div><strong>${summary.counts.failureAnalyses}</strong><span>失败分析</span></div>
+        <div><strong>${summary.counts.strategyAdjustments}</strong><span>策略提案</span></div>
+      </div>
+      ${failure ? `<div class="feedback-note blocked"><strong>阻塞</strong><p>${esc(failure.summary)}</p></div>` : ""}
+      ${adjustment ? `<div class="feedback-note"><strong>策略提案</strong><p>${esc(adjustment.proposedStrategy)}</p></div>` : ""}
     </div>
   `;
 }
