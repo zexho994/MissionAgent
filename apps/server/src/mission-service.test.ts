@@ -2047,6 +2047,56 @@ describe("InMemoryMissionService", () => {
       expect(negotiation!.proposal.roles.length).toBeGreaterThan(0);
     });
 
+    it("reuses the recruiting HR agent when async activation continues into negotiation", async () => {
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await service.createMission({
+        goal: "运营小红书账号到1000粉丝",
+        successMetrics: ["followers >= 1000"],
+        constraints: ["1 month"],
+      });
+      await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      service.confirmBrief({ missionId: mission.id });
+      await confirmPlanForMission(service, mission.id);
+
+      service.beginMissionActivation({ missionId: mission.id });
+      const recruitingHr = service.snapshot().agents.find(
+        (agent) => agent.missionId === mission.id && agent.role === "hr",
+      );
+
+      await service.activateMissionWithHR({ missionId: mission.id });
+
+      const hrAgents = service.snapshot().agents.filter(
+        (agent) => agent.missionId === mission.id && agent.role === "hr",
+      );
+      expect(hrAgents).toHaveLength(1);
+      expect(hrAgents[0]?.id).toBe(recruitingHr?.id);
+      expect(service.getNegotiation({ missionId: mission.id })).toBeDefined();
+    });
+
+    it("keeps one HR agent when activation is requested twice before negotiation finishes", async () => {
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await service.createMission({
+        goal: "运营小红书账号到1000粉丝",
+        successMetrics: ["followers >= 1000"],
+        constraints: ["1 month"],
+      });
+      await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      service.confirmBrief({ missionId: mission.id });
+      await confirmPlanForMission(service, mission.id);
+
+      service.beginMissionActivation({ missionId: mission.id });
+      service.beginMissionActivation({ missionId: mission.id });
+      await Promise.all([
+        service.activateMissionWithHR({ missionId: mission.id }),
+        service.activateMissionWithHR({ missionId: mission.id }),
+      ]);
+
+      const hrAgents = service.snapshot().agents.filter(
+        (agent) => agent.missionId === mission.id && agent.role === "hr",
+      );
+      expect(hrAgents).toHaveLength(1);
+    });
+
     it("creates team after confirming negotiation", async () => {
       const service = new InMemoryMissionService({ llm: fake });
       const mission = await service.createMission({

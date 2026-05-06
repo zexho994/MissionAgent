@@ -87,7 +87,11 @@ export class NegotiationManager {
   }
 
   private getOrCreateHrAgent(missionId: string): WarRoomAgent {
-    const existing = [...this.agents.values()].find((agent) => agent.missionId === missionId && agent.role === "hr");
+    const existingAgents = [...this.agents.values()].filter((agent) => agent.missionId === missionId && agent.role === "hr");
+    const existing = existingAgents[0];
+    for (const duplicate of existingAgents.slice(1)) {
+      this.agents.delete(duplicate.id);
+    }
     const hrAgentRecord: WarRoomAgent = {
       ...(existing ?? {
         id: createId("agent"),

@@ -232,6 +232,42 @@ describe("NegotiationManager", () => {
       expect(proposal.roles.length).toBeGreaterThan(0);
       expect(proposal.missionId).toBe(mission.id);
     });
+
+    it("enforces a single HR agent when stale duplicate HR records exist", async () => {
+      deps.agents.set("stale_hr_1", {
+        id: "stale_hr_1",
+        missionId: mission.id,
+        role: "hr",
+        name: "HR",
+        responsibility: "Recruiting",
+        status: "running",
+        currentTaskId: undefined,
+        lastAction: "正在分析 MissionBrief 并招募团队",
+        avatarSeed: "hr",
+        sortOrder: 1,
+      });
+      deps.agents.set("stale_hr_2", {
+        id: "stale_hr_2",
+        missionId: mission.id,
+        role: "hr",
+        name: "HR",
+        responsibility: "Recruiting",
+        status: "running",
+        currentTaskId: undefined,
+        lastAction: "Analyzing MissionBrief and proposing team",
+        avatarSeed: "hr",
+        sortOrder: 2,
+      });
+      const manager = new NegotiationManager(deps);
+
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+
+      const hrAgents = [...deps.agents.values()].filter(
+        (agent) => agent.missionId === mission.id && agent.role === "hr",
+      );
+      expect(hrAgents).toHaveLength(1);
+      expect(hrAgents[0]?.id).toBe("stale_hr_1");
+    });
   });
 
   describe("confirmNegotiation", () => {

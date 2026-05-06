@@ -2010,9 +2010,13 @@ export class InMemoryMissionService {
   }
 
   private createBaseAgent(missionId: string, role: string, patch: Partial<WarRoomAgent> = {}): WarRoomAgent {
-    const existing = [...this.agents.values()].find((agent) => agent.missionId === missionId && agent.role === role);
+    const existingAgents = [...this.agents.values()].filter((agent) => agent.missionId === missionId && agent.role === role);
+    const existing = existingAgents[0];
     if (existing) {
       const updated = { ...existing, ...patch };
+      for (const duplicate of existingAgents.slice(1)) {
+        this.agents.delete(duplicate.id);
+      }
       this.agents.set(updated.id, updated);
       return updated;
     }
