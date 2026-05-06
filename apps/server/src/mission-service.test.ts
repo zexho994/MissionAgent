@@ -346,6 +346,126 @@ describe("InMemoryMissionService", () => {
     expect(service.snapshot().agentMessages.at(-1)?.type).toBe("execution_failed");
   });
 
+  it("creates outcome evaluation when execution result is approved", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Grow a GitHub repository" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
+
+    service.submitExecutionResult({
+      missionId: mission.id,
+      taskId: task!.id,
+      executionId: execution.id,
+      content: {
+        openclaw: {
+          payloads: [{ text: "Grow a GitHub repository with next actions for repository growth and review cadence" }],
+        },
+      },
+      evidence: ["openclaw:local"],
+    });
+
+    const snapshot = service.snapshot();
+    expect(snapshot.missionOutcomeEvaluations).toHaveLength(1);
+    expect(snapshot.missionOutcomeEvaluations[0]).toMatchObject({
+      missionId: mission.id,
+      taskId: task!.id,
+      source: "execution_result",
+      outcome: "advanced",
+    });
+    expect(snapshot.taskFailureAnalyses).toHaveLength(0);
+    expect(snapshot.knowledgeEntries.some((entry) => entry.key.startsWith("feedback:"))).toBe(true);
+  });
+
+  it("creates failure analysis when execution result is rejected", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Grow a GitHub repository" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
+
+    service.submitExecutionResult({
+      missionId: mission.id,
+      taskId: task!.id,
+      executionId: execution.id,
+      content: { openclaw: "" },
+      evidence: ["openclaw:local"],
+    });
+
+    const snapshot = service.snapshot();
+    expect(snapshot.missionOutcomeEvaluations).toHaveLength(1);
+    expect(snapshot.taskFailureAnalyses).toHaveLength(1);
+    expect(snapshot.taskFailureAnalyses[0]).toMatchObject({
+      missionId: mission.id,
+      taskId: task!.id,
+      failureType: "low_quality_output",
+    });
+  });
+
+  it("creates blocked feedback when execution fails", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Grow a GitHub repository" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
+
+    service.failExecution({
+      executionId: execution.id,
+      error: "OpenClaw timed out",
+    });
+
+    const snapshot = service.snapshot();
+    expect(snapshot.missionOutcomeEvaluations).toHaveLength(1);
+    expect(snapshot.missionOutcomeEvaluations[0]?.outcome).toBe("blocked");
+    expect(snapshot.taskFailureAnalyses).toHaveLength(1);
+    expect(snapshot.taskFailureAnalyses[0]?.failureType).toBe("execution_error");
+  });
+
+  it("persists and restores feedback records", async () => {
+    const storageFile = join(tmpdir(), `digitalagent-feedback-${Date.now()}.json`);
+    const service = new InMemoryMissionService({ storageFile });
+    const mission = await service.createMission({ goal: "Grow a GitHub repository" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
+
+    service.failExecution({
+      executionId: execution.id,
+      error: "OpenClaw timed out",
+    });
+
+    const reloaded = new InMemoryMissionService({ storageFile });
+    expect(reloaded.snapshot().missionOutcomeEvaluations).toHaveLength(1);
+    expect(reloaded.snapshot().taskFailureAnalyses).toHaveLength(1);
+  });
+
+  it("returns feedback summary with latest records and counts", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Grow a GitHub repository" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
+
+    service.failExecution({
+      executionId: execution.id,
+      error: "OpenClaw timed out",
+    });
+
+    expect(service.getFeedbackSummary(mission.id)).toMatchObject({
+      missionId: mission.id,
+      counts: {
+        evaluations: 1,
+        failureAnalyses: 1,
+        strategyAdjustments: 0,
+      },
+    });
+  });
+
   it("rejects artifacts with empty or missing OpenClaw output", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({

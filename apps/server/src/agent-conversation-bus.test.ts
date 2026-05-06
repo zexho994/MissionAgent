@@ -31,6 +31,9 @@ const baseSnapshot: MissionSnapshot = {
   toolCalls: [],
   decisions: [],
   knowledgeEntries: [],
+  missionOutcomeEvaluations: [],
+  taskFailureAnalyses: [],
+  strategyAdjustments: [],
 };
 
 function makeBusDeps(overrides?: {

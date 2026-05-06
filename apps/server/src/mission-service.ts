@@ -10,10 +10,13 @@ import {
   type Artifact,
   type Mission,
   type MissionBrief,
+  type MissionOutcomeEvaluation,
   type MissionPlan,
   type Review,
   type ScheduleRule,
+  type StrategyAdjustment,
   type Task,
+  type TaskFailureAnalysis,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -40,6 +43,12 @@ import type { BusEvent, ConversationThread } from "./agent-conversation-types.js
 import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
 import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
+import {
+  buildExecutionFailureFeedback,
+  buildExecutionResultFeedback,
+  type ExecutionFailureFeedback,
+  type ExecutionResultFeedback,
+} from "./feedback-generation.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -205,6 +214,18 @@ export interface AutomationSummary {
   };
 }
 
+export interface FeedbackSummary {
+  missionId: string;
+  latestEvaluation?: MissionOutcomeEvaluation;
+  latestFailureAnalysis?: TaskFailureAnalysis;
+  latestStrategyAdjustment?: StrategyAdjustment;
+  counts: {
+    evaluations: number;
+    failureAnalyses: number;
+    strategyAdjustments: number;
+  };
+}
+
 export type AutopilotStage =
   | "briefing"
   | "missing_plan"
@@ -317,6 +338,9 @@ export interface MissionSnapshot {
   toolCalls: ToolCallRecord[];
   decisions: DecisionRecord[];
   knowledgeEntries: KnowledgeEntry[];
+  missionOutcomeEvaluations: MissionOutcomeEvaluation[];
+  taskFailureAnalyses: TaskFailureAnalysis[];
+  strategyAdjustments: StrategyAdjustment[];
 }
 
 interface StoredMissionSnapshot extends MissionSnapshot {
@@ -344,6 +368,99 @@ function applyAutomationTogglePause(rule: ScheduleRule): ScheduleRule {
       ...rule.metadata,
       pausedByAutomationToggle: true,
     },
+  };
+}
+
+function expectStoredString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`${label} is required`);
+  }
+  return value;
+}
+
+function expectStoredNumber(value: unknown, label: string): number {
+  if (typeof value !== "number") {
+    throw new Error(`${label} must be a number`);
+  }
+  return value;
+}
+
+function expectStoredStringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new Error(`${label} must be a string array`);
+  }
+  return [...value];
+}
+
+function expectStoredBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new Error(`${label} must be a boolean`);
+  }
+  return value;
+}
+
+function expectStoredObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseStoredMissionOutcomeEvaluation(value: unknown): MissionOutcomeEvaluation {
+  const record = expectStoredObject(value, "missionOutcomeEvaluation");
+  return {
+    id: expectStoredString(record.id, "missionOutcomeEvaluation.id"),
+    missionId: expectStoredString(record.missionId, "missionOutcomeEvaluation.missionId"),
+    taskId: expectStoredString(record.taskId, "missionOutcomeEvaluation.taskId"),
+    ...(record.artifactId === undefined ? {} : { artifactId: expectStoredString(record.artifactId, "missionOutcomeEvaluation.artifactId") }),
+    ...(record.reviewId === undefined ? {} : { reviewId: expectStoredString(record.reviewId, "missionOutcomeEvaluation.reviewId") }),
+    source: expectStoredString(record.source, "missionOutcomeEvaluation.source") as MissionOutcomeEvaluation["source"],
+    outcome: expectStoredString(record.outcome, "missionOutcomeEvaluation.outcome") as MissionOutcomeEvaluation["outcome"],
+    contributionScore: expectStoredNumber(record.contributionScore, "missionOutcomeEvaluation.contributionScore"),
+    summary: expectStoredString(record.summary, "missionOutcomeEvaluation.summary"),
+    evidence: expectStoredStringArray(record.evidence, "missionOutcomeEvaluation.evidence"),
+    risks: expectStoredStringArray(record.risks, "missionOutcomeEvaluation.risks"),
+    recommendedNextActions: expectStoredStringArray(record.recommendedNextActions, "missionOutcomeEvaluation.recommendedNextActions"),
+    createdAt: expectStoredString(record.createdAt, "missionOutcomeEvaluation.createdAt"),
+  };
+}
+
+function parseStoredTaskFailureAnalysis(value: unknown): TaskFailureAnalysis {
+  const record = expectStoredObject(value, "taskFailureAnalysis");
+  return {
+    id: expectStoredString(record.id, "taskFailureAnalysis.id"),
+    missionId: expectStoredString(record.missionId, "taskFailureAnalysis.missionId"),
+    taskId: expectStoredString(record.taskId, "taskFailureAnalysis.taskId"),
+    ...(record.artifactId === undefined ? {} : { artifactId: expectStoredString(record.artifactId, "taskFailureAnalysis.artifactId") }),
+    ...(record.reviewId === undefined ? {} : { reviewId: expectStoredString(record.reviewId, "taskFailureAnalysis.reviewId") }),
+    failureType: expectStoredString(record.failureType, "taskFailureAnalysis.failureType") as TaskFailureAnalysis["failureType"],
+    summary: expectStoredString(record.summary, "taskFailureAnalysis.summary"),
+    rootCause: expectStoredString(record.rootCause, "taskFailureAnalysis.rootCause"),
+    recommendedRecovery: expectStoredString(record.recommendedRecovery, "taskFailureAnalysis.recommendedRecovery") as TaskFailureAnalysis["recommendedRecovery"],
+    recommendedNextActions: expectStoredStringArray(record.recommendedNextActions, "taskFailureAnalysis.recommendedNextActions"),
+    createdAt: expectStoredString(record.createdAt, "taskFailureAnalysis.createdAt"),
+  };
+}
+
+function parseStoredStrategyAdjustment(value: unknown): StrategyAdjustment {
+  const record = expectStoredObject(value, "strategyAdjustment");
+  return {
+    id: expectStoredString(record.id, "strategyAdjustment.id"),
+    missionId: expectStoredString(record.missionId, "strategyAdjustment.missionId"),
+    ...(record.triggeredByEvaluationId === undefined
+      ? {}
+      : { triggeredByEvaluationId: expectStoredString(record.triggeredByEvaluationId, "strategyAdjustment.triggeredByEvaluationId") }),
+    ...(record.triggeredByFailureAnalysisId === undefined
+      ? {}
+      : { triggeredByFailureAnalysisId: expectStoredString(record.triggeredByFailureAnalysisId, "strategyAdjustment.triggeredByFailureAnalysisId") }),
+    status: expectStoredString(record.status, "strategyAdjustment.status") as StrategyAdjustment["status"],
+    previousStrategy: expectStoredString(record.previousStrategy, "strategyAdjustment.previousStrategy"),
+    proposedStrategy: expectStoredString(record.proposedStrategy, "strategyAdjustment.proposedStrategy"),
+    rationale: expectStoredString(record.rationale, "strategyAdjustment.rationale"),
+    affectedAgentRoles: expectStoredStringArray(record.affectedAgentRoles, "strategyAdjustment.affectedAgentRoles"),
+    proposedTaskGoals: expectStoredStringArray(record.proposedTaskGoals, "strategyAdjustment.proposedTaskGoals"),
+    requiresHrReview: expectStoredBoolean(record.requiresHrReview, "strategyAdjustment.requiresHrReview"),
+    createdAt: expectStoredString(record.createdAt, "strategyAdjustment.createdAt"),
   };
 }
 
@@ -380,6 +497,9 @@ export class InMemoryMissionService {
   private readonly toolCalls = new Map<string, ToolCallRecord>();
   private readonly decisions = new Map<string, DecisionRecord>();
   private readonly knowledgeEntries = new Map<string, KnowledgeEntry>();
+  private readonly missionOutcomeEvaluations = new Map<string, MissionOutcomeEvaluation>();
+  private readonly taskFailureAnalyses = new Map<string, TaskFailureAnalysis>();
+  private readonly strategyAdjustments = new Map<string, StrategyAdjustment>();
   private readonly storageFile: string | undefined;
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
@@ -882,6 +1002,13 @@ export class InMemoryMissionService {
 
     this.artifacts.set(artifact.id, artifact);
     this.reviews.set(review.id, review);
+    const feedback = buildExecutionResultFeedback({
+      mission,
+      task: resultTask,
+      artifact,
+      review,
+    });
+    this.recordExecutionResultFeedback(feedback);
     this.tasks.set(resultTask.id, resultTask);
     const toolCall = this.toolCallByExecution(execution.id);
     this.toolCalls.set(toolCall.id, {
@@ -929,6 +1056,13 @@ export class InMemoryMissionService {
       actorAgentId: reviewer.id,
       type: "review.completed",
       summary: `Reviewer returned ${review.decision}.`,
+    });
+    this.appendTaskEvent({
+      missionId: mission.id,
+      taskId: task.id,
+      actorAgentId: reviewer.id,
+      type: "feedback.evaluated",
+      summary: feedback.evaluation.summary,
     });
     this.executions.set(execution.id, {
       ...execution,
@@ -991,6 +1125,24 @@ export class InMemoryMissionService {
       actorAgentId: worker.id,
       type: "execution.failed",
       summary: input.error,
+    });
+    const mission = this.requireMission(execution.missionId);
+    const task = this.tasks.get(execution.taskId);
+    if (!task || task.missionId !== mission.id) {
+      throw new Error(`Task not found in mission: ${execution.taskId}`);
+    }
+    const feedback = buildExecutionFailureFeedback({
+      mission,
+      task,
+      error: input.error,
+    });
+    this.recordExecutionFailureFeedback(feedback);
+    this.appendTaskEvent({
+      missionId: execution.missionId,
+      taskId: execution.taskId,
+      actorAgentId: worker.id,
+      type: "feedback.evaluated",
+      summary: feedback.evaluation.summary,
     });
     this.persist();
     void this.dispatchToBus({
@@ -1161,6 +1313,9 @@ export class InMemoryMissionService {
       toolCalls: [...this.toolCalls.values()],
       decisions: [...this.decisions.values()],
       knowledgeEntries: [...this.knowledgeEntries.values()],
+      missionOutcomeEvaluations: [...this.missionOutcomeEvaluations.values()],
+      taskFailureAnalyses: [...this.taskFailureAnalyses.values()],
+      strategyAdjustments: [...this.strategyAdjustments.values()],
     };
   }
 
@@ -1493,7 +1648,44 @@ export class InMemoryMissionService {
               createdAt: lastTriggerEvent.createdAt,
             },
           }
-        : {}),
+      : {}),
+    };
+  }
+
+  getMissionOutcomeEvaluations(missionId: string): MissionOutcomeEvaluation[] {
+    this.requireMission(missionId);
+    return [...this.missionOutcomeEvaluations.values()].filter((record) => record.missionId === missionId);
+  }
+
+  getTaskFailureAnalyses(missionId: string): TaskFailureAnalysis[] {
+    this.requireMission(missionId);
+    return [...this.taskFailureAnalyses.values()].filter((record) => record.missionId === missionId);
+  }
+
+  getStrategyAdjustments(missionId: string): StrategyAdjustment[] {
+    this.requireMission(missionId);
+    return [...this.strategyAdjustments.values()].filter((record) => record.missionId === missionId);
+  }
+
+  getFeedbackSummary(missionId: string): FeedbackSummary {
+    const evaluations = this.getMissionOutcomeEvaluations(missionId);
+    const failureAnalyses = this.getTaskFailureAnalyses(missionId);
+    const strategyAdjustments = this.getStrategyAdjustments(missionId);
+    const byCreatedAt = <T extends { createdAt: string }>(records: T[]) =>
+      [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const latestEvaluation = byCreatedAt(evaluations)[0];
+    const latestFailureAnalysis = byCreatedAt(failureAnalyses)[0];
+    const latestStrategyAdjustment = byCreatedAt(strategyAdjustments)[0];
+    return {
+      missionId,
+      ...(latestEvaluation === undefined ? {} : { latestEvaluation }),
+      ...(latestFailureAnalysis === undefined ? {} : { latestFailureAnalysis }),
+      ...(latestStrategyAdjustment === undefined ? {} : { latestStrategyAdjustment }),
+      counts: {
+        evaluations: evaluations.length,
+        failureAnalyses: failureAnalyses.length,
+        strategyAdjustments: strategyAdjustments.length,
+      },
     };
   }
 
@@ -2237,6 +2429,51 @@ export class InMemoryMissionService {
     this.taskEvents.set(event.id, event);
   }
 
+  private requireMission(missionId: string): Mission {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    return mission;
+  }
+
+  private recordExecutionResultFeedback(feedback: ExecutionResultFeedback): void {
+    this.missionOutcomeEvaluations.set(feedback.evaluation.id, feedback.evaluation);
+    if (feedback.failureAnalysis) {
+      this.taskFailureAnalyses.set(feedback.failureAnalysis.id, feedback.failureAnalysis);
+    }
+    if (feedback.strategyAdjustment) {
+      this.strategyAdjustments.set(feedback.strategyAdjustment.id, feedback.strategyAdjustment);
+    }
+    this.recordFeedbackKnowledge(feedback.evaluation);
+  }
+
+  private recordExecutionFailureFeedback(feedback: ExecutionFailureFeedback): void {
+    this.missionOutcomeEvaluations.set(feedback.evaluation.id, feedback.evaluation);
+    this.taskFailureAnalyses.set(feedback.failureAnalysis.id, feedback.failureAnalysis);
+    this.recordFeedbackKnowledge(feedback.evaluation);
+  }
+
+  private recordFeedbackKnowledge(evaluation: MissionOutcomeEvaluation): void {
+    const key = `feedback:${evaluation.taskId}:${evaluation.id}`;
+    const existing = [...this.knowledgeEntries.values()].find(
+      (entry) => entry.missionId === evaluation.missionId && entry.key === key,
+    );
+    if (existing) {
+      throw new Error(`Feedback knowledge already exists: ${key}`);
+    }
+    const owner = [...this.agents.values()].find(
+      (agent) => agent.missionId === evaluation.missionId && agent.role === "owner",
+    );
+    const entry = createKnowledgeEntry({
+      missionId: evaluation.missionId,
+      key,
+      value: `${evaluation.outcome}: ${evaluation.summary}`,
+      sourceAgentId: owner?.id ?? "system",
+    });
+    this.knowledgeEntries.set(entry.id, entry);
+  }
+
   private agentByRole(missionId: string, role: WarRoomAgentRole): WarRoomAgent {
     const agent = [...this.agents.values()].find((candidate) => candidate.missionId === missionId && candidate.role === role);
     if (!agent) {
@@ -2380,6 +2617,15 @@ export class InMemoryMissionService {
     for (const call of stored.toolCalls) this.toolCalls.set(call.id, call);
     for (const decision of stored.decisions) this.decisions.set(decision.id, decision);
     for (const entry of stored.knowledgeEntries ?? []) this.knowledgeEntries.set(entry.id, entry);
+    for (const evaluation of (stored.missionOutcomeEvaluations ?? []).map(parseStoredMissionOutcomeEvaluation)) {
+      this.missionOutcomeEvaluations.set(evaluation.id, evaluation);
+    }
+    for (const analysis of (stored.taskFailureAnalyses ?? []).map(parseStoredTaskFailureAnalysis)) {
+      this.taskFailureAnalyses.set(analysis.id, analysis);
+    }
+    for (const adjustment of (stored.strategyAdjustments ?? []).map(parseStoredStrategyAdjustment)) {
+      this.strategyAdjustments.set(adjustment.id, adjustment);
+    }
   }
 
   private persist(): void {

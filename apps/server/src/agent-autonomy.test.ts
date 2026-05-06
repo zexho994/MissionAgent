@@ -72,6 +72,9 @@ function makeTestDeps(): {
     toolCalls: [],
     decisions: [],
     knowledgeEntries: [],
+    missionOutcomeEvaluations: [],
+    taskFailureAnalyses: [],
+    strategyAdjustments: [],
   };
 
   const deps: AgentAutonomyDeps = {
