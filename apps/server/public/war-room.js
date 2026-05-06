@@ -80,6 +80,53 @@ function renderWarRoom() {
       void createScheduleTemplate(mission.id, payload, runNow);
     });
   }
+  document.querySelectorAll("[data-accept-adjustment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const missionId = button.dataset.missionId;
+      const adjustmentId = button.dataset.acceptAdjustment;
+      if (missionId && adjustmentId) {
+        void updateStrategyAdjustmentStatus(missionId, adjustmentId, "accepted");
+      }
+    });
+  });
+  document.querySelectorAll("[data-reject-adjustment]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const missionId = button.dataset.missionId;
+      const adjustmentId = button.dataset.rejectAdjustment;
+      if (missionId && adjustmentId) {
+        void updateStrategyAdjustmentStatus(missionId, adjustmentId, "rejected");
+      }
+    });
+  });
+  document.querySelectorAll(".task-card").forEach((card) => {
+    card.addEventListener("click", () => {
+      const taskId = card.dataset.taskId;
+      if (state.selectedTaskId === taskId) {
+        state.selectedTaskId = undefined;
+      } else {
+        state.selectedTaskId = taskId;
+      }
+      renderWarRoom();
+    });
+  });
+  const closeTaskDetail = document.querySelector("[data-close-task-detail]");
+  if (closeTaskDetail) {
+    closeTaskDetail.addEventListener("click", () => {
+      state.selectedTaskId = undefined;
+      renderWarRoom();
+    });
+  }
+  const feedbackDetailsBtn = document.querySelector("[data-feedback-details]");
+  if (feedbackDetailsBtn) {
+    feedbackDetailsBtn.addEventListener("click", () => {
+      const details = document.querySelector(".feedback-details");
+      const isHidden = details?.hidden;
+      if (details) {
+        details.hidden = !isHidden;
+        feedbackDetailsBtn.textContent = isHidden ? "收起详情" : "查看详情";
+      }
+    });
+  }
 }
 
 function warNavButton(tab, label) {
@@ -138,6 +185,7 @@ function renderFeedbackPanel(summary) {
   const evaluation = summary.latestEvaluation;
   const failure = summary.latestFailureAnalysis;
   const adjustment = summary.latestStrategyAdjustment;
+  const hasDetails = evaluation || failure || adjustment;
   return `
     <div class="feedback-panel">
       <div class="feedback-main">
@@ -151,7 +199,117 @@ function renderFeedbackPanel(summary) {
         <div><strong>${summary.counts.strategyAdjustments}</strong><span>策略提案</span></div>
       </div>
       ${failure ? `<div class="feedback-note blocked"><strong>阻塞</strong><p>${esc(failure.summary)}</p></div>` : ""}
-      ${adjustment ? `<div class="feedback-note"><strong>策略提案</strong><p>${esc(adjustment.proposedStrategy)}</p></div>` : ""}
+      ${adjustment ? renderStrategyAdjustmentCard(adjustment, summary.missionId) : ""}
+      ${hasDetails ? `<div class="feedback-details-toggle"><button type="button" class="feedback-details-btn" data-feedback-details>查看详情</button></div>` : ""}
+      <div class="feedback-details" hidden>
+        ${evaluation ? renderEvaluationDetail(evaluation) : ""}
+        ${failure ? renderFailureAnalysisDetail(failure) : ""}
+        ${adjustment ? renderStrategyAdjustmentDetail(adjustment) : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderEvaluationDetail(evaluation) {
+  return `
+    <div class="feedback-detail-section" data-detail-type="evaluation">
+      <div class="detail-section-header">
+        <span>评估详情</span>
+        <span class="detail-meta">${esc(evaluation.outcome)} · 贡献度 ${Math.round(evaluation.contributionScore * 100)}% · ${esc(formatTime(evaluation.createdAt))}</span>
+      </div>
+      <div class="detail-content">
+        ${evaluation.evidence.length ? `<div class="detail-item"><strong>证据：</strong><ul>${evaluation.evidence.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : ""}
+        ${evaluation.risks.length ? `<div class="detail-item"><strong>风险：</strong><ul>${evaluation.risks.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>` : ""}
+        ${evaluation.recommendedNextActions.length ? `<div class="detail-item"><strong>建议下一步：</strong><ul>${evaluation.recommendedNextActions.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderFailureAnalysisDetail(failure) {
+  return `
+    <div class="feedback-detail-section" data-detail-type="failure">
+      <div class="detail-section-header">
+        <span>失败分析详情</span>
+        <span class="detail-meta">${esc(failure.failureType)} · ${esc(formatTime(failure.createdAt))}</span>
+      </div>
+      <div class="detail-content">
+        <div class="detail-item"><strong>根因：</strong><p>${esc(failure.rootCause)}</p></div>
+        <div class="detail-item"><strong>推荐恢复方式：</strong><span>${esc(failure.recommendedRecovery)}</span></div>
+        ${failure.recommendedNextActions.length ? `<div class="detail-item"><strong>建议下一步：</strong><ul>${failure.recommendedNextActions.map(a => `<li>${esc(a)}</li>`).join("")}</ul></div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderStrategyAdjustmentDetail(adjustment) {
+  return `
+    <div class="feedback-detail-section" data-detail-type="strategy">
+      <div class="detail-section-header">
+        <span>策略提案详情</span>
+        <span class="detail-meta">${esc(adjustment.status)} · ${esc(formatTime(adjustment.createdAt))}</span>
+      </div>
+      <div class="detail-content">
+        <div class="detail-item"><strong>原策略：</strong><p>${esc(adjustment.previousStrategy)}</p></div>
+        <div class="detail-item"><strong>提案策略：</strong><p>${esc(adjustment.proposedStrategy)}</p></div>
+        <div class="detail-item"><strong>理由：</strong><p>${esc(adjustment.rationale)}</p></div>
+        ${adjustment.affectedAgentRoles.length ? `<div class="detail-item"><strong>影响角色：</strong><span>${adjustment.affectedAgentRoles.map(r => esc(r)).join(", ")}</span></div>` : ""}
+        ${adjustment.proposedTaskGoals.length ? `<div class="detail-item"><strong>提案任务目标：</strong><ul>${adjustment.proposedTaskGoals.map(g => `<li>${esc(g)}</li>`).join("")}</ul></div>` : ""}
+        ${adjustment.requiresHrReview ? `<div class="detail-item"><strong>需要 HR 审核：</strong><span>是</span></div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderStrategyAdjustmentCard(adjustment, missionId) {
+  const statusLabels = {
+    proposed: "待审批",
+    accepted: "已接受",
+    rejected: "已拒绝",
+    superseded: "已替代",
+  };
+  const statusClass = {
+    proposed: "pending",
+    accepted: "accepted",
+    rejected: "rejected",
+    superseded: "superseded",
+  };
+  const canRespond = adjustment.status === "proposed";
+  return `
+    <div class="strategy-adjustment-card">
+      <div class="strategy-adjustment-header">
+        <div>
+          <strong>策略提案</strong>
+          <span class="strategy-status ${statusClass[adjustment.status]}">${statusLabels[adjustment.status] || adjustment.status}</span>
+        </div>
+        <time>${esc(formatTime(adjustment.createdAt))}</time>
+      </div>
+      <div class="strategy-adjustment-body">
+        <div class="strategy-field">
+          <span class="field-label">原策略</span>
+          <span class="field-value">${esc(adjustment.previousStrategy)}</span>
+        </div>
+        <div class="strategy-field">
+          <span class="field-label">新策略</span>
+          <span class="field-value proposed">${esc(adjustment.proposedStrategy)}</span>
+        </div>
+        <div class="strategy-field">
+          <span class="field-label">理由</span>
+          <span class="field-value">${esc(adjustment.rationale)}</span>
+        </div>
+        ${adjustment.affectedAgentRoles.length ? `
+          <div class="strategy-field">
+            <span class="field-label">影响角色</span>
+            <span class="field-value">${esc(adjustment.affectedAgentRoles.join(", "))}</span>
+          </div>
+        ` : ""}
+      </div>
+      ${canRespond ? `
+        <div class="strategy-adjustment-actions">
+          <button type="button" class="strategy-btn accept" data-accept-adjustment="${esc(adjustment.id)}" data-mission-id="${esc(missionId)}">接受策略</button>
+          <button type="button" class="strategy-btn reject" data-reject-adjustment="${esc(adjustment.id)}" data-mission-id="${esc(missionId)}">拒绝策略</button>
+        </div>
+      ` : ""}
     </div>
   `;
 }
@@ -274,9 +432,10 @@ function renderAgentNetwork(data) {
 
 function renderAgentNode(data, agent, index) {
   const tone = toneClass(index);
+  const roleClass = roleAvatarClass(agent.role);
   return `
     <article class="agent-node ${tone}" data-agent-id="${esc(agent.id)}">
-      <div class="pixel-avatar ${tone}" aria-hidden="true">
+      <div class="pixel-avatar ${tone} ${roleClass}" aria-hidden="true">
         <div class="hair"></div>
         <div class="face">
           <span class="eye left"></span>
@@ -285,6 +444,7 @@ function renderAgentNode(data, agent, index) {
           <span class="mouth"></span>
         </div>
         <div class="body"></div>
+        ${renderRoleAccessory(agent.role)}
       </div>
       <div class="agent-card">
         <header class="agent-card-header">
@@ -303,6 +463,26 @@ function renderAgentNode(data, agent, index) {
       </div>
     </article>
   `;
+}
+
+function roleAvatarClass(role) {
+  const roleLower = (role || "").toLowerCase();
+  if (roleLower.includes("owner")) return "role-owner";
+  if (roleLower.includes("hr")) return "role-hr";
+  if (roleLower.includes("researcher")) return "role-researcher";
+  if (roleLower.includes("worker") || roleLower.includes("engineer")) return "role-worker";
+  return "";
+}
+
+function renderRoleAccessory(role) {
+  const roleLower = (role || "").toLowerCase();
+  if (roleLower.includes("hr")) {
+    return '<div class="role-accessory tie"></div>';
+  }
+  if (roleLower.includes("worker") || roleLower.includes("engineer")) {
+    return '<div class="role-accessory wrench"></div>';
+  }
+  return "";
 }
 
 function renderRelation(relation, fromAgent, toAgent) {
@@ -345,8 +525,8 @@ function renderWarTab(data) {
     },
     tasks: {
       title: "任务列表",
-      intro: "这里只展示代表任务，不把所有执行日志堆出来。",
-      items: data.tasks.map((task) => `${statusLabel(task.status)}：${task.title}`),
+      intro: "点击任务查看详情和执行结果。",
+      items: [],
     },
     schedule: {
       title: "定时任务",
@@ -360,6 +540,26 @@ function renderWarTab(data) {
     },
   };
   const content = map[state.warTab] || map.agents;
+
+  if (state.warTab === "tasks") {
+    const artifactByTaskId = new Map(data.artifacts.map((a) => [a.taskId, a]));
+    const agentById = new Map(data.agents.map((a) => [a.id, a]));
+    const sortedTasks = [...data.tasks].sort((a, b) => {
+      const statusOrder = ["running", "queued", "ready", "revision_needed", "draft", "completed", "failed"];
+      return statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status);
+    });
+    return `
+      <div class="tab-panel tasks-panel">
+        <h1>${esc(content.title)}</h1>
+        <p>${esc(content.intro)}</p>
+        <div class="task-list">
+          ${sortedTasks.length ? sortedTasks.map((task) => renderTaskCard(data, task, artifactByTaskId.get(task.id), agentById)).join("") : `<div class="empty-state">暂无任务</div>`}
+        </div>
+        ${state.selectedTaskId ? renderTaskDetailPanel(data, state.selectedTaskId, artifactByTaskId.get(state.selectedTaskId), agentById) : ""}
+      </div>
+    `;
+  }
+
   return `
     <div class="tab-panel">
       <h1>${esc(content.title)}</h1>
@@ -369,6 +569,115 @@ function renderWarTab(data) {
       </div>
     </div>
   `;
+}
+
+function renderTaskCard(data, task, artifact, agentById) {
+  const isSelected = state.selectedTaskId === task.id;
+  const assignee = task.assigneeAgentId ? agentById.get(task.assigneeAgentId) : null;
+  const outputPreview = artifact ? artifactPreview(artifact) : null;
+
+  return `
+    <article class="task-card ${isSelected ? "selected" : ""}" data-task-id="${esc(task.id)}">
+      <header class="task-card-header">
+        <span class="task-status status-${esc(task.status)}">${esc(statusLabel(task.status))}</span>
+        ${assignee ? `<span class="task-assignee">${esc(assignee.name || assignee.role)}</span>` : ""}
+      </header>
+      <div class="task-title">${esc(task.title)}</div>
+      ${outputPreview ? `<div class="task-output-preview">${esc(outputPreview)}</div>` : ""}
+    </article>
+  `;
+}
+
+function artifactPreview(artifact) {
+  if (!artifact || !artifact.content) return null;
+  const content = artifact.content;
+  if (content.summary) return shortText(String(content.summary), 80);
+  if (content.text) return shortText(String(content.text), 80);
+  if (content.result) return shortText(String(content.result), 80);
+  if (content.output) return shortText(String(content.output), 80);
+  if (content.conclusion) return shortText(String(content.conclusion), 80);
+  if (content.findings) {
+    const findings = Array.isArray(content.findings) ? content.findings : [content.findings];
+    return shortText(findings.map((f) => typeof f === "string" ? f : f.insight || JSON.stringify(f)).join("; "), 80);
+  }
+  if (content.data) {
+    const data = typeof content.data === "string" ? content.data : JSON.stringify(content.data);
+    return shortText(data, 80);
+  }
+  return null;
+}
+
+function renderTaskDetailPanel(data, taskId, artifact, agentById) {
+  const task = data.tasks.find((t) => t.id === taskId);
+  if (!task) return "";
+  const assignee = task.assigneeAgentId ? agentById.get(task.assigneeAgentId) : null;
+  const reviews = data.reviews.filter((r) => r.artifactId === artifact?.id);
+
+  return `
+    <div class="task-detail-panel">
+      <header class="task-detail-header">
+        <div>
+          <h3>${esc(task.title)}</h3>
+          <span class="task-status status-${esc(task.status)}">${esc(statusLabel(task.status))}</span>
+        </div>
+        <button type="button" class="task-detail-close" data-close-task-detail>关闭</button>
+      </header>
+      <dl class="task-detail-info">
+        ${assignee ? `<div><dt>负责人</dt><dd>${esc(assignee.name)} · ${esc(assignee.role)}</dd></div>` : ""}
+        ${task.contract?.objective ? `<div><dt>目标</dt><dd>${esc(task.contract.objective)}</dd></div>` : ""}
+        ${task.failureReason ? `<div class="task-failure"><dt>失败原因</dt><dd>${esc(task.failureReason)}</dd></div>` : ""}
+      </dl>
+      ${artifact ? renderArtifactDetail(artifact, reviews) : "<p class=\"task-no-output\">暂无产出</p>"}
+    </div>
+  `;
+}
+
+function renderArtifactDetail(artifact, reviews) {
+  const quality = artifact.qualityScore != null ? Math.round(artifact.qualityScore * 100) : null;
+  return `
+    <div class="artifact-detail">
+      <h4>产出内容</h4>
+      ${quality != null ? `<div class="artifact-quality"><span>质量评分</span><strong>${quality}%</strong></div>` : ""}
+      <div class="artifact-content">
+        ${formatArtifactContent(artifact.content)}
+      </div>
+      ${artifact.sources?.length ? `<div class="artifact-sources"><h5>来源</h5>${artifact.sources.map((s) => renderSource(s)).join("")}</div>` : ""}
+      ${artifact.evidence?.length ? `<div class="artifact-evidence"><h5>证据</h5>${artifact.evidence.map((e) => `<span>${esc(e)}</span>`).join("")}</div>` : ""}
+      ${reviews.length ? `<div class="artifact-reviews"><h5>审核结果</h5>${reviews.map((r) => `<div class="review-item"><span class="review-decision review-${esc(r.decision)}">${r.decision === "approve" ? "通过" : r.decision === "revise" ? "需修改" : "拒绝"}</span><p>${esc(r.comments.join(" "))}</p></div>`).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderSource(source) {
+  if (!source) return "";
+  const url = source.url || "";
+  const title = source.title || source.searchKeyword || url || "来源";
+  const snippet = source.snippet || "";
+  if (url) {
+    return `<div class="source-item"><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(title)}</a>${snippet ? `<p class="source-snippet">${esc(snippet)}</p>` : ""}</div>`;
+  }
+  return `<div class="source-item"><span>${esc(title)}</span>${snippet ? `<p class="source-snippet">${esc(snippet)}</p>` : ""}</div>`;
+}
+
+function formatArtifactContent(content) {
+  if (!content) return "<p>无内容</p>";
+  if (content.summary) return `<p>${esc(content.summary)}</p>`;
+  if (content.text) return `<p>${esc(content.text)}</p>`;
+  if (content.result) return `<p>${esc(content.result)}</p>`;
+  if (content.output) return `<p>${esc(content.output)}</p>`;
+  if (content.conclusion) return `<p>${esc(content.conclusion)}</p>`;
+  if (content.findings) {
+    const findings = Array.isArray(content.findings) ? content.findings : [content.findings];
+    return findings.map((f) => {
+      if (typeof f === "string") return `<p>${esc(f)}</p>`;
+      return `<p>${esc(f.insight || JSON.stringify(f))}</p>`;
+    }).join("");
+  }
+  if (content.data) {
+    const data = typeof content.data === "string" ? content.data : JSON.stringify(content.data, null, 2);
+    return `<pre>${esc(data)}</pre>`;
+  }
+  return `<p>${esc(JSON.stringify(content))}</p>`;
 }
 
 function renderScheduleTab(data, rules, summary) {
