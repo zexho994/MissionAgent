@@ -44,7 +44,7 @@ export interface AgentConversationResponse {
 }
 
 export interface ContextSnippet {
-  source: "artifact" | "message" | "task" | "mission" | "knowledge";
+  source: "artifact" | "message" | "task" | "mission" | "knowledge" | "feedback";
   sourceId: string;
   summary: string;
   relevance: number;

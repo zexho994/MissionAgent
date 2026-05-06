@@ -2557,7 +2557,7 @@ export class InMemoryMissionService {
         missionId: mission.id,
         taskId: evaluation.taskId,
         evaluation,
-        failureAnalysis,
+        ...(failureAnalysis && { failureAnalysis }),
         timestamp: new Date().toISOString(),
       },
     });
