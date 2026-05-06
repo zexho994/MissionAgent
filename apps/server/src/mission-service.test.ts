@@ -626,6 +626,28 @@ describe("InMemoryMissionService", () => {
       expect(service.getMissionPlan({ missionId: mission.id })).toEqual(plan);
     });
 
+    it("uses a larger LLM budget for MissionPlan generation", async () => {
+      const fake = new FakeLlmAdapter((messages) => {
+        if (messages[0]?.content.includes("Owner planning workflow")) return missionPlanJson("Run a mission");
+        return JSON.stringify({
+          goal: "Run a mission",
+          scope: "Execution test",
+          constraints: [],
+          successMetrics: ["Mission is runnable"],
+          keyAssumptions: [],
+        });
+      });
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await createConfirmedMission(service);
+
+      await service.generateMissionPlan({ missionId: mission.id });
+
+      expect(fake.getLastOptions()).toMatchObject({
+        maxTokens: 3000,
+        timeoutMs: 90000,
+      });
+    });
+
     it("fails fast when plan generation prerequisites or parser output are invalid", async () => {
       const noLlmService = new InMemoryMissionService();
       const mission = await noLlmService.createMission({ goal: "Run a mission" });

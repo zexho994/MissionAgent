@@ -20,7 +20,10 @@ export interface CreateLlmServiceFromEnvOptions {
   fetch?: typeof fetch;
 }
 
-const providerDefaults: Record<Exclude<LlmProvider, "claude">, { baseUrl: string; model: string }> = {
+const providerDefaults: Record<
+  Exclude<LlmProvider, "claude">,
+  { baseUrl: string; model: string; extraBody?: Record<string, unknown> }
+> = {
   openai: {
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4o-mini",
@@ -36,6 +39,7 @@ const providerDefaults: Record<Exclude<LlmProvider, "claude">, { baseUrl: string
   minimax: {
     baseUrl: "https://api.minimax.io/v1",
     model: "MiniMax-M2.7-highspeed",
+    extraBody: { reasoning_split: true },
   },
 };
 
@@ -91,12 +95,13 @@ export function createLlmServiceFromEnv(
 
 function createOpenAiCompatibleService(
   options: CreateLlmServiceOptions,
-  defaults: { baseUrl: string; model: string },
+  defaults: { baseUrl: string; model: string; extraBody?: Record<string, unknown> },
 ): LlmService {
   return new OpenAiLlmAdapter({
     apiKey: options.apiKey,
     baseUrl: options.baseUrl ?? defaults.baseUrl,
     defaultModel: options.model ?? defaults.model,
+    defaultExtraBody: defaults.extraBody ?? {},
     ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.fetch === undefined ? {} : { fetch: options.fetch }),

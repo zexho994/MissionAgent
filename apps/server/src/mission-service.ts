@@ -674,10 +674,16 @@ export class InMemoryMissionService {
       throw new Error("LLM is required to generate a MissionPlan");
     }
 
-    const response = await this.llm.call(buildMissionPlanMessages({
-      brief: mission.brief,
-      ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
-    }));
+    const response = await this.llm.call(
+      buildMissionPlanMessages({
+        brief: mission.brief,
+        ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+      }),
+      {
+        maxTokens: 3000,
+        timeoutMs: 90000,
+      },
+    );
     const draft = parseMissionPlanDraft(response.content);
     const existingPlans = [...this.plans.values()].filter((plan) => plan.missionId === mission.id);
     const revision = existingPlans.length + 1;

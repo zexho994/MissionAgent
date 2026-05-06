@@ -60,7 +60,10 @@ describe("createLlmService", () => {
 
     expect(String(capturedUrl)).toBe("https://api.minimax.io/v1/chat/completions");
     expect(capturedInit?.headers).toHaveProperty("authorization", "Bearer minimax-key");
-    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({ model: "MiniMax-M2.7-highspeed" });
+    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
+      model: "MiniMax-M2.7-highspeed",
+      reasoning_split: true,
+    });
   });
 
   it("creates an Anthropic service for claude provider", async () => {

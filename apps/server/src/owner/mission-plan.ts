@@ -13,11 +13,14 @@ export function buildMissionPlanMessages(input: { brief: MissionBrief; feedback?
       content: `You are the Owner planning workflow for DigitalAgent.
 Return ONLY a JSON object. No markdown, no explanation.
 The JSON must contain: goal, successMetrics, phases, workstreams, reportingLines, scheduleRhythms, risks, checkpoints.
+goal must be a string. successMetrics, risks, and checkpoints must be arrays of strings.
 Each phase must contain: name, objective, deliverables, successCriteria.
+Each phase deliverables and successCriteria must be arrays of strings.
 Each workstream must contain: name, objective, requiredRole, responsibilities, firstTaskGoal.
+Each workstream responsibilities must be an array of strings.
 Each reporting line must contain: fromRole, toRole, cadence, purpose.
 Each schedule rhythm must contain: name, cadence, ownerRole, purpose.
-Do not omit arrays. Use empty arrays only for risks when there are genuinely no risks.`,
+Keep arrays concise with 1 to 3 items. Do not omit arrays. Use empty arrays only for risks when there are genuinely no risks.`,
     },
     {
       role: "user",
