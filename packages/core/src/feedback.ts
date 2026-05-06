@@ -55,6 +55,12 @@ function requireTrimmed(value: string, label: string): void {
   }
 }
 
+function requireTrimmedItems(values: string[], label: string): void {
+  if (values.some((value) => !value.trim())) {
+    throw new Error(`${label} must not contain empty items`);
+  }
+}
+
 export function createMissionOutcomeEvaluation(
   input: CreateMissionOutcomeEvaluationInput,
 ): MissionOutcomeEvaluation {
@@ -67,6 +73,9 @@ export function createMissionOutcomeEvaluation(
   if (input.source !== "manual" && input.evidence.length === 0) {
     throw new Error("Mission outcome evaluation evidence is required");
   }
+  requireTrimmedItems(input.evidence, "Mission outcome evaluation evidence");
+  requireTrimmedItems(input.risks, "Mission outcome evaluation risks");
+  requireTrimmedItems(input.recommendedNextActions, "Mission outcome evaluation recommendedNextActions");
   if (
     (input.outcome === "blocked" || input.outcome === "regressed") &&
     input.risks.length === 0 &&
@@ -100,6 +109,7 @@ export function createTaskFailureAnalysis(input: CreateTaskFailureAnalysisInput)
   if (input.recommendedNextActions.length === 0) {
     throw new Error("Task failure analysis requires at least one recommended next action");
   }
+  requireTrimmedItems(input.recommendedNextActions, "Task failure analysis recommendedNextActions");
 
   return {
     id: createId("failure_analysis"),
@@ -121,6 +131,8 @@ export function createStrategyAdjustment(input: CreateStrategyAdjustmentInput): 
   requireTrimmed(input.previousStrategy, "Strategy adjustment previousStrategy");
   requireTrimmed(input.proposedStrategy, "Strategy adjustment proposedStrategy");
   requireTrimmed(input.rationale, "Strategy adjustment rationale");
+  requireTrimmedItems(input.affectedAgentRoles, "Strategy adjustment affectedAgentRoles");
+  requireTrimmedItems(input.proposedTaskGoals, "Strategy adjustment proposedTaskGoals");
 
   return {
     id: createId("strategy_adjustment"),

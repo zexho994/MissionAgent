@@ -999,10 +999,21 @@ function startPolling() {
 
       const hasChanges = JSON.stringify(currentData.messages) !== JSON.stringify(newSnapshot.agentMessages.filter(m => m.missionId === state.selectedMissionId)) ||
                         JSON.stringify(currentData.agents.map(a => a.status)) !== JSON.stringify(newSnapshot.agents.filter(a => a.missionId === state.selectedMissionId).map(a => a.status));
+      const feedbackChanged = state.selectedMissionId && (
+        JSON.stringify((state.snapshot.missionOutcomeEvaluations || []).filter(record => record.missionId === state.selectedMissionId)) !==
+          JSON.stringify((newSnapshot.missionOutcomeEvaluations || []).filter(record => record.missionId === state.selectedMissionId)) ||
+        JSON.stringify((state.snapshot.taskFailureAnalyses || []).filter(record => record.missionId === state.selectedMissionId)) !==
+          JSON.stringify((newSnapshot.taskFailureAnalyses || []).filter(record => record.missionId === state.selectedMissionId)) ||
+        JSON.stringify((state.snapshot.strategyAdjustments || []).filter(record => record.missionId === state.selectedMissionId)) !==
+          JSON.stringify((newSnapshot.strategyAdjustments || []).filter(record => record.missionId === state.selectedMissionId))
+      );
 
-      if (hasChanges) {
+      if (hasChanges || feedbackChanged) {
         state.snapshot = newSnapshot;
         syncSelectedMission();
+        if (state.selectedMissionId) {
+          await loadFeedbackState(state.selectedMissionId);
+        }
         renderAll();
       }
     } catch (error) {

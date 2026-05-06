@@ -10,13 +10,18 @@ import {
   type Artifact,
   type Mission,
   type MissionBrief,
+  type MissionOutcome,
   type MissionOutcomeEvaluation,
+  type MissionOutcomeEvaluationSource,
   type MissionPlan,
+  type RecommendedRecovery,
   type Review,
   type ScheduleRule,
   type StrategyAdjustment,
+  type StrategyAdjustmentStatus,
   type Task,
   type TaskFailureAnalysis,
+  type TaskFailureType,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -386,10 +391,26 @@ function expectStoredNumber(value: unknown, label: string): number {
 }
 
 function expectStoredStringArray(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
     throw new Error(`${label} must be a string array`);
   }
   return [...value];
+}
+
+function expectStoredOneOf<T extends string>(value: unknown, label: string, allowed: readonly T[]): T {
+  const stored = expectStoredString(value, label);
+  if (!(allowed as readonly string[]).includes(stored)) {
+    throw new Error(`${label} must be one of: ${allowed.join(", ")}`);
+  }
+  return stored as T;
+}
+
+function expectStoredScore(value: unknown, label: string): number {
+  const score = expectStoredNumber(value, label);
+  if (score < 0 || score > 1) {
+    throw new Error(`${label} must be between 0 and 1`);
+  }
+  return score;
 }
 
 function expectStoredBoolean(value: unknown, label: string): boolean {
@@ -414,9 +435,9 @@ function parseStoredMissionOutcomeEvaluation(value: unknown): MissionOutcomeEval
     taskId: expectStoredString(record.taskId, "missionOutcomeEvaluation.taskId"),
     ...(record.artifactId === undefined ? {} : { artifactId: expectStoredString(record.artifactId, "missionOutcomeEvaluation.artifactId") }),
     ...(record.reviewId === undefined ? {} : { reviewId: expectStoredString(record.reviewId, "missionOutcomeEvaluation.reviewId") }),
-    source: expectStoredString(record.source, "missionOutcomeEvaluation.source") as MissionOutcomeEvaluation["source"],
-    outcome: expectStoredString(record.outcome, "missionOutcomeEvaluation.outcome") as MissionOutcomeEvaluation["outcome"],
-    contributionScore: expectStoredNumber(record.contributionScore, "missionOutcomeEvaluation.contributionScore"),
+    source: expectStoredOneOf<MissionOutcomeEvaluationSource>(record.source, "missionOutcomeEvaluation.source", ["execution_result", "execution_failure", "manual"]),
+    outcome: expectStoredOneOf<MissionOutcome>(record.outcome, "missionOutcomeEvaluation.outcome", ["advanced", "neutral", "blocked", "regressed"]),
+    contributionScore: expectStoredScore(record.contributionScore, "missionOutcomeEvaluation.contributionScore"),
     summary: expectStoredString(record.summary, "missionOutcomeEvaluation.summary"),
     evidence: expectStoredStringArray(record.evidence, "missionOutcomeEvaluation.evidence"),
     risks: expectStoredStringArray(record.risks, "missionOutcomeEvaluation.risks"),
@@ -433,10 +454,23 @@ function parseStoredTaskFailureAnalysis(value: unknown): TaskFailureAnalysis {
     taskId: expectStoredString(record.taskId, "taskFailureAnalysis.taskId"),
     ...(record.artifactId === undefined ? {} : { artifactId: expectStoredString(record.artifactId, "taskFailureAnalysis.artifactId") }),
     ...(record.reviewId === undefined ? {} : { reviewId: expectStoredString(record.reviewId, "taskFailureAnalysis.reviewId") }),
-    failureType: expectStoredString(record.failureType, "taskFailureAnalysis.failureType") as TaskFailureAnalysis["failureType"],
+    failureType: expectStoredOneOf<TaskFailureType>(record.failureType, "taskFailureAnalysis.failureType", [
+      "missing_information",
+      "agent_mismatch",
+      "unclear_task",
+      "external_blocker",
+      "low_quality_output",
+      "execution_error",
+    ]),
     summary: expectStoredString(record.summary, "taskFailureAnalysis.summary"),
     rootCause: expectStoredString(record.rootCause, "taskFailureAnalysis.rootCause"),
-    recommendedRecovery: expectStoredString(record.recommendedRecovery, "taskFailureAnalysis.recommendedRecovery") as TaskFailureAnalysis["recommendedRecovery"],
+    recommendedRecovery: expectStoredOneOf<RecommendedRecovery>(record.recommendedRecovery, "taskFailureAnalysis.recommendedRecovery", [
+      "ask_user",
+      "revise_task",
+      "split_task",
+      "reassign_agent",
+      "adjust_strategy",
+    ]),
     recommendedNextActions: expectStoredStringArray(record.recommendedNextActions, "taskFailureAnalysis.recommendedNextActions"),
     createdAt: expectStoredString(record.createdAt, "taskFailureAnalysis.createdAt"),
   };
@@ -453,7 +487,7 @@ function parseStoredStrategyAdjustment(value: unknown): StrategyAdjustment {
     ...(record.triggeredByFailureAnalysisId === undefined
       ? {}
       : { triggeredByFailureAnalysisId: expectStoredString(record.triggeredByFailureAnalysisId, "strategyAdjustment.triggeredByFailureAnalysisId") }),
-    status: expectStoredString(record.status, "strategyAdjustment.status") as StrategyAdjustment["status"],
+    status: expectStoredOneOf<StrategyAdjustmentStatus>(record.status, "strategyAdjustment.status", ["proposed", "accepted", "rejected", "superseded"]),
     previousStrategy: expectStoredString(record.previousStrategy, "strategyAdjustment.previousStrategy"),
     proposedStrategy: expectStoredString(record.proposedStrategy, "strategyAdjustment.proposedStrategy"),
     rationale: expectStoredString(record.rationale, "strategyAdjustment.rationale"),
@@ -2465,11 +2499,14 @@ export class InMemoryMissionService {
     const owner = [...this.agents.values()].find(
       (agent) => agent.missionId === evaluation.missionId && agent.role === "owner",
     );
+    if (!owner) {
+      throw new Error(`Owner agent not found for feedback knowledge: ${evaluation.missionId}`);
+    }
     const entry = createKnowledgeEntry({
       missionId: evaluation.missionId,
       key,
       value: `${evaluation.outcome}: ${evaluation.summary}`,
-      sourceAgentId: owner?.id ?? "system",
+      sourceAgentId: owner.id,
     });
     this.knowledgeEntries.set(entry.id, entry);
   }

@@ -443,6 +443,28 @@ describe("InMemoryMissionService", () => {
     expect(reloaded.snapshot().taskFailureAnalyses).toHaveLength(1);
   });
 
+  it("fails fast when stored feedback has an invalid outcome", async () => {
+    const storageFile = join(tmpdir(), `digitalagent-feedback-corrupt-${Date.now()}.json`);
+    const service = new InMemoryMissionService({ storageFile });
+    const mission = await service.createMission({ goal: "Grow a GitHub repository" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
+    expect(task).toBeDefined();
+    const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
+    service.failExecution({ executionId: execution.id, error: "OpenClaw timed out" });
+
+    const stored = JSON.parse(JSON.stringify(service.snapshot())) as {
+      missionOutcomeEvaluations: Array<Record<string, unknown>>;
+    };
+    const evaluations = stored.missionOutcomeEvaluations;
+    evaluations[0] = { ...evaluations[0], outcome: "done" };
+    writeFileSync(storageFile, `${JSON.stringify({ schemaVersion: 1, ...stored }, null, 2)}\n`, "utf8");
+
+    expect(() => new InMemoryMissionService({ storageFile })).toThrow(
+      "missionOutcomeEvaluation.outcome must be one of: advanced, neutral, blocked, regressed",
+    );
+  });
+
   it("returns feedback summary with latest records and counts", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Grow a GitHub repository" });

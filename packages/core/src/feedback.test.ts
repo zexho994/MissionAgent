@@ -43,6 +43,22 @@ describe("feedback domain", () => {
     ).toThrow("Mission outcome evaluation evidence is required");
   });
 
+  it("fails fast when evidence contains only whitespace", () => {
+    expect(() =>
+      createMissionOutcomeEvaluation({
+        missionId: "mission_1",
+        taskId: "task_1",
+        source: "execution_result",
+        outcome: "neutral",
+        contributionScore: 0.5,
+        summary: "No clear contribution yet.",
+        evidence: [" "],
+        risks: [],
+        recommendedNextActions: ["Review the task result"],
+      }),
+    ).toThrow("Mission outcome evaluation evidence must not contain empty items");
+  });
+
   it("fails fast when blocked evaluation has no risk or next action", () => {
     expect(() =>
       createMissionOutcomeEvaluation({
@@ -88,6 +104,20 @@ describe("feedback domain", () => {
         recommendedNextActions: [],
       }),
     ).toThrow("Task failure analysis requires at least one recommended next action");
+  });
+
+  it("fails fast when failure analysis next action is blank", () => {
+    expect(() =>
+      createTaskFailureAnalysis({
+        missionId: "mission_1",
+        taskId: "task_1",
+        failureType: "execution_error",
+        summary: "Execution failed.",
+        rootCause: "The local executor crashed.",
+        recommendedRecovery: "revise_task",
+        recommendedNextActions: [" "],
+      }),
+    ).toThrow("Task failure analysis recommendedNextActions must not contain empty items");
   });
 
   it("creates a proposed strategy adjustment", () => {
