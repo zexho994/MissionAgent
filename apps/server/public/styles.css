@@ -241,6 +241,79 @@ h1, h2, p { margin-top: 0; }
   background: #f0f4ff;
   margin-bottom: 4px;
 }
+.mission-plan-card {
+  display: grid;
+  gap: 12px;
+  max-width: 620px;
+  margin-top: 12px;
+  border: 1px solid #d7dce2;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+}
+.mission-plan-card > button,
+.plan-revision-box button {
+  justify-self: start;
+  border: 1px solid #15181d;
+  border-radius: 8px;
+  background: #15181d;
+  color: #ffffff;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.mission-plan-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.plan-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+.plan-summary div,
+.plan-section {
+  display: grid;
+  gap: 4px;
+}
+.plan-summary div {
+  border-bottom: 1px solid #ecf0f5;
+  padding-bottom: 8px;
+  font-size: 14px;
+}
+.plan-summary span,
+.plan-section strong {
+  color: #637083;
+  font-size: 12px;
+  font-weight: 800;
+}
+.plan-section p {
+  margin: 0;
+  color: #343a46;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.plan-revision-box {
+  display: grid;
+  gap: 8px;
+}
+.plan-revision-box textarea {
+  width: 100%;
+  min-height: 86px;
+  resize: vertical;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  padding: 10px;
+  line-height: 1.5;
+}
+.plan-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
+  font-weight: 800;
+}
 .bubble strong {
   display: block;
   margin-bottom: 8px;

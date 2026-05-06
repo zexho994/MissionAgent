@@ -14,6 +14,10 @@ const state = {
   scheduleActionPending: false,
   scheduleFormOpen: false,
   scheduleError: "",
+  planActionMissionId: undefined,
+  planRevisionOpen: false,
+  planRevisionFeedback: "",
+  planError: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -21,6 +25,7 @@ const $ = (id) => document.getElementById(id);
 function emptySnapshot() {
   return {
     missions: [],
+    plans: [],
     tasks: [],
     artifacts: [],
     reviews: [],
@@ -174,6 +179,22 @@ function syncSelectedMission() {
 function currentMission() {
   if (state.draftMode) return undefined;
   return state.snapshot.missions.find((mission) => mission.id === state.selectedMissionId);
+}
+
+function currentMissionPlan() {
+  const mission = currentMission();
+  if (!mission) return undefined;
+  const latestDraft = [...state.snapshot.plans]
+    .filter((plan) => plan.missionId === mission.id && plan.status === "draft")
+    .sort((a, b) => b.revision - a.revision)[0];
+  if (latestDraft) return latestDraft;
+  if (!mission.confirmedPlanId) return undefined;
+  return state.snapshot.plans.find((plan) => plan.id === mission.confirmedPlanId);
+}
+
+function isPlanPending() {
+  const mission = currentMission();
+  return Boolean(mission && state.planActionMissionId === mission.id);
 }
 
 function scoped() {
@@ -341,11 +362,7 @@ function renderChatContent(data) {
   }
 
   if (data.mission.briefConfirmed) {
-    parts.push(`
-      <div class="choice-row" style="margin-top: 12px;">
-        <button type="button" data-open-war-room>${data.tasks.length > 0 ? "进入作战室" : "确认并创建作战室"}</button>
-      </div>
-    `);
+    parts.push(renderMissionPlanReview(data));
   }
 
   return parts.join("");
@@ -371,6 +388,60 @@ function renderBriefMessage(data) {
         <strong>约束</strong>
         ${brief.constraints.map((item) => `<div>${esc(item)}</div>`).join("")}
       </div>
+    </div>
+  `;
+}
+
+function renderMissionPlanReview(data) {
+  const plan = currentMissionPlan();
+  const pending = isPlanPending();
+  const error = state.planError ? `<p class="plan-error">${esc(state.planError)}</p>` : "";
+  if (!plan) {
+    return `
+      <div class="mission-plan-card">
+        <strong>Owner Agent · MissionPlan</strong>
+        ${error}
+        <button type="button" data-generate-plan ${pending ? "disabled" : ""}>${pending ? "正在生成计划..." : "生成执行计划"}</button>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="mission-plan-card">
+      <strong>Owner Agent · MissionPlan</strong>
+      <div class="plan-summary">
+        <div><span>目标</span>${esc(plan.goal)}</div>
+        <div><span>状态</span>${plan.status === "confirmed" ? "已确认" : `草稿 v${esc(String(plan.revision))}`}</div>
+      </div>
+      <div class="plan-section">
+        <strong>阶段</strong>
+        ${plan.phases.map((phase) => `<p>${esc(phase.name)}：${esc(phase.objective)}</p>`).join("")}
+      </div>
+      <div class="plan-section">
+        <strong>工作流</strong>
+        ${plan.workstreams.map((stream) => `<p>${esc(stream.requiredRole)}：${esc(stream.firstTaskGoal)}</p>`).join("")}
+      </div>
+      <div class="plan-section">
+        <strong>节奏</strong>
+        ${plan.scheduleRhythms.map((rhythm) => `<p>${esc(rhythm.name)} · ${esc(rhythm.cadence)} · ${esc(rhythm.ownerRole)}</p>`).join("")}
+      </div>
+      ${error}
+      ${plan.status === "draft" ? `
+        <div class="choice-row">
+          <button type="button" data-confirm-plan="${esc(plan.id)}" ${pending ? "disabled" : ""}>确认 MissionPlan</button>
+          <button type="button" data-toggle-plan-revision ${pending ? "disabled" : ""}>提出修改建议</button>
+        </div>
+        ${state.planRevisionOpen ? `
+          <div class="plan-revision-box">
+            <textarea id="plan-revision-feedback" rows="3" placeholder="修改建议">${esc(state.planRevisionFeedback)}</textarea>
+            <button type="button" data-submit-plan-revision="${esc(plan.id)}" ${pending ? "disabled" : ""}>重新生成计划</button>
+          </div>
+        ` : ""}
+      ` : `
+        <div class="choice-row">
+          <button type="button" data-open-war-room>${data.tasks.length > 0 ? "进入作战室" : "创建作战室"}</button>
+        </div>
+      `}
     </div>
   `;
 }
@@ -465,6 +536,85 @@ function bindChoiceButtons() {
       const form = $("mission-form");
       if (form) {
         form.dispatchEvent(new Event('submit'));
+      }
+    });
+  });
+  document.querySelectorAll("[data-generate-plan]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      state.planActionMissionId = mission.id;
+      state.planError = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: {} });
+        state.snapshot = result.snapshot;
+        state.planRevisionOpen = false;
+        state.planRevisionFeedback = "";
+      } catch (error) {
+        state.planError = error instanceof Error ? error.message : String(error);
+      } finally {
+        state.planActionMissionId = undefined;
+        renderAll();
+      }
+    });
+  });
+  document.querySelectorAll("[data-confirm-plan]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const planId = button.getAttribute("data-confirm-plan");
+      if (!planId) throw new Error("Missing MissionPlan id");
+      state.planActionMissionId = mission.id;
+      state.planError = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/plan/confirm`, { method: "POST", body: { planId } });
+        state.snapshot = result.snapshot;
+        await loadAutopilotDiagnosis(mission.id);
+      } catch (error) {
+        state.planError = error instanceof Error ? error.message : String(error);
+      } finally {
+        state.planActionMissionId = undefined;
+        renderAll();
+      }
+    });
+  });
+  document.querySelectorAll("[data-toggle-plan-revision]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.planRevisionOpen = !state.planRevisionOpen;
+      renderAll();
+    });
+  });
+  const revisionTextarea = $("plan-revision-feedback");
+  if (revisionTextarea) {
+    revisionTextarea.addEventListener("input", (event) => {
+      state.planRevisionFeedback = event.target.value;
+    });
+  }
+  document.querySelectorAll("[data-submit-plan-revision]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const mission = currentMission();
+      if (!mission) return;
+      const feedback = state.planRevisionFeedback.trim();
+      if (!feedback) {
+        state.planError = "请输入修改建议。";
+        renderAll();
+        return;
+      }
+      state.planActionMissionId = mission.id;
+      state.planError = "";
+      renderAll();
+      try {
+        const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: { feedback } });
+        state.snapshot = result.snapshot;
+        state.planRevisionOpen = false;
+        state.planRevisionFeedback = "";
+      } catch (error) {
+        state.planError = error instanceof Error ? error.message : String(error);
+      } finally {
+        state.planActionMissionId = undefined;
+        renderAll();
       }
     });
   });
