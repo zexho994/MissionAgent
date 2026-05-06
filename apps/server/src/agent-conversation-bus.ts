@@ -236,6 +236,8 @@ export class AgentConversationBus {
         if (superiors.length > 0) return superiors;
         return uniqueAgents([owner]);
       }
+      case "feedback_evaluated":
+        return uniqueAgents([owner]);
     }
   }
 
@@ -257,6 +259,8 @@ export class AgentConversationBus {
         return "User-triggered agent conversation";
       case "periodic_report":
         return "Periodic status report";
+      case "feedback_evaluated":
+        return "Feedback evaluation — strategy adjustment decision";
     }
   }
 
