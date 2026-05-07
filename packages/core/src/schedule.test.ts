@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createScheduleRule } from "./schedule.js";
+import { createScheduleRule, SchedulePlanGenerationError } from "./schedule.js";
 
 describe("createScheduleRule", () => {
   const validCronTrigger = {
@@ -255,9 +255,6 @@ describe("createScheduleRule", () => {
     ).toThrow("Condition trigger evaluatePrompt is required");
   });
 });
-
-import { describe, it, expect } from "vitest";
-import { SchedulePlanGenerationError } from "./schedule.js";
 
 describe("SchedulePlanGenerationError", () => {
   it("creates error with reason and details", () => {
