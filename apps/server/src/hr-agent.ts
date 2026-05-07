@@ -223,16 +223,15 @@ export function createHRAgent(options: HRAgentOptions) {
     const collaborationPlan = designCollaborationPlan(enforcedSpecs);
     // Support legacy useLlmSchedule option for backward compatibility
     const legacyUseLlm = (options as { useLlmSchedule?: boolean })?.useLlmSchedule === true;
-    const scheduleStrategy = options?.scheduleStrategy
-      ?? (legacyUseLlm ? "llm" : undefined);
+    const scheduleStrategy = options?.scheduleStrategy ?? (legacyUseLlm ? "llm" : undefined);
     let schedulePlan: SchedulePlanItem[];
-    if (scheduleStrategy === undefined) {
-      // No scheduleStrategy specified and not legacy useLlmSchedule — use deterministic
+    if (scheduleStrategy === undefined || scheduleStrategy === "deterministic") {
       schedulePlan = designSchedulePlan(enforcedSpecs, brief);
-    } else if (scheduleStrategy === "deterministic") {
+    } else if (scheduleStrategy === "auto" && !brief) {
+      // auto without brief falls back to deterministic
       schedulePlan = designSchedulePlan(enforcedSpecs, brief);
     } else {
-      // "auto" or "llm" — LLM is required
+      // "auto" with brief or "llm" — LLM is required
       schedulePlan = await proposeSchedulePlan(brief!, enforcedSpecs, scheduleStrategy === "llm");
     }
 
@@ -284,6 +283,11 @@ export function createHRAgent(options: HRAgentOptions) {
       if (error instanceof SchedulePlanGenerationError) throw error;
       if (error instanceof SyntaxError) {
         throw new SchedulePlanGenerationError("no_json_in_response", { rawResponse: String(error) });
+      }
+      // Catch errors from parseSchedulePlan validation
+      if (error instanceof Error && error.message.startsWith("parseSchedulePlan validation failed:")) {
+        const itemErrors = error.message.replace("parseSchedulePlan validation failed: ", "").split("; ");
+        throw new SchedulePlanGenerationError("all_items_invalid", { itemErrors });
       }
       throw new SchedulePlanGenerationError("llm_call_failed", {}, error);
     }
@@ -826,37 +830,48 @@ function parseSchedulePlan(content: string, roleSpecs: RoleSpec[]): SchedulePlan
   if (!Array.isArray(parsed)) return [];
 
   const roleIds = new Set(roleSpecs.map((spec) => spec.id));
-  return parsed.flatMap((item): SchedulePlanItem[] => {
-    if (!item || typeof item !== "object") return [];
+  const itemErrors: string[] = [];
+  const validItems: SchedulePlanItem[] = [];
+
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") {
+      itemErrors.push(`Invalid item: not an object`);
+      continue;
+    }
     const candidate = item as Record<string, unknown>;
     const name = nonEmptyString(candidate.name);
     const assigneeRole = nonEmptyString(candidate.assigneeRole);
     const taskDescription = nonEmptyString(candidate.taskDescription);
     const justification = nonEmptyString(candidate.justification);
     if (!name || !assigneeRole || !taskDescription || !justification || !roleIds.has(assigneeRole)) {
-      return [];
+      itemErrors.push(`Item missing required fields: ${JSON.stringify(item)}`);
+      continue;
     }
 
+    const templateId = optionalString(candidate.templateId);
     const cronExpression = optionalString(candidate.cronExpression);
     if (cronExpression) {
       const timezone = optionalString(candidate.timezone);
-      return [{
+      validItems.push({
         name,
         cronExpression,
         ...(timezone === undefined ? {} : { timezone }),
+        ...(templateId === undefined ? {} : { templateId }),
         assigneeRole,
         taskDescription,
         justification,
-      }];
+      });
+      continue;
     }
 
     const conditionDescription = nonEmptyString(candidate.conditionDescription);
     const conditionSourceRole = nonEmptyString(candidate.conditionSourceRole);
     const conditionEvaluatePrompt = nonEmptyString(candidate.conditionEvaluatePrompt);
     if (!conditionDescription || !conditionSourceRole || !conditionEvaluatePrompt || !roleIds.has(conditionSourceRole)) {
-      return [];
+      itemErrors.push(`Item missing required fields: ${JSON.stringify(item)}`);
+      continue;
     }
-    return [{
+    validItems.push({
       name,
       assigneeRole,
       taskDescription,
@@ -864,8 +879,15 @@ function parseSchedulePlan(content: string, roleSpecs: RoleSpec[]): SchedulePlan
       conditionDescription,
       conditionSourceRole,
       conditionEvaluatePrompt,
-    }];
-  });
+      ...(templateId === undefined ? {} : { templateId }),
+    });
+  }
+
+  if (itemErrors.length > 0) {
+    throw new Error(`parseSchedulePlan validation failed: ${itemErrors.join("; ")}`);
+  }
+
+  return validItems;
 }
 
 function nonEmptyString(value: unknown): string | undefined {
