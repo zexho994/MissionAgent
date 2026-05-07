@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
+import type { MissionExecutionRuntime } from "./runtime-bridge.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
 import type { MissionSnapshot } from "./mission-service.js";
@@ -10,6 +11,18 @@ function fakeOpenClaw(): Pick<OpenClawCliAdapter, "health" | "runAgentTask"> {
     async health() {
       return { available: true, version: "test-openclaw" };
     },
+    async runAgentTask() {
+      return {
+        status: "completed",
+        output: { text: "team plan generated" },
+        stderr: "",
+      };
+    },
+  };
+}
+
+function fakeRuntime(): MissionExecutionRuntime {
+  return {
     async runAgentTask() {
       return {
         status: "completed",
@@ -219,7 +232,7 @@ describe("handleApiRequest", () => {
   });
 
   it("confirms HR negotiation through the documented API route", async () => {
-    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan(), runtime: fakeRuntime() });
     const missionId = await createMissionWithConfirmedPlan(missions);
     await missions.activateMissionWithHR({ missionId });
 
@@ -244,17 +257,14 @@ describe("handleApiRequest", () => {
   });
 
   it("records an explicit failure when automatic HR-confirm execution cannot start OpenClaw", async () => {
-    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
-    const missionId = await createMissionWithConfirmedPlan(missions);
-    await missions.activateMissionWithHR({ missionId });
-    const failingOpenClaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask"> = {
-      async health() {
-        return { available: true, version: "test-openclaw" };
-      },
+    const failingRuntime: MissionExecutionRuntime = {
       async runAgentTask() {
         throw new Error("OpenClaw failed to start");
       },
     };
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan(), runtime: failingRuntime });
+    const missionId = await createMissionWithConfirmedPlan(missions);
+    await missions.activateMissionWithHR({ missionId });
 
     const response = await handleApiRequest(
       {
@@ -262,7 +272,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions/negotiate/confirm",
         body: { missionId },
       },
-      { missions, openclaw: failingOpenClaw },
+      { missions, openclaw: fakeOpenClaw() },
     );
     await Promise.resolve();
     await Promise.resolve();
@@ -343,15 +353,12 @@ describe("handleApiRequest", () => {
   });
 
   it("starts an OpenClaw task and exposes running execution state immediately", async () => {
-    const missions = new InMemoryMissionService();
-    const pendingOpenClaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask"> = {
-      async health() {
-        return { available: true, version: "test-openclaw" };
-      },
+    const pendingRuntime: MissionExecutionRuntime = {
       runAgentTask() {
         return new Promise(() => {});
       },
     };
+    const missions = new InMemoryMissionService({ runtime: pendingRuntime });
     const mission = await missions.createMission({
       goal: "Grow Xiaohongshu account",
       successMetrics: ["daily review generated"],
@@ -371,7 +378,7 @@ describe("handleApiRequest", () => {
           message: "Create a first execution plan",
         },
       },
-      { missions, openclaw: pendingOpenClaw },
+      { missions, openclaw: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(202);

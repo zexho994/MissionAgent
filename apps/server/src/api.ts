@@ -1,7 +1,6 @@
 import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
 import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
-import { buildOpenClawMessage, extractSourcesFromOpenClawOutput } from "./runtime-bridge.js";
 
 export interface ApiRequest {
   method: string;
@@ -130,8 +129,7 @@ export async function handleApiRequest(
       if (!task) {
         throw new Error(`No runnable task was created for mission: ${missionId}`);
       }
-      const execution = startOpenClawExecution({
-        deps,
+      const execution = deps.missions.executeTask({
         missionId,
         taskId: task.id,
         message: "Execute the first confirmed mission task automatically after HR team approval.",
@@ -213,7 +211,7 @@ export async function handleApiRequest(
       const missionId = expectString(body.missionId, "missionId");
       const taskId = expectString(body.taskId, "taskId");
       const message = expectString(body.message, "message");
-      const execution = startOpenClawExecution({ deps, missionId, taskId, message });
+      const execution = deps.missions.executeTask({ missionId, taskId, message });
 
       return json(202, { execution, snapshot: deps.missions.snapshot() });
     }
@@ -515,55 +513,6 @@ function firstRunnableMissionTask(snapshot: ReturnType<InMemoryMissionService["s
   return snapshot.tasks
     .filter((task) => task.missionId === missionId && statusOrder.has(task.status))
     .sort((a, b) => (statusOrder.get(a.status) ?? 99) - (statusOrder.get(b.status) ?? 99))[0];
-}
-
-function startOpenClawExecution(input: {
-  deps: ApiDependencies;
-  missionId: string;
-  taskId: string;
-  message: string;
-}) {
-  const snapshot = input.deps.missions.snapshot();
-  const mission = snapshot.missions.find((candidate) => candidate.id === input.missionId);
-  const task = snapshot.tasks.find((candidate) => candidate.id === input.taskId);
-  if (!mission) {
-    throw new Error(`Mission not found: ${input.missionId}`);
-  }
-  if (!task || task.missionId !== mission.id) {
-    throw new Error(`Task not found in mission: ${input.taskId}`);
-  }
-  const execution = input.deps.missions.startExecution({
-    missionId: input.missionId,
-    taskId: input.taskId,
-  });
-
-  void input.deps.openclaw
-    .runAgentTask({
-      message: buildOpenClawMessage({ message: input.message, mission, task }),
-      timeoutSeconds: 300,
-    })
-    .then((result) => {
-      const sources = extractSourcesFromOpenClawOutput(result.output);
-      input.deps.missions.submitExecutionResult({
-        executionId: execution.id,
-        missionId: input.missionId,
-        taskId: input.taskId,
-        content: {
-          openclaw: result.output,
-          stderr: result.stderr,
-        },
-        evidence: ["openclaw:local"],
-        sources,
-      });
-    })
-    .catch((error: unknown) => {
-      input.deps.missions.failExecution({
-        executionId: execution.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-
-  return execution;
 }
 
 function expectRecord(value: unknown, field: string): Record<string, unknown> {
