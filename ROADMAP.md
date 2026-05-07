@@ -92,10 +92,10 @@
 **目标**: 支持长期Mission中的定时任务、周期性检查、和条件触发的执行。
 
 ### 4.1 任务调度器
-- [ ] 设计调度器接口（cron表达式 + 任务模板）
-- [ ] 实现调度器服务，支持注册/取消/修改调度
-- [ ] 调度触发时自动创建Task并分配给对应Agent
-- [ ] 调度持久化（系统重启后恢复调度）
+- [x] 设计调度器接口（cron表达式 + 任务模板）（`MissionScheduler` + `SchedulerDeps`）
+- [x] 实现调度器服务，支持注册/取消/修改调度（`MissionScheduler.start/stop/addRule/removeRule/updateRule`）
+- [x] 调度触发时自动创建Task并分配给对应Agent（执行入口已通过 `MissionService.executeTask` + `executeScheduledTask` 回调接通）
+- [x] 调度持久化（系统重启后恢复调度）（`InMemoryMissionService.restoreSchedulers`）
 
 ### 4.2 周期性任务模板
 - [ ] 定义 `ScheduledTaskTemplate`（触发规则、执行模板、分配角色）
@@ -125,8 +125,8 @@
 
 ### 5.1 执行结果反馈
 - [x] 任务完成后自动触发评估（`submitExecutionResult()` → `buildExecutionResultFeedback()`）
-- [ ] 评估结果通知相关Agent（谁需要知道这个结果）
-- [x] 反馈记录持久化与查询（已完成，但尚未实现通知下游Agent）
+- [x] 评估结果通知相关Agent（`review_completed` / `review_revision_needed` 事件已 dispatch 到 `AgentConversationBus`）
+- [x] 反馈记录持久化与查询
 - [ ] 失败任务的自动重规划（不是简单重试，而是调整策略）
 
 ### 5.2 策略自适应
