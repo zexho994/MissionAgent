@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   type MissionBrief,
   type RoleSpec,
+  SchedulePlanGenerationError,
 } from "@digitalagent/core";
 import { createHRAgent, type MissionAnalysis } from "./hr-agent.js";
 import type { LlmService } from "@digitalagent/runtime";
@@ -383,6 +384,87 @@ describe("HRAgent", () => {
         "Engagement drop alert",
       ]);
       expect(proposal.schedulePlan[2]?.conditionEvaluatePrompt).toContain("20%");
+    });
+
+    it("AC1: scheduleStrategy llm with empty LLM response throws SchedulePlanGenerationError", async () => {
+      const mockLlmEmpty: LlmService = {
+        call: async (_messages, options) => {
+          const content = "[]";
+          if (options?.onStream) {
+            for (const char of content) options.onStream(char);
+          }
+          return {
+            content,
+            model: "test-model",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+          };
+        },
+        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const hrAgent = createHRAgent({ llm: mockLlmEmpty });
+      const roleSpecs: RoleSpec[] = [
+        {
+          id: "data_analyst",
+          name: "Data Analyst",
+          purpose: "Track metrics",
+          responsibilities: ["Analyze engagement"],
+          allowedTools: ["analytics"],
+          inputContract: {},
+          outputContract: {},
+          successCriteria: ["Metrics reported"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+        },
+      ];
+
+      await expect(
+        hrAgent.proposeTeam("mission-id", roleSpecs, missionBrief, { scheduleStrategy: "llm" })
+      ).rejects.toThrow(SchedulePlanGenerationError);
+    });
+
+    it("AC2: scheduleStrategy auto with brief calls LLM exactly once", async () => {
+      let callCount = 0;
+      const mockLlmOnce: LlmService = {
+        call: async (_messages, options) => {
+          callCount++;
+          const content = JSON.stringify([
+            {
+              name: "daily",
+              cronExpression: "0 9 * * *",
+              assigneeRole: "analyst",
+              taskDescription: "check",
+              justification: "ok",
+            },
+          ]);
+          if (options?.onStream) {
+            for (const char of content) options.onStream(char);
+          }
+          return {
+            content,
+            model: "test-model",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+          };
+        },
+        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const hrAgent = createHRAgent({ llm: mockLlmOnce });
+      const roleSpecs: RoleSpec[] = [
+        {
+          id: "analyst",
+          name: "Analyst",
+          purpose: "Analyze",
+          responsibilities: ["Analyze"],
+          allowedTools: ["analytics"],
+          inputContract: {},
+          outputContract: {},
+          successCriteria: ["Done"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+        },
+      ];
+
+      await hrAgent.proposeTeam("mission-id", roleSpecs, missionBrief, { scheduleStrategy: "auto" });
+      expect(callCount).toBe(1);
     });
 
     it("uses rule-based schedule plan by default and skips the LLM call", async () => {

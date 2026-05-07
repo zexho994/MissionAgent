@@ -4,6 +4,7 @@ import {
   type RoleSpec,
   type MissionBrief,
   type ValidationResult,
+  SchedulePlanGenerationError,
 } from "@digitalagent/core";
 import type { LlmMessage, LlmService } from "@digitalagent/runtime";
 
@@ -26,6 +27,7 @@ export interface SchedulePlanItem {
   conditionDescription?: string;
   conditionSourceRole?: string;
   conditionEvaluatePrompt?: string;
+  templateId?: string;
 }
 
 export interface TeamProposal {
@@ -54,6 +56,10 @@ export interface HRAgentOptions {
   timeoutMs?: number;
   idleTimeoutMs?: number;
   onToken?: (token: string) => void;
+}
+
+export interface ProposeTeamOptions {
+  scheduleStrategy?: "auto" | "llm" | "deterministic";
 }
 
 export function createHRAgent(options: HRAgentOptions) {
@@ -198,7 +204,7 @@ export function createHRAgent(options: HRAgentOptions) {
     missionId: string,
     roleSpecs: RoleSpec[],
     brief?: MissionBrief,
-    options?: { useLlmSchedule?: boolean },
+    options?: ProposeTeamOptions,
   ): Promise<TeamProposal> {
     const enforcedSpecs = roleSpecs.length > maxTeamSize
       ? roleSpecs.slice(0, maxTeamSize)
@@ -215,9 +221,20 @@ export function createHRAgent(options: HRAgentOptions) {
     const estimatedDuration = estimateDuration(totalBudget.maxRuntimeMinutes);
     const riskAssessment = assessRisks(enforcedSpecs);
     const collaborationPlan = designCollaborationPlan(enforcedSpecs);
-    const schedulePlan = brief && options?.useLlmSchedule === true
-      ? await proposeSchedulePlan(brief, enforcedSpecs)
-      : designSchedulePlan(enforcedSpecs, brief);
+    // Support legacy useLlmSchedule option for backward compatibility
+    const legacyUseLlm = (options as { useLlmSchedule?: boolean })?.useLlmSchedule === true;
+    const scheduleStrategy = options?.scheduleStrategy
+      ?? (legacyUseLlm ? "llm" : undefined);
+    let schedulePlan: SchedulePlanItem[];
+    if (scheduleStrategy === undefined) {
+      // No scheduleStrategy specified and not legacy useLlmSchedule — use deterministic
+      schedulePlan = designSchedulePlan(enforcedSpecs, brief);
+    } else if (scheduleStrategy === "deterministic") {
+      schedulePlan = designSchedulePlan(enforcedSpecs, brief);
+    } else {
+      // "auto" or "llm" — LLM is required
+      schedulePlan = await proposeSchedulePlan(brief!, enforcedSpecs, scheduleStrategy === "llm");
+    }
 
     return {
       missionId,
@@ -235,8 +252,8 @@ export function createHRAgent(options: HRAgentOptions) {
   async function proposeSchedulePlan(
     brief: MissionBrief,
     roleSpecs: RoleSpec[],
+    forceLlm: boolean = false,
   ): Promise<SchedulePlanItem[]> {
-    const fallback = designSchedulePlan(roleSpecs, brief);
     const systemPrompt = buildHRAgentSystemPrompt();
     const userPromptContent = buildSchedulePlanPrompt(brief, roleSpecs);
 
@@ -246,10 +263,29 @@ export function createHRAgent(options: HRAgentOptions) {
         { role: "user", content: userPromptContent },
       ]);
       const parsed = parseSchedulePlan(content, roleSpecs);
-      return parsed.length > 0 ? parsed : fallback;
+
+      if (parsed.length === 0) {
+        throw new SchedulePlanGenerationError("empty_plan", { rawResponse: content });
+      }
+
+      // Validate all items have required fields
+      const itemErrors: string[] = [];
+      for (const item of parsed) {
+        if (!item.name || !item.assigneeRole || !item.taskDescription || !item.justification) {
+          itemErrors.push(`Item missing required fields: ${JSON.stringify(item)}`);
+        }
+      }
+      if (itemErrors.length > 0) {
+        throw new SchedulePlanGenerationError("all_items_invalid", { itemErrors });
+      }
+
+      return parsed;
     } catch (error) {
-      console.error("[HR Agent] schedulePlan generation failed, using fallback:", error instanceof Error ? error.message : String(error));
-      return fallback;
+      if (error instanceof SchedulePlanGenerationError) throw error;
+      if (error instanceof SyntaxError) {
+        throw new SchedulePlanGenerationError("no_json_in_response", { rawResponse: String(error) });
+      }
+      throw new SchedulePlanGenerationError("llm_call_failed", {}, error);
     }
   }
 
