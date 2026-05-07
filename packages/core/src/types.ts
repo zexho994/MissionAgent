@@ -275,6 +275,21 @@ export interface ConditionTrigger {
 
 export type ScheduleTrigger = CronTrigger | ConditionTrigger;
 
+export interface ScheduledTaskTemplate {
+  id: string;                            // "daily_metric_check"
+  name: string;                          // "Daily metric check"
+  description: string;                   // shown to HR's LLM as catalog
+  applicableRolePatterns: string[];      // regex strings — which roles fit
+  trigger: ScheduleTrigger;              // pre-baked
+  taskTemplate: {
+    titleTemplate: string;               // "{{role.name}} 每日数据检查"
+    contract: TaskContract;
+    priority: "low" | "normal" | "high";
+  };
+  maxConcurrent: number;
+  metadata: Record<string, unknown>;     // includes { source: "builtin", templateId }
+}
+
 export interface ScheduleRule {
   id: string;
   name: string;
