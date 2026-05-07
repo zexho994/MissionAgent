@@ -25,8 +25,7 @@ export async function activateWithHRAgent(
   const hrAgent = createHRAgent({ llm });
   const agentFactory = createAgentFactory();
 
-  const analysis = await hrAgent.receiveMissionBrief(mission.brief!);
-  const roleSpecs = await hrAgent.generateRoleSpecs(mission.id, analysis);
+  const { roleSpecs } = await hrAgent.analyzeAndPlan(mission.id, mission.brief!);
   const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs);
 
   const agents = proposal.roles.map((spec, index) =>

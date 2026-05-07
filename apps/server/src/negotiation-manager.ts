@@ -64,19 +64,12 @@ export class NegotiationManager {
     const hrAgentId = hrAgentRecord.id;
 
     const hrAgent = createHRAgent({ llm: this.llm });
-    const analysis = await hrAgent.receiveMissionBrief(mission.brief);
+    const { analysis, roleSpecs } = await hrAgent.analyzeAndPlan(mission.id, mission.brief);
     this.appendMessage({
       missionId: mission.id,
       fromAgentId: hrAgentId,
       type: "agent_notify",
-      content: `HR 已完成 MissionBrief 分析：需要 ${analysis.estimatedTeamSize} 个核心角色，复杂度为 ${analysis.complexity}。`,
-    });
-    const roleSpecs = await hrAgent.generateRoleSpecs(mission.id, analysis);
-    this.appendMessage({
-      missionId: mission.id,
-      fromAgentId: hrAgentId,
-      type: "agent_notify",
-      content: `HR 已生成 ${roleSpecs.length} 个角色规格，正在整理团队提案。`,
+      content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
     });
     const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
 

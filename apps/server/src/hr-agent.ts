@@ -67,6 +67,7 @@ export function createHRAgent(options: HRAgentOptions) {
   return {
     receiveMissionBrief,
     generateRoleSpecs,
+    analyzeAndPlan,
     proposeTeam,
     negotiateRoleSpec,
   };
@@ -136,6 +137,57 @@ export function createHRAgent(options: HRAgentOptions) {
     } catch (error) {
       console.error("[HR Agent] generateRoleSpecs failed, using fallback:", error instanceof Error ? error.message : String(error));
       return fallbackRoleSpecs(missionId, analysis);
+    }
+  }
+
+  async function analyzeAndPlan(
+    missionId: string,
+    brief: MissionBrief,
+  ): Promise<{ analysis: MissionAnalysis; roleSpecs: RoleSpec[] }> {
+    const systemPrompt = buildHRAgentSystemPrompt();
+    const userPrompt = buildAnalyzeAndPlanPrompt(brief);
+
+    try {
+      const content = await llmCallStream([
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ]);
+
+      const json = extractJson(content, "object");
+      if (!json) {
+        throw new Error("No JSON object found in analyzeAndPlan response");
+      }
+      const parsed = JSON.parse(json) as {
+        analysis?: unknown;
+        roleSpecs?: unknown;
+      };
+
+      const analysis = buildAnalysis(parsed.analysis, brief);
+      const roleSpecs = buildRoleSpecsFromArray(parsed.roleSpecs, missionId);
+      if (roleSpecs.length === 0) {
+        throw new Error("analyzeAndPlan response contained no valid roleSpecs");
+      }
+      for (const spec of roleSpecs) {
+        const validation = validateRoleSpec(spec);
+        if (!validation.isValid) {
+          throw new Error(`Invalid role spec ${spec.name}: ${validation.errors.join(", ")}`);
+        }
+      }
+
+      return { analysis, roleSpecs };
+    } catch (error) {
+      console.error(
+        "[HR Agent] analyzeAndPlan failed, using fallback:",
+        error instanceof Error ? error.message : String(error),
+      );
+      const fallbackAnalysis: MissionAnalysis = {
+        ...fallbackMissionAnalysis(brief),
+        missionGoal: brief.goal,
+      };
+      return {
+        analysis: fallbackAnalysis,
+        roleSpecs: fallbackRoleSpecs(missionId, fallbackAnalysis),
+      };
     }
   }
 
@@ -293,6 +345,47 @@ function buildRoleSpecsPrompt(missionId: string, analysis: MissionAnalysis): str
   ].join("\n");
 }
 
+function buildAnalyzeAndPlanPrompt(brief: MissionBrief): string {
+  return [
+    "Analyze this mission brief and propose a team in a single response.",
+    "Return user-facing text fields in Chinese for: role name, purpose, responsibilities, success criteria, riskFactors.",
+    "",
+    `**Goal:** ${brief.goal}`,
+    `**Scope:** ${brief.scope}`,
+    `**Success Metrics:** ${brief.successMetrics.join(", ")}`,
+    `**Constraints:** ${brief.constraints.join(", ")}`,
+    `**Target Audience:** ${brief.targetAudience || "Not specified"}`,
+    `**Timeline:** ${brief.timeline || "Not specified"}`,
+    "",
+    "Respond with a single JSON object that contains BOTH the mission analysis and the role specs:",
+    "{",
+    '  "analysis": {',
+    '    "requiredCapabilities": ["capability1", "capability2"],',
+    '    "estimatedTeamSize": 3,',
+    '    "priorityRoles": ["role1", "role2"],',
+    '    "complexity": "low" | "medium" | "high",',
+    '    "riskFactors": ["risk1", "risk2"]',
+    "  },",
+    '  "roleSpecs": [',
+    "    {",
+    '      "name": "中文角色名",',
+    '      "purpose": "中文角色目标",',
+    '      "responsibilities": ["中文职责1", "中文职责2"],',
+    '      "capabilities": ["capability1", "capability2"],',
+    '      "allowedTools": ["tool1", "tool2"],',
+    '      "successCriteria": ["中文成功标准"],',
+    '      "budget": { "maxRuntimeMinutes": 120, "maxTasks": 5 }',
+    "    }",
+    "  ]",
+    "}",
+    "",
+    "Constraints:",
+    "- The roleSpecs MUST cover the priorityRoles from the analysis (one role per priority role).",
+    "- Keep team size between 2 and 5 unless the brief clearly demands otherwise.",
+    "- Each role must have non-empty responsibilities, allowedTools, successCriteria, and a positive budget.",
+  ].join("\n");
+}
+
 function buildNegotiationPrompt(spec: RoleSpec, feedback: string): string {
   return [
     "The owner provided feedback on this role specification. Adjust accordingly and keep user-facing fields in Chinese:",
@@ -311,6 +404,44 @@ function buildNegotiationPrompt(spec: RoleSpec, feedback: string): string {
     "- For revision: { revised role object }",
     "- For split: [ { role1 }, { role2 } ]",
   ].join("\n");
+}
+
+function buildAnalysis(raw: unknown, brief: MissionBrief): MissionAnalysis {
+  const candidate = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const complexityRaw = candidate.complexity;
+  const complexity: MissionAnalysis["complexity"] =
+    complexityRaw === "low" || complexityRaw === "high" ? complexityRaw : "medium";
+  return {
+    missionGoal: brief.goal,
+    requiredCapabilities: stringArray(candidate.requiredCapabilities, ["general"]),
+    estimatedTeamSize: typeof candidate.estimatedTeamSize === "number" && candidate.estimatedTeamSize > 0
+      ? Math.floor(candidate.estimatedTeamSize)
+      : 2,
+    priorityRoles: stringArray(candidate.priorityRoles, ["generalist"]),
+    complexity,
+    riskFactors: stringArray(candidate.riskFactors, []),
+  };
+}
+
+function buildRoleSpecsFromArray(raw: unknown, _missionId: string): RoleSpec[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+    .map((entry) => ({
+      ...(entry as Omit<RoleSpec, "id" | "inputContract" | "outputContract"> & {
+        inputContract?: Record<string, unknown>;
+        outputContract?: Record<string, unknown>;
+      }),
+      id: createId("role"),
+      inputContract: (entry.inputContract as Record<string, unknown> | undefined) ?? {},
+      outputContract: (entry.outputContract as Record<string, unknown> | undefined) ?? {},
+    }));
+}
+
+function stringArray(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) return fallback;
+  const filtered = value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+  return filtered.length > 0 ? filtered : fallback;
 }
 
 function parseMissionAnalysis(content: string): Omit<MissionAnalysis, "missionGoal"> & { missionGoal?: string } {

@@ -359,6 +359,93 @@ describe("HRAgent", () => {
     });
   });
 
+  describe("analyzeAndPlan", () => {
+    it("performs analysis and role spec generation in a single LLM call", async () => {
+      let callCount = 0;
+      mockLlm.call = async (_messages, options) => {
+        callCount += 1;
+        const content = JSON.stringify({
+          analysis: {
+            requiredCapabilities: ["research", "design"],
+            estimatedTeamSize: 2,
+            priorityRoles: ["researcher"],
+            complexity: "medium",
+            riskFactors: ["timeline tight"],
+          },
+          roleSpecs: [
+            {
+              name: "研究员",
+              purpose: "做行业研究",
+              responsibilities: ["收集资料", "整理结论"],
+              capabilities: ["research"],
+              allowedTools: ["web_search"],
+              successCriteria: ["产出研究报告"],
+              budget: { maxRuntimeMinutes: 90, maxTasks: 4 },
+            },
+            {
+              name: "设计师",
+              purpose: "做视觉设计",
+              responsibilities: ["视觉风格", "封面输出"],
+              capabilities: ["design"],
+              allowedTools: ["image_editor"],
+              successCriteria: ["视觉规范确认"],
+              budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+            },
+          ],
+        });
+        if (options?.onStream) {
+          for (const char of content) options.onStream(char);
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      };
+
+      const hrAgent = createHRAgent({ llm: mockLlm });
+      const result = await hrAgent.analyzeAndPlan("mission-merged", missionBrief);
+
+      expect(callCount).toBe(1);
+      expect(result.analysis.missionGoal).toBe(missionBrief.goal);
+      expect(result.analysis.requiredCapabilities).toContain("research");
+      expect(result.analysis.estimatedTeamSize).toBe(2);
+      expect(result.roleSpecs).toHaveLength(2);
+      const first = result.roleSpecs[0];
+      expect(first?.id).toBeTruthy();
+      expect(first?.name).toBe("研究员");
+      expect(first?.budget.maxRuntimeMinutes).toBe(90);
+    });
+
+    it("falls back to rule-based analysis and role specs when LLM output is unparseable", async () => {
+      let callCount = 0;
+      mockLlm.call = async (_messages, options) => {
+        callCount += 1;
+        const content = "not-valid-json";
+        if (options?.onStream) {
+          for (const char of content) options.onStream(char);
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      };
+
+      const hrAgent = createHRAgent({ llm: mockLlm });
+      const result = await hrAgent.analyzeAndPlan("mission-fallback", missionBrief);
+
+      expect(callCount).toBe(1);
+      expect(result.analysis.missionGoal).toBe(missionBrief.goal);
+      expect(result.roleSpecs.length).toBeGreaterThan(0);
+      const first = result.roleSpecs[0];
+      expect(first?.id).toBeTruthy();
+      expect(first?.budget.maxTasks).toBeGreaterThan(0);
+    });
+  });
+
   describe("negotiateRoleSpec", () => {
     it("should handle role spec negotiation with owner", async () => {
       const hrAgent = createHRAgent({ llm: mockLlm });
