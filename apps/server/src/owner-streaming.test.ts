@@ -45,6 +45,59 @@ describe("runOwnerLlmStreaming", () => {
     ]);
   });
 
+  it("does not create a MissionBrief while an Owner follow-up is unanswered", async () => {
+    const harness = createHarness({
+      messages: [
+        { type: "owner_followup", createdAt: "2026-05-07T10:00:00.000Z" },
+      ],
+    });
+    const llm = staticLlm(JSON.stringify({
+      status: "ready",
+      brief: {
+        goal: "Build an HTML knowledge map",
+        scope: "Framework comparison",
+        constraints: [],
+        successMetrics: ["HTML created"],
+        keyAssumptions: [],
+      },
+    }));
+
+    await runOwnerLlmStreaming(llm, baseInput(), harness.deps);
+
+    expect(harness.mission.brief).toBeUndefined();
+    expect(harness.messages).toEqual([]);
+    expect(harness.agentPatch).toEqual({
+      status: "idle",
+      lastAction: "Waiting for user answer before generating MissionBrief",
+    });
+  });
+
+  it("allows MissionBrief creation after user answers the latest Owner follow-up", async () => {
+    const harness = createHarness({
+      messages: [
+        { type: "owner_followup", createdAt: "2026-05-07T10:00:00.000Z" },
+        { type: "user_message", createdAt: "2026-05-07T10:01:00.000Z" },
+      ],
+    });
+    const llm = staticLlm(JSON.stringify({
+      status: "ready",
+      brief: {
+        goal: "Build an HTML knowledge map",
+        scope: "Framework comparison",
+        constraints: [],
+        successMetrics: ["HTML created"],
+        keyAssumptions: [],
+      },
+    }));
+
+    await runOwnerLlmStreaming(llm, baseInput(), harness.deps);
+
+    expect(harness.mission.brief?.goal).toBe("Build an HTML knowledge map");
+    expect(harness.messages).toEqual([
+      expect.objectContaining({ type: "mission_brief" }),
+    ]);
+  });
+
   it("keeps structured needs_info decision as follow-up and does not create a brief", async () => {
     const harness = createHarness();
     const llm = staticLlm(JSON.stringify({
@@ -75,7 +128,7 @@ function baseInput() {
   };
 }
 
-function createHarness() {
+function createHarness(options: { messages?: Array<{ type: string; createdAt: string }> } = {}) {
   let mission: Mission = {
     ...createMission({
       goal: "Operate Xiaohongshu",
@@ -91,6 +144,7 @@ function createHarness() {
 
   const deps: OwnerStreamingDeps = {
     getMission: () => mission,
+    getMessages: () => options.messages ?? [],
     setMission: (next) => { mission = next; },
     appendMessage: (msg) => { messages.push({ type: msg.type, content: msg.content }); },
     updateAgent: (_id, patch) => { agentPatch = patch; },

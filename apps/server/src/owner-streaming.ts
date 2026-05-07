@@ -4,6 +4,7 @@ import { extractQuestionWithOptions, parseOwnerDecision } from "./owner/index.js
 
 export interface OwnerStreamingDeps {
   getMission(missionId: string): Mission | undefined;
+  getMessages(missionId: string): Array<{ type: string; createdAt: string }>;
   setMission(mission: Mission): void;
   appendMessage(msg: { missionId: string; fromAgentId: string; type: string; content: string; options?: unknown }): void;
   updateAgent(agentId: string, patch: { status: string; lastAction: string }): void;
@@ -53,6 +54,14 @@ export async function runOwnerLlmStreaming(
     const messageOptions = choiceResult?.options ? { options: choiceResult.options } : undefined;
 
     if (decision.status === "ready") {
+      if (hasUnansweredOwnerFollowup(deps.getMessages(missionId))) {
+        deps.updateAgent(ownerId, {
+          status: "idle",
+          lastAction: "Waiting for user answer before generating MissionBrief",
+        });
+        deps.persist();
+        return;
+      }
       const currentMission = deps.getMission(missionId);
       if (!currentMission) throw new Error("Mission disappeared during LLM call");
       deps.setMission({ ...currentMission, brief: decision.brief });
@@ -110,4 +119,19 @@ export async function runOwnerLlmStreaming(
     });
     deps.persist();
   }
+}
+
+function hasUnansweredOwnerFollowup(messages: Array<{ type: string; createdAt: string }>): boolean {
+  const sorted = [...messages].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  const latestOwnerFollowupIndex = findLastMessageIndex(sorted, "owner_followup");
+  if (latestOwnerFollowupIndex === -1) return false;
+  const latestUserMessageIndex = findLastMessageIndex(sorted, "user_message");
+  return latestUserMessageIndex < latestOwnerFollowupIndex;
+}
+
+function findLastMessageIndex(messages: Array<{ type: string }>, type: string): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.type === type) return index;
+  }
+  return -1;
 }

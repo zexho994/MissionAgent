@@ -2702,6 +2702,7 @@ export class InMemoryMissionService {
       isCreation: input.isCreation,
     }, {
       getMission: (id) => this.missions.get(id),
+      getMessages: (id) => this.agentMessagesForMission(id),
       setMission: (m) => this.missions.set(m.id, m),
       appendMessage: (msg) => this.appendMessage(msg as any),
       updateAgent: (id, patch) => this.updateAgent(id, patch as any),
