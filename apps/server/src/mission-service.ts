@@ -508,9 +508,11 @@ export interface MissionServiceOptions {
 }
 
 export type StreamEventListener = (event: {
-  type: "token" | "done";
+  type: "token" | "done" | "hr_progress" | "hr_progress_done";
   content?: string;
   messageId?: string;
+  tokensReceived?: number;
+  phase?: string;
 }) => void;
 
 export interface StreamSubscription {
@@ -576,6 +578,7 @@ export class InMemoryMissionService {
         missions: this.missions,
         tasks: this.tasks,
         agentMessages: this.agentMessages,
+        notifyStream: (missionId, event) => this.notifyStreamListeners(missionId, event),
       });
     }
     return this.negotiationManager;

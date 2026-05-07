@@ -258,6 +258,20 @@ h1, h2, p { margin-top: 0; }
   border-color: #2563eb;
   border-width: 2px;
 }
+.bubble.hr { justify-self: start; }
+.bubble.hr.thinking {
+  border-style: dashed;
+  border-color: #f59e0b;
+  background: #fffbeb;
+  opacity: 0.85;
+}
+.hr-progress-meta {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #92400e;
+  font-variant-numeric: tabular-nums;
+}
 .brief-summary {
   display: grid;
   gap: 8px;

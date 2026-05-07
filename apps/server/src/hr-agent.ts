@@ -53,6 +53,7 @@ export interface HRAgentOptions {
   preferredTeamSize?: [number, number];
   timeoutMs?: number;
   idleTimeoutMs?: number;
+  onToken?: (token: string) => void;
 }
 
 export function createHRAgent(options: HRAgentOptions) {
@@ -62,6 +63,7 @@ export function createHRAgent(options: HRAgentOptions) {
     preferredTeamSize = [2, 5],
     timeoutMs = 90000,
     idleTimeoutMs = 30000,
+    onToken,
   } = options;
 
   return {
@@ -81,6 +83,7 @@ export function createHRAgent(options: HRAgentOptions) {
       idleTimeoutMs,
       onStream: (token: string) => {
         content += token;
+        onToken?.(token);
       },
     });
     return content;

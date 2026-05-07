@@ -23,7 +23,18 @@ export interface NegotiationManagerOptions {
   tasks: Map<string, import("@digitalagent/core").Task>;
   agentMessages: Map<string, AgentMessage>;
   maxRounds?: number;
+  notifyStream?: HrStreamNotifier;
 }
+
+type HrStreamNotifier = (
+  missionId: string,
+  event: {
+    type: "hr_progress" | "hr_progress_done";
+    messageId: string;
+    tokensReceived?: number;
+    phase?: "analyzing" | "negotiating";
+  },
+) => void;
 
 export interface StoredNegotiationState {
   missionId: string;
@@ -42,6 +53,7 @@ export class NegotiationManager {
   private readonly tasks: Map<string, import("@digitalagent/core").Task>;
   private readonly agentMessages: Map<string, AgentMessage>;
   private readonly maxRounds: number;
+  private readonly notifyStream: HrStreamNotifier | undefined;
   private readonly activeNegotiations = new Map<string, { proposal: TeamProposal; ownerContext: OwnerContext; roundCount: number; hrAgentId: string }>();
 
   constructor(options: NegotiationManagerOptions) {
@@ -53,6 +65,7 @@ export class NegotiationManager {
     this.tasks = options.tasks;
     this.agentMessages = options.agentMessages;
     this.maxRounds = options.maxRounds ?? 3;
+    this.notifyStream = options.notifyStream;
   }
 
   async startNegotiation(input: { missionId: string }, mission: Mission): Promise<TeamProposal> {
@@ -63,15 +76,24 @@ export class NegotiationManager {
     const hrAgentRecord = this.getOrCreateHrAgent(mission.id);
     const hrAgentId = hrAgentRecord.id;
 
-    const hrAgent = createHRAgent({ llm: this.llm });
-    const { analysis, roleSpecs } = await hrAgent.analyzeAndPlan(mission.id, mission.brief);
-    this.appendMessage({
-      missionId: mission.id,
-      fromAgentId: hrAgentId,
-      type: "agent_notify",
-      content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
-    });
-    const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
+    const stream = this.startHrStream(mission.id, "analyzing");
+    let proposal: TeamProposal;
+    try {
+      const hrAgent = createHRAgent({
+        llm: this.llm,
+        ...(stream.onToken === undefined ? {} : { onToken: stream.onToken }),
+      });
+      const { analysis, roleSpecs } = await hrAgent.analyzeAndPlan(mission.id, mission.brief);
+      this.appendMessage({
+        missionId: mission.id,
+        fromAgentId: hrAgentId,
+        type: "agent_notify",
+        content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
+      });
+      proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
+    } finally {
+      stream.done();
+    }
 
     const owner = this.agentByRole(mission.id, "owner");
     const ownerContext: OwnerContext = {
@@ -166,13 +188,22 @@ export class NegotiationManager {
       return { proposal, summary };
     }
 
-    const hrAgent = createHRAgent({ llm: this.llm });
+    const stream = this.startHrStream(mission.id, "negotiating");
+    let revisedProposal: TeamProposal;
+    try {
+      const hrAgent = createHRAgent({
+        llm: this.llm,
+        ...(stream.onToken === undefined ? {} : { onToken: stream.onToken }),
+      });
 
-    const revisedSpecs = await Promise.all(
-      proposal.roles.map((spec) => hrAgent.negotiateRoleSpec(mission.id, spec, input.feedback)),
-    );
-    const flatSpecs = revisedSpecs.flat();
-    const revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
+      const revisedSpecs = await Promise.all(
+        proposal.roles.map((spec) => hrAgent.negotiateRoleSpec(mission.id, spec, input.feedback)),
+      );
+      const flatSpecs = revisedSpecs.flat();
+      revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
+    } finally {
+      stream.done();
+    }
 
     const updatedContext: OwnerContext = {
       ...ownerContext,
@@ -361,6 +392,44 @@ export class NegotiationManager {
       throw new Error(`Agent not found for role: ${role}`);
     }
     return agent;
+  }
+
+  private startHrStream(
+    missionId: string,
+    phase: "analyzing" | "negotiating",
+  ): { onToken: ((token: string) => void) | undefined; done: () => void } {
+    const notifier = this.notifyStream;
+    if (!notifier) {
+      return { onToken: undefined, done: () => undefined };
+    }
+
+    const messageId = createId("hr_thinking");
+    const throttleMs = 100;
+    let tokensReceived = 0;
+    let lastEmitAt = 0;
+    let alreadyDone = false;
+
+    notifier(missionId, { type: "hr_progress", messageId, tokensReceived, phase });
+
+    const flush = () => {
+      lastEmitAt = Date.now();
+      notifier(missionId, { type: "hr_progress", messageId, tokensReceived, phase });
+    };
+
+    return {
+      onToken: (token: string) => {
+        tokensReceived += token.length;
+        if (Date.now() - lastEmitAt >= throttleMs) {
+          flush();
+        }
+      },
+      done: () => {
+        if (alreadyDone) return;
+        alreadyDone = true;
+        if (tokensReceived > 0) flush();
+        notifier(missionId, { type: "hr_progress_done", messageId, tokensReceived, phase });
+      },
+    };
   }
 
   private appendMessage(input: Omit<AgentMessage, "id" | "createdAt"> & { options?: ParsedChoice[] }): void {
