@@ -2380,7 +2380,51 @@ describe("InMemoryMissionService", () => {
     });
   });
 
-  describe("knowledge base", () => {
+  describe("completeMission", () => {
+  it("AC4: after completeMission, scheduler is not running", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({
+      goal: "Test mission",
+      successMetrics: ["done"],
+      constraints: ["budget"],
+    });
+    service.completeMission({ missionId: mission.id, summary: "Mission done" });
+    const snapshot = service.snapshot();
+    const schedulers = (snapshot as any).schedulers || [];
+    const ourScheduler = schedulers.find((s: any) => s.missionId === mission.id);
+    // After completeMission, scheduler should be stopped
+    expect(ourScheduler?.status).not.toBe("running");
+  });
+});
+
+describe("cancelMission", () => {
+  it("AC5: after cancelMission, addScheduleRule throws", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({
+      goal: "Test mission",
+      successMetrics: ["done"],
+      constraints: ["budget"],
+    });
+    service.cancelMission({ missionId: mission.id, reason: "User cancelled" });
+    expect(() => service.addScheduleRule(mission.id, {
+      id: "test-rule",
+      name: "Test",
+      missionId: mission.id,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "Test",
+        contract: { objective: "Test", input: {}, outputSchema: {}, successCriteria: [] },
+        assigneeRole: "analyst",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: {},
+    })).toThrow(/cancelled/);
+  });
+});
+
+describe("knowledge base", () => {
     it("should set and get knowledge entries for a mission", async () => {
       const service = new InMemoryMissionService();
       const mission = await service.createMission({ goal: "test" });

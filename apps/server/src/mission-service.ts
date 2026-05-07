@@ -7,6 +7,8 @@ import {
   createTask,
   transitionTask,
   validateScheduleRule,
+  completeMission,
+  cancelMission,
   type Artifact,
   type Mission,
   type MissionBrief,
@@ -154,7 +156,10 @@ export type AgentMessageType =
   | "agent_request"
   | "agent_notify"
   | "agent_discussion"
-  | "negotiation_escalated";
+  | "negotiation_escalated"
+  | "mission_completed"
+  | "mission_cancelled"
+  | "team_planning_failed";
 
 export interface ParsedChoice {
   label: string;
@@ -1539,10 +1544,63 @@ export class InMemoryMissionService {
     return this.missions.get(mission.id)!;
   }
 
+  completeMission(input: { missionId: string; summary?: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const updated = completeMission(mission);
+
+    // Stop and remove scheduler
+    const scheduler = this.schedulers.get(input.missionId);
+    if (scheduler) {
+      scheduler.stop();
+      this.schedulers.delete(input.missionId);
+    }
+
+    this.missions.set(updated.id, updated);
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      type: "mission_completed",
+      content: input.summary ?? "Mission completed",
+    });
+    this.persist();
+    return updated;
+  }
+
+  cancelMission(input: { missionId: string; reason?: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const updated = cancelMission(mission);
+
+    // Stop and remove scheduler
+    const scheduler = this.schedulers.get(input.missionId);
+    if (scheduler) {
+      scheduler.stop();
+      this.schedulers.delete(input.missionId);
+    }
+
+    this.missions.set(updated.id, updated);
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      type: "mission_cancelled",
+      content: input.reason ?? "Mission cancelled",
+    });
+    this.persist();
+    return updated;
+  }
+
   addScheduleRule(missionId: string, rule: ScheduleRule): void {
     const mission = this.missions.get(missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
+    }
+    if (mission.status === "completed" || mission.status === "cancelled") {
+      throw new Error(`Cannot add schedule rule to ${mission.status} mission`);
     }
     const ruleToAdd = isAutomationPaused(mission.scheduleRules) ? applyAutomationTogglePause(rule) : rule;
     const updated: Mission = {
@@ -1901,6 +1959,9 @@ export class InMemoryMissionService {
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
     }
+    if (mission.status !== "active") {
+      throw new Error(`Cannot trigger schedule rule on ${mission.status} mission`);
+    }
     const rule = mission.scheduleRules.find((candidate) => candidate.id === ruleId);
     if (!rule) {
       throw new Error(`Schedule rule not found: ${ruleId}`);
@@ -1913,6 +1974,9 @@ export class InMemoryMissionService {
     const mission = this.missions.get(missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${missionId}`);
+    }
+    if (mission.status !== "active") {
+      throw new Error(`Cannot trigger schedule rule on ${mission.status} mission`);
     }
 
     const candidates = mission.scheduleRules
