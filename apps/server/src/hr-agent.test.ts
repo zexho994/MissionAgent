@@ -374,7 +374,7 @@ describe("HRAgent", () => {
           scope: "Xiaohongshu content operations",
           successMetrics: ["followers >= 1000", "engagement rate improves"],
         },
-        { useLlmSchedule: true },
+        { scheduleStrategy: "llm" },
       );
 
       expect(calls.at(-1)).toContain("Grow Xiaohongshu account");

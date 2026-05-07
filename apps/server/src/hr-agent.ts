@@ -221,9 +221,7 @@ export function createHRAgent(options: HRAgentOptions) {
     const estimatedDuration = estimateDuration(totalBudget.maxRuntimeMinutes);
     const riskAssessment = assessRisks(enforcedSpecs);
     const collaborationPlan = designCollaborationPlan(enforcedSpecs);
-    // Support legacy useLlmSchedule option for backward compatibility
-    const legacyUseLlm = (options as { useLlmSchedule?: boolean })?.useLlmSchedule === true;
-    const scheduleStrategy = options?.scheduleStrategy ?? (legacyUseLlm ? "llm" : undefined);
+    const scheduleStrategy = options?.scheduleStrategy;
     let schedulePlan: SchedulePlanItem[];
     if (scheduleStrategy === undefined || scheduleStrategy === "deterministic") {
       schedulePlan = designSchedulePlan(enforcedSpecs, brief);
