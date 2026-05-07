@@ -29,6 +29,7 @@ export interface SchedulerDeps {
     prompt: string,
     context: { artifactContent: string; missionGoal: string },
   ) => Promise<boolean>;
+  executeScheduledTask?: (taskId: string, message: string) => void;
 }
 
 export class MissionScheduler {
@@ -173,5 +174,6 @@ export class MissionScheduler {
 
     const task = this.deps.createTaskFromTemplate(rule.id, rule.taskTemplate, agent.id);
     this.deps.assignTask(task.id, agent.id);
+    this.deps.executeScheduledTask?.(task.id, `Scheduled task: ${rule.name}`);
   }
 }

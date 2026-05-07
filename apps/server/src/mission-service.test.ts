@@ -1756,6 +1756,34 @@ describe("InMemoryMissionService", () => {
     expect(task.title).toBe("Run the morning check");
   });
 
+  it("triggerNextScheduleRule executes the created task when runtime is injected", async () => {
+    const runtime: MissionExecutionRuntime = {
+      async runAgentTask() {
+        return {
+          status: "completed",
+          output: {
+            payloads: [{ text: "Track GitHub growth metrics produced for the day." }],
+          },
+          stderr: "",
+        };
+      },
+    };
+    const service = new InMemoryMissionService({ runtime });
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    addCronRule(service, mission.id, {
+      name: "Morning check",
+      expression: "0 9 * * *",
+      title: "Track GitHub growth metrics for the morning",
+    });
+
+    const task = service.triggerNextScheduleRule(mission.id);
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const finalTask = service.snapshot().tasks.find((t) => t.id === task.id);
+    expect(finalTask?.status).toBe("completed");
+  });
+
   it("triggerNextScheduleRule rejects missions without enabled cron rules", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Track GitHub growth" });

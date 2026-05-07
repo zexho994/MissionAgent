@@ -193,6 +193,22 @@ describe("MissionScheduler", () => {
     expect(createdTasks).toHaveLength(1);
   });
 
+  it("invokes executeScheduledTask after creating and assigning a scheduled task", () => {
+    const { clock, deps } = makeDeps();
+    const executed: Array<{ taskId: string; message: string }> = [];
+    deps.executeScheduledTask = (taskId, message) => {
+      executed.push({ taskId, message });
+    };
+    const scheduler = new MissionScheduler(deps);
+
+    scheduler.start([cronRule()]);
+    clock.advance(60_000);
+
+    expect(executed).toHaveLength(1);
+    expect(executed[0]?.taskId).toBe("task_1");
+    expect(executed[0]?.message).toContain("Daily data check");
+  });
+
   it("addRule does not reset existing rule next run", () => {
     const { deps } = makeDeps();
     const scheduler = new MissionScheduler(deps);

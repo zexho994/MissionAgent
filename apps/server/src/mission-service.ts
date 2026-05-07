@@ -1932,6 +1932,20 @@ export class InMemoryMissionService {
       throw error;
     }
     this.persist();
+    if (this.runtime) {
+      try {
+        this.executeTask({
+          missionId: mission.id,
+          taskId: task.id,
+          message: `Scheduled task: ${selected.name}`,
+        });
+      } catch (error) {
+        console.error(
+          `[MissionService] Manual schedule trigger failed to start execution (mission ${mission.id}, task ${task.id}):`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     return task;
   }
 
@@ -2393,6 +2407,17 @@ export class InMemoryMissionService {
         this.persist();
       },
       evaluateCondition: async (prompt, context) => this.evaluateConditionWithLlm(prompt, context),
+      executeScheduledTask: (taskId, message) => {
+        if (!this.runtime) return;
+        try {
+          this.executeTask({ missionId, taskId, message });
+        } catch (error) {
+          console.error(
+            `[MissionService] Scheduled task execution failed to start (mission ${missionId}, task ${taskId}):`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      },
     };
 
     scheduler = new MissionScheduler(deps);
