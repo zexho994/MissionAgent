@@ -138,3 +138,14 @@ function isSupportedCronField(field: string, min: number, max: number): boolean 
 function isInRange(value: number, min: number, max: number): boolean {
   return Number.isInteger(value) && value >= min && value <= max;
 }
+
+export class SchedulePlanGenerationError extends Error {
+  constructor(
+    public readonly reason: "llm_call_failed" | "no_json_in_response" | "empty_plan" | "all_items_invalid",
+    public readonly details: { rawResponse?: string; itemErrors?: string[] },
+    cause?: unknown,
+  ) {
+    super(`Schedule plan generation failed: ${reason}`);
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
+  }
+}

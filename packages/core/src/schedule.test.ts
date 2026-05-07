@@ -255,3 +255,34 @@ describe("createScheduleRule", () => {
     ).toThrow("Condition trigger evaluatePrompt is required");
   });
 });
+
+import { describe, it, expect } from "vitest";
+import { SchedulePlanGenerationError } from "./schedule.js";
+
+describe("SchedulePlanGenerationError", () => {
+  it("creates error with reason and details", () => {
+    const error = new SchedulePlanGenerationError("empty_plan", { itemErrors: ["missing name"] });
+    expect(error.reason).toBe("empty_plan");
+    expect(error.message).toBe("Schedule plan generation failed: empty_plan");
+    expect(error.details.itemErrors).toEqual(["missing name"]);
+  });
+
+  it("supports all reason types", () => {
+    const reasons: SchedulePlanGenerationError["reason"][] = [
+      "llm_call_failed",
+      "no_json_in_response",
+      "empty_plan",
+      "all_items_invalid",
+    ];
+    for (const reason of reasons) {
+      const error = new SchedulePlanGenerationError(reason, {});
+      expect(error.reason).toBe(reason);
+    }
+  });
+
+  it("chains cause", () => {
+    const cause = new Error("network timeout");
+    const error = new SchedulePlanGenerationError("llm_call_failed", {}, cause);
+    expect(error.cause).toBe(cause);
+  });
+});
