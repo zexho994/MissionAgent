@@ -103,6 +103,30 @@ async function triggerNextSchedule(missionId) {
   }
 }
 
+async function deleteMission(missionId) {
+  const mission = state.snapshot.missions.find((candidate) => candidate.id === missionId);
+  if (!mission) throw new Error(`Mission not found: ${missionId}`);
+  const confirmed = window.confirm(`删除 Mission：${mission.goal}\n\n相关任务、消息和执行记录都会一起删除。`);
+  if (!confirmed) return;
+
+  const result = await api(`/api/missions/${encodeURIComponent(missionId)}`, { method: "DELETE" });
+  state.snapshot = result.snapshot;
+  delete state.automationSummaryByMissionId[missionId];
+  delete state.feedbackSummaryByMissionId[missionId];
+  delete state.autopilotDiagnosisByMissionId[missionId];
+  delete state.scheduleRulesByMissionId[missionId];
+  delete state.planUiByMissionId[missionId];
+  delete state.negotiationUiByMissionId[missionId];
+  if (state.selectedMissionId === missionId) {
+    state.selectedMissionId = undefined;
+    state.draftMode = state.snapshot.missions.length === 0;
+    state.view = "home";
+    stopPolling();
+  }
+  syncSelectedMission();
+  renderAll();
+}
+
 async function pauseAutomation(missionId) {
   state.scheduleActionPending = true;
   state.scheduleError = "";
@@ -379,6 +403,16 @@ function renderMissionPopover() {
       renderAll();
     });
   });
+  popover.querySelectorAll("[data-delete-mission]").forEach((button) => {
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await deleteMission(button.dataset.deleteMission);
+      } catch (error) {
+        showTopbarError(error);
+      }
+    });
+  });
 }
 
 function missionMenuItem(mission) {
@@ -386,10 +420,13 @@ function missionMenuItem(mission) {
   const executions = state.snapshot.executions.filter((execution) => execution.missionId === mission.id);
   const selected = mission.id === state.selectedMissionId;
   return `
-    <button class="mission-card ${selected ? "selected" : ""}" data-select-mission="${esc(mission.id)}" type="button">
-      <strong>${esc(shortText(mission.goal, 46))}</strong>
-      <span>${missionStateText(executions)} · ${tasks.length} 个任务</span>
-    </button>
+    <div class="mission-row">
+      <button class="mission-card ${selected ? "selected" : ""}" data-select-mission="${esc(mission.id)}" type="button">
+        <strong>${esc(shortText(mission.goal, 46))}</strong>
+        <span>${missionStateText(executions)} · ${tasks.length} 个任务</span>
+      </button>
+      <button class="mission-delete-button" data-delete-mission="${esc(mission.id)}" type="button" aria-label="删除 Mission ${esc(shortText(mission.goal, 24))}">删除</button>
+    </div>
   `;
 }
 

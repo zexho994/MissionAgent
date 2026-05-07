@@ -1360,6 +1360,76 @@ export class InMemoryMissionService {
     return { ui: this.config.ui };
   }
 
+  deleteMission(missionId: string): void {
+    if (!this.missions.has(missionId)) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+
+    const taskIds = new Set(
+      [...this.tasks.values()].filter((task) => task.missionId === missionId).map((task) => task.id),
+    );
+    const artifactIds = new Set(
+      [...this.artifacts.values()].filter((artifact) => taskIds.has(artifact.taskId)).map((artifact) => artifact.id),
+    );
+    const executionIds = new Set(
+      [...this.executions.values()].filter((execution) => execution.missionId === missionId).map((execution) => execution.id),
+    );
+
+    this.schedulers.get(missionId)?.stop();
+    this.schedulers.delete(missionId);
+    this.autonomyService?.stopLoop(missionId);
+    this.streamListeners.delete(missionId);
+
+    this.missions.delete(missionId);
+    for (const plan of this.plans.values()) {
+      if (plan.missionId === missionId) this.plans.delete(plan.id);
+    }
+    for (const taskId of taskIds) this.tasks.delete(taskId);
+    for (const artifactId of artifactIds) this.artifacts.delete(artifactId);
+    for (const review of this.reviews.values()) {
+      if (artifactIds.has(review.artifactId)) this.reviews.delete(review.id);
+    }
+    for (const executionId of executionIds) this.executions.delete(executionId);
+    for (const agent of this.agents.values()) {
+      if (agent.missionId === missionId) this.agents.delete(agent.id);
+    }
+    for (const relation of this.agentRelations.values()) {
+      if (relation.missionId === missionId) this.agentRelations.delete(relation.id);
+    }
+    for (const message of this.agentMessages.values()) {
+      if (message.missionId === missionId) this.agentMessages.delete(message.id);
+    }
+    for (const thread of this.threads.values()) {
+      if (thread.missionId === missionId) this.threads.delete(thread.id);
+    }
+    for (const event of this.taskEvents.values()) {
+      if (event.missionId === missionId) this.taskEvents.delete(event.id);
+    }
+    for (const event of this.scheduleTriggerEvents.values()) {
+      if (event.missionId === missionId) this.scheduleTriggerEvents.delete(event.id);
+    }
+    for (const call of this.toolCalls.values()) {
+      if (call.missionId === missionId) this.toolCalls.delete(call.id);
+    }
+    for (const decision of this.decisions.values()) {
+      if (decision.missionId === missionId) this.decisions.delete(decision.id);
+    }
+    for (const entry of this.knowledgeEntries.values()) {
+      if (entry.missionId === missionId) this.knowledgeEntries.delete(entry.id);
+    }
+    for (const evaluation of this.missionOutcomeEvaluations.values()) {
+      if (evaluation.missionId === missionId) this.missionOutcomeEvaluations.delete(evaluation.id);
+    }
+    for (const analysis of this.taskFailureAnalyses.values()) {
+      if (analysis.missionId === missionId) this.taskFailureAnalyses.delete(analysis.id);
+    }
+    for (const adjustment of this.strategyAdjustments.values()) {
+      if (adjustment.missionId === missionId) this.strategyAdjustments.delete(adjustment.id);
+    }
+
+    this.persist();
+  }
+
   async startNegotiation(input: { missionId: string }): Promise<TeamProposal> {
     const mission = this.missions.get(input.missionId);
     if (!mission) {

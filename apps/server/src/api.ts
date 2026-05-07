@@ -74,6 +74,16 @@ export async function handleApiRequest(
       return json(200, { mission, snapshot: deps.missions.snapshot() });
     }
 
+    const missionDeleteMatch = request.path.match(/^\/api\/missions\/([^/]+)$/);
+    if (request.method === "DELETE" && missionDeleteMatch) {
+      const missionId = decodeURIComponent(missionDeleteMatch[1] ?? "");
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      deps.missions.deleteMission(missionId);
+      return json(200, { snapshot: deps.missions.snapshot() });
+    }
+
     if (request.method === "POST" && request.path === "/api/missions/activate") {
       const body = expectObject(request.body);
       const mission = await deps.missions.activateMissionWithHR({

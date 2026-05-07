@@ -263,6 +263,28 @@ describe("handleApiRequest", () => {
     expect(snapshot.agentMessages.some((message) => message.type === "owner_followup")).toBe(true);
   });
 
+  it("deletes a mission and removes its scoped records from the snapshot", async () => {
+    const missions = new InMemoryMissionService();
+    const mission = await missions.createMission({ goal: "学习 harness 并生成知识图" });
+    missions.activateMission({ missionId: mission.id });
+
+    const response = await handleApiRequest(
+      {
+        method: "DELETE",
+        path: `/api/missions/${mission.id}`,
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(200);
+    const snapshot = missions.snapshot();
+    expect(snapshot.missions).toHaveLength(0);
+    expect(snapshot.tasks.filter((task) => task.missionId === mission.id)).toHaveLength(0);
+    expect(snapshot.executions.filter((execution) => execution.missionId === mission.id)).toHaveLength(0);
+    expect(snapshot.agents.filter((agent) => agent.missionId === mission.id)).toHaveLength(0);
+    expect(snapshot.agentMessages.filter((message) => message.missionId === mission.id)).toHaveLength(0);
+  });
+
   it("starts an OpenClaw task and exposes running execution state immediately", async () => {
     const missions = new InMemoryMissionService();
     const pendingOpenClaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask"> = {
