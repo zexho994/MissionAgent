@@ -104,6 +104,28 @@ describe("HRAgent", () => {
       expect(analysis.complexity).toBeDefined();
       expect(analysis.riskFactors).toBeDefined();
     });
+
+    it("uses a tightened 10s idle timeout by default so stuck calls fail fast", async () => {
+      let observedIdleTimeout: number | undefined;
+      mockLlm.call = async (_messages, options) => {
+        observedIdleTimeout = options?.idleTimeoutMs;
+        const content = "{}";
+        if (options?.onStream) {
+          for (const char of content) options.onStream(char);
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      };
+
+      const hrAgent = createHRAgent({ llm: mockLlm });
+      await hrAgent.receiveMissionBrief(missionBrief);
+
+      expect(observedIdleTimeout).toBe(10000);
+    });
   });
 
   describe("generateRoleSpecs", () => {

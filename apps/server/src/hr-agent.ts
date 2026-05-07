@@ -62,7 +62,7 @@ export function createHRAgent(options: HRAgentOptions) {
     maxTeamSize = 8,
     preferredTeamSize = [2, 5],
     timeoutMs = 90000,
-    idleTimeoutMs = 30000,
+    idleTimeoutMs = 10000,
     onToken,
   } = options;
 
