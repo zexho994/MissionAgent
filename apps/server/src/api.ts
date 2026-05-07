@@ -137,6 +137,36 @@ export async function handleApiRequest(
       return json(202, { mission, execution, snapshot: deps.missions.snapshot() });
     }
 
+    // POST /api/missions/:id/complete
+    if (request.method === "POST" && request.path.startsWith("/api/missions/") && request.path.endsWith("/complete")) {
+      const missionId = request.path.slice("/api/missions/".length, -"/complete".length);
+      if (!missionId) {
+        return json(400, { error: "missionId required" });
+      }
+      const body = request.body ? expectObject(request.body) : {};
+      try {
+        const result = deps.missions.completeMission({ missionId, summary: body?.summary as string | undefined });
+        return json(200, { success: true, data: result });
+      } catch (error) {
+        return json(400, { success: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    // POST /api/missions/:id/cancel
+    if (request.method === "POST" && request.path.startsWith("/api/missions/") && request.path.endsWith("/cancel")) {
+      const missionId = request.path.slice("/api/missions/".length, -"/cancel".length);
+      if (!missionId) {
+        return json(400, { error: "missionId required" });
+      }
+      const body = request.body ? expectObject(request.body) : {};
+      try {
+        const result = deps.missions.cancelMission({ missionId, reason: body?.reason as string | undefined });
+        return json(200, { success: true, data: result });
+      } catch (error) {
+        return json(400, { success: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
     if (request.method === "GET" && request.path.startsWith("/api/missions/") && request.path.endsWith("/negotiation")) {
       const missionId = request.path.split("/")[3];
       if (!missionId) {
