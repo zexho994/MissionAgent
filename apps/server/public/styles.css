@@ -102,6 +102,16 @@ h1, h2, p { margin-top: 0; }
   font-size: 12px;
   font-weight: 800;
 }
+.mission-popover-error {
+  margin-bottom: 10px;
+  border: 1px solid #f4b4b4;
+  border-radius: 8px;
+  background: #fff1f1;
+  color: #b42318;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
 .mission-list {
   display: grid;
   gap: 8px;

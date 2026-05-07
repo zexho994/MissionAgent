@@ -15,6 +15,7 @@ const state = {
   scheduleActionPending: false,
   scheduleFormOpen: false,
   scheduleError: "",
+  missionDeleteError: "",
   planActionMissionId: undefined,
   planUiByMissionId: {},
   negotiationUiByMissionId: {},
@@ -109,6 +110,7 @@ async function deleteMission(missionId) {
   const confirmed = window.confirm(`删除 Mission：${mission.goal}\n\n相关任务、消息和执行记录都会一起删除。`);
   if (!confirmed) return;
 
+  state.missionDeleteError = "";
   const result = await api(`/api/missions/${encodeURIComponent(missionId)}`, { method: "DELETE" });
   state.snapshot = result.snapshot;
   delete state.automationSummaryByMissionId[missionId];
@@ -381,6 +383,7 @@ function renderMissionPopover() {
 
   popover.innerHTML = `
     <div class="popover-head">正在运行的 Mission</div>
+    ${state.missionDeleteError ? `<div class="mission-popover-error">${esc(state.missionDeleteError)}</div>` : ""}
     <div class="mission-list">
       ${state.snapshot.missions.map((mission) => missionMenuItem(mission)).join("")}
     </div>
@@ -409,7 +412,8 @@ function renderMissionPopover() {
       try {
         await deleteMission(button.dataset.deleteMission);
       } catch (error) {
-        showTopbarError(error);
+        state.missionDeleteError = error instanceof Error ? error.message : String(error);
+        renderMissionPopover();
       }
     });
   });
