@@ -50,6 +50,11 @@ import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
 import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
 import {
+  buildOpenClawMessage,
+  extractSourcesFromOpenClawOutput,
+  type MissionExecutionRuntime,
+} from "./runtime-bridge.js";
+import {
   buildExecutionFailureFeedback,
   buildExecutionResultFeedback,
   type ExecutionFailureFeedback,
@@ -505,6 +510,7 @@ export interface MissionServiceOptions {
   storageFile?: string | undefined;
   configFile?: string | undefined;
   llm?: LlmService | undefined;
+  runtime?: MissionExecutionRuntime | undefined;
 }
 
 export type StreamEventListener = (event: {
@@ -549,6 +555,7 @@ export class InMemoryMissionService {
   private readonly schedulers = new Map<string, MissionScheduler>();
   private readonly personas: AgentPersonaRegistry;
   private readonly contextRetriever: ContextRetriever;
+  private readonly runtime: MissionExecutionRuntime | undefined;
 
   private static readonly realClock: SchedulerClock = {
     now: () => new Date(),
@@ -560,6 +567,7 @@ export class InMemoryMissionService {
     this.storageFile = options.storageFile;
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
+    this.runtime = options.runtime;
     this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
     this.contextRetriever = new ContextRetriever(() => this.snapshot());
     this.loadFromFile();
@@ -992,6 +1000,51 @@ export class InMemoryMissionService {
       summary: `${worker.name} invoked OpenClaw local agent.`,
     });
     this.persist();
+    return execution;
+  }
+
+  executeTask(input: { missionId: string; taskId: string; message: string }): Execution {
+    if (!this.runtime) {
+      throw new Error("MissionService.executeTask requires a runtime to be injected");
+    }
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    const task = this.tasks.get(input.taskId);
+    if (!task || task.missionId !== mission.id) {
+      throw new Error(`Task not found in mission: ${input.taskId}`);
+    }
+
+    const execution = this.startExecution({
+      missionId: input.missionId,
+      taskId: input.taskId,
+    });
+    const runtime = this.runtime;
+
+    void runtime
+      .runAgentTask({
+        message: buildOpenClawMessage({ message: input.message, mission, task }),
+        timeoutSeconds: 300,
+      })
+      .then((result) => {
+        const sources = extractSourcesFromOpenClawOutput(result.output);
+        this.submitExecutionResult({
+          executionId: execution.id,
+          missionId: input.missionId,
+          taskId: input.taskId,
+          content: { openclaw: result.output, stderr: result.stderr },
+          evidence: ["openclaw:local"],
+          sources,
+        });
+      })
+      .catch((error: unknown) => {
+        this.failExecution({
+          executionId: execution.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+
     return execution;
   }
 

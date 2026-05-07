@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { createScheduleRule } from "@digitalagent/core";
 import { InMemoryMissionService } from "./mission-service.js";
+import type { MissionExecutionRuntime } from "./runtime-bridge.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -247,6 +248,58 @@ describe("InMemoryMissionService", () => {
     expect(snapshot.toolCalls.some((call) => call.agentId === worker.id && call.status === "completed")).toBe(true);
     expect(snapshot.agentMessages.some((message) => message.fromAgentId === worker.id && message.type === "execution_completed")).toBe(true);
     expect(snapshot.artifacts.some((artifact) => artifact.taskId === task.id)).toBe(true);
+  });
+
+  it("executeTask runs the task via injected runtime and submits the result", async () => {
+    let captured: { message: string; timeoutSeconds: number } | undefined;
+    const runtime: MissionExecutionRuntime = {
+      async runAgentTask(input) {
+        captured = input;
+        return {
+          status: "completed",
+          output: {
+            payloads: [
+              { text: "Auto run a mission completed successfully with all deliverables produced." },
+            ],
+          },
+          stderr: "",
+        };
+      },
+    };
+    const service = new InMemoryMissionService({ runtime });
+    const mission = await service.createMission({ goal: "Auto run a mission" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+    if (!task) throw new Error("missing initial task");
+
+    const execution = service.executeTask({
+      missionId: mission.id,
+      taskId: task.id,
+      message: "auto",
+    });
+    expect(execution.status).toBe("running");
+
+    // Drain fire-and-forget runtime promise + downstream submitExecutionResult
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(captured?.message).toContain("Mission context");
+    const finalTask = service.snapshot().tasks.find((t) => t.id === task.id);
+    expect(finalTask?.status).toBe("completed");
+    const finalExecution = service.snapshot().executions.find((e) => e.id === execution.id);
+    expect(finalExecution?.status).toBe("completed");
+  });
+
+  it("executeTask without runtime injected throws a clear error", async () => {
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Need runtime" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+    if (!task) throw new Error("missing initial task");
+
+    expect(() =>
+      service.executeTask({ missionId: mission.id, taskId: task.id, message: "x" }),
+    ).toThrow(/runtime/i);
   });
 
   it("persists mission state to a local JSON file and reloads it", async () => {
