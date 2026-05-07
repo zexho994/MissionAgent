@@ -36,7 +36,7 @@ import {
   parseMissionPlanDraft,
 } from "./owner/index.js";
 import type { TeamProposal } from "./hr-agent.js";
-import { NegotiationManager, type NegotiationSummary } from "./negotiation-manager.js";
+import { NegotiationManager, type NegotiationSummary, type StoredNegotiationState } from "./negotiation-manager.js";
 import { planMissionTeam, matcherFor, type MissionTeamPlan } from "./team-planning.js";
 import { evaluateArtifactQuality } from "./artifact-evaluation.js";
 
@@ -352,6 +352,7 @@ export interface MissionSnapshot {
 
 interface StoredMissionSnapshot extends MissionSnapshot {
   schemaVersion: 1;
+  activeNegotiations?: StoredNegotiationState[];
 }
 
 function clearAutomationTogglePause(metadata: Record<string, unknown>): Record<string, unknown> {
@@ -2796,6 +2797,12 @@ export class InMemoryMissionService {
     if (this.deduplicateHrAgents()) {
       this.persist();
     }
+    if ((stored.activeNegotiations?.length ?? 0) > 0) {
+      if (!this.llm) {
+        throw new Error("LLM is required to restore active negotiations");
+      }
+      this.getNegotiationManager().restore(stored.activeNegotiations ?? []);
+    }
   }
 
   private deduplicateHrAgents(): boolean {
@@ -2853,6 +2860,7 @@ export class InMemoryMissionService {
     const payload: StoredMissionSnapshot = {
       schemaVersion: 1,
       ...this.snapshot(),
+      activeNegotiations: this.negotiationManager?.snapshot() ?? [],
     };
     writeFileSync(this.storageFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   }

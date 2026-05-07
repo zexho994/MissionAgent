@@ -138,6 +138,7 @@ function renderWarRoom() {
       }
     });
   }
+  bindChoiceButtons();
 }
 
 function warNavButton(tab, label) {
@@ -156,6 +157,7 @@ function renderWarOverview(data) {
     ${renderAutomationPulse(data, state.automationSummaryByMissionId[data.mission.id])}
     ${renderFeedbackPanel(state.feedbackSummaryByMissionId[data.mission.id])}
     ${renderAutopilotDiagnosis(state.autopilotDiagnosisByMissionId[data.mission.id])}
+    ${renderWarTeamDecision(data)}
     <div class="war-stage">
       <div class="stage-note">
         <strong>War Room</strong>
@@ -177,6 +179,16 @@ function renderWarOverview(data) {
         <strong>最近产出</strong>
         <p>${esc(latestOutputText(data))}</p>
       </div>
+    </div>
+  `;
+}
+
+function renderWarTeamDecision(data) {
+  const proposalMessage = latestActionableTeamProposal(data);
+  if (!proposalMessage) return "";
+  return `
+    <div class="war-team-decision">
+      ${renderTeamProposalCard(proposalMessage, data)}
     </div>
   `;
 }

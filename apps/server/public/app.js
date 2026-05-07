@@ -304,6 +304,13 @@ function hasTeamConfirmed(data) {
   return data.agents.some((agent) => agent.role !== "owner" && agent.role !== "hr");
 }
 
+function latestActionableTeamProposal(data) {
+  if (hasTeamConfirmed(data)) return undefined;
+  return [...data.messages]
+    .reverse()
+    .find((message) => message.type === "team_created" && !isRecruitingTeamMessage(message));
+}
+
 function missionHasWarRoomState(missionId) {
   return state.snapshot.tasks.some((task) => task.missionId === missionId)
     || state.snapshot.agents.some((agent) => agent.missionId === missionId && agent.role !== "owner");
@@ -625,7 +632,8 @@ function renderTeamProposalCard(message, data) {
 }
 
 function isRecruitingTeamMessage(message) {
-  return message.content.includes("正在分析 MissionBrief");
+  return message.content.includes("正在分析 MissionBrief")
+    || message.content.includes("Analyzing MissionBrief");
 }
 
 function renderMissionPlanReview(data) {
@@ -634,6 +642,7 @@ function renderMissionPlanReview(data) {
   const planUi = currentPlanUiState();
   const isRecruiting = data.tasks.length === 0 && data.agents.some((agent) => agent.role === "hr" && agent.status === "running");
   const hasExecutionTeam = data.agents.some((agent) => agent.role !== "owner" && agent.role !== "hr");
+  const hasPendingTeamProposal = Boolean(latestActionableTeamProposal(data));
   const error = planUi.error ? `<p class="plan-error">${esc(planUi.error)}</p>` : "";
   if (!plan) {
     const legacyWarRoomAction = hasExecutionTeam ? `
@@ -684,7 +693,7 @@ function renderMissionPlanReview(data) {
         ` : ""}
       ` : `
         <div class="choice-row">
-          <button type="button" data-open-war-room ${pending || isRecruiting ? "disabled" : ""}>${isRecruiting ? "招募中..." : (hasExecutionTeam ? "进入作战室" : "创建作战室")}</button>
+          <button type="button" data-open-war-room ${pending || isRecruiting || hasPendingTeamProposal ? "disabled" : ""}>${isRecruiting ? "招募中..." : (hasExecutionTeam ? "进入作战室" : (hasPendingTeamProposal ? "等待确认团队" : "创建作战室"))}</button>
         </div>
       `}
     </div>
@@ -954,7 +963,7 @@ function bindChoiceButtons() {
       negotiationUi.error = "";
       renderAll();
       try {
-        const result = await api(`/api/missions/${mission.id}/negotiation/confirm`, {
+        const result = await api("/api/missions/negotiate/confirm", {
           method: "POST",
           body: { missionId: mission.id },
         });
@@ -999,7 +1008,7 @@ function bindChoiceButtons() {
       negotiationUi.error = "";
       renderAll();
       try {
-        const result = await api(`/api/missions/${mission.id}/negotiation/respond`, {
+        const result = await api("/api/missions/negotiate/respond", {
           method: "POST",
           body: { missionId: mission.id, feedback },
         });

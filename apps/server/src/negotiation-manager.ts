@@ -25,6 +25,14 @@ export interface NegotiationManagerOptions {
   maxRounds?: number;
 }
 
+export interface StoredNegotiationState {
+  missionId: string;
+  proposal: TeamProposal;
+  ownerContext: OwnerContext;
+  roundCount: number;
+  hrAgentId: string;
+}
+
 export class NegotiationManager {
   private readonly llm: LlmService;
   private readonly config: AgentSystemConfig;
@@ -81,6 +89,11 @@ export class NegotiationManager {
       toAgentId: owner.id,
       type: "team_created",
       content: `HR Agent proposes a team of ${proposal.roles.length} members. Estimated duration: ${proposal.estimatedDuration}. Risks: ${proposal.riskAssessment.join(", ")}.`,
+    });
+    this.agents.set(hrAgentId, {
+      ...hrAgentRecord,
+      status: "idle",
+      lastAction: "Waiting for Owner team decision",
     });
 
     return proposal;
@@ -175,6 +188,15 @@ export class NegotiationManager {
       toAgentId: owner.id,
       type: "team_created",
       content: `HR Agent revised the team proposal based on your feedback. New team of ${revisedProposal.roles.length} members. ${revisedProposal.riskAssessment.length > 0 ? `Risks: ${revisedProposal.riskAssessment.join(", ")}` : "No major risks identified."}`,
+    });
+    const hrAgentRecord = this.agents.get(hrAgentId);
+    if (!hrAgentRecord) {
+      throw new Error(`HR agent not found for negotiation: ${hrAgentId}`);
+    }
+    this.agents.set(hrAgentId, {
+      ...hrAgentRecord,
+      status: "idle",
+      lastAction: "Waiting for Owner team decision",
     });
 
     return { proposal: revisedProposal };
@@ -294,6 +316,38 @@ export class NegotiationManager {
       proposal: stored.proposal,
       previousFeedback: stored.ownerContext.previousFeedback,
     };
+  }
+
+  snapshot(): StoredNegotiationState[] {
+    return [...this.activeNegotiations.entries()].map(([missionId, stored]) => ({
+      missionId,
+      proposal: stored.proposal,
+      ownerContext: stored.ownerContext,
+      roundCount: stored.roundCount,
+      hrAgentId: stored.hrAgentId,
+    }));
+  }
+
+  restore(states: StoredNegotiationState[]): void {
+    this.activeNegotiations.clear();
+    for (const state of states) {
+      const mission = this.missions.get(state.missionId);
+      if (!mission) {
+        throw new Error(`Cannot restore negotiation for missing mission: ${state.missionId}`);
+      }
+      if (!this.agents.has(state.hrAgentId)) {
+        throw new Error(`Cannot restore negotiation for missing HR agent: ${state.hrAgentId}`);
+      }
+      this.activeNegotiations.set(state.missionId, {
+        proposal: {
+          ...state.proposal,
+          createdAt: new Date(state.proposal.createdAt),
+        },
+        ownerContext: state.ownerContext,
+        roundCount: state.roundCount,
+        hrAgentId: state.hrAgentId,
+      });
+    }
   }
 
   private agentByRole(missionId: string, role: string): WarRoomAgent {

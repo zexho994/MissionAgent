@@ -214,7 +214,29 @@ describe("handleApiRequest", () => {
     );
     expect(hrAgents).toHaveLength(1);
     expect(hrAgents[0]?.id).toBe(recruitingHr?.id);
+    expect(hrAgents[0]?.status).toBe("idle");
     expect(missions.getNegotiation({ missionId })).toBeDefined();
+  });
+
+  it("confirms HR negotiation through the documented API route", async () => {
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
+    const missionId = await createMissionWithConfirmedPlan(missions);
+    await missions.activateMissionWithHR({ missionId });
+
+    const response = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/negotiate/confirm",
+        body: { missionId },
+      },
+      { missions, openclaw: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(200);
+    const snapshot = (response.body as { snapshot: MissionSnapshot }).snapshot;
+    expect(snapshot.agents.some((agent) => agent.missionId === missionId && agent.role !== "owner" && agent.role !== "hr")).toBe(true);
+    expect(snapshot.tasks.filter((task) => task.missionId === missionId)).toHaveLength(1);
+    expect(missions.getNegotiation({ missionId })).toBeUndefined();
   });
 
   it("rejects async API activation before creating HR work when no MissionPlan is confirmed", async () => {

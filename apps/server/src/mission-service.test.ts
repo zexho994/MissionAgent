@@ -2042,6 +2042,9 @@ describe("InMemoryMissionService", () => {
 
       const snapshot = service.snapshot();
       expect(snapshot.tasks).toHaveLength(0);
+      const hr = snapshot.agents.find((agent) => agent.missionId === mission.id && agent.role === "hr");
+      expect(hr?.status).toBe("idle");
+      expect(hr?.lastAction).toBe("Waiting for Owner team decision");
       const negotiation = service.getNegotiation({ missionId: mission.id });
       expect(negotiation).toBeDefined();
       expect(negotiation!.proposal.roles.length).toBeGreaterThan(0);
@@ -2070,6 +2073,8 @@ describe("InMemoryMissionService", () => {
       );
       expect(hrAgents).toHaveLength(1);
       expect(hrAgents[0]?.id).toBe(recruitingHr?.id);
+      expect(hrAgents[0]?.status).toBe("idle");
+      expect(hrAgents[0]?.lastAction).toBe("Waiting for Owner team decision");
       expect(service.getNegotiation({ missionId: mission.id })).toBeDefined();
     });
 
@@ -2114,6 +2119,34 @@ describe("InMemoryMissionService", () => {
       const snapshot = service.snapshot();
       expect(snapshot.agents.filter((a) => a.missionId === mission.id).length).toBeGreaterThanOrEqual(2);
       expect(snapshot.tasks).toHaveLength(1);
+    });
+
+    it("persists and restores active HR negotiation before confirmation", async () => {
+      const dir = mkdtempSync(join(tmpdir(), "digitalagent-negotiation-"));
+      try {
+        const storageFile = join(dir, "mission-store.json");
+        const service = new InMemoryMissionService({ storageFile, llm: fake });
+        const mission = await service.createMission({
+          goal: "运营小红书账号到1000粉丝",
+          successMetrics: ["followers >= 1000"],
+          constraints: ["1 month"],
+        });
+        await service.continueMission({ missionId: mission.id, message: "补充信息" });
+        service.confirmBrief({ missionId: mission.id });
+        await confirmPlanForMission(service, mission.id);
+        await service.activateMissionWithHR({ missionId: mission.id });
+
+        const reloaded = new InMemoryMissionService({ storageFile, llm: fake });
+        expect(reloaded.getNegotiation({ missionId: mission.id })?.proposal.roles).toHaveLength(1);
+
+        reloaded.confirmNegotiation({ missionId: mission.id });
+
+        const snapshot = reloaded.snapshot();
+        expect(snapshot.tasks.filter((task) => task.missionId === mission.id)).toHaveLength(1);
+        expect(reloaded.getNegotiation({ missionId: mission.id })).toBeUndefined();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("fails fast when HR activation has no confirmed MissionPlan", async () => {

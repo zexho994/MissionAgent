@@ -1087,6 +1087,13 @@ h1, h2, p { margin-top: 0; }
   color: #9a5b00;
 }
 
+.war-team-decision {
+  margin-bottom: 18px;
+}
+.war-team-decision .team-proposal {
+  max-width: 900px;
+}
+
 .war-stage {
   min-height: 620px;
   border: 1px solid #d8dee8;
