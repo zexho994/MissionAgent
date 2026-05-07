@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { OpenClawCliAdapter, createLlmServiceFromEnv, type OpenClawCliAdapterOptions } from "@digitalagent/runtime";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
+import type { MissionExecutionRuntime } from "./runtime-bridge.js";
 
 const port = Number(process.env.PORT ?? 3000);
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -14,8 +15,6 @@ const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data",
 
 const llm = createLlmServiceFromEnv(process.env);
 
-const missions = new InMemoryMissionService({ storageFile: dataFile, llm });
-missions.restoreSchedulers();
 const openclawOptions: OpenClawCliAdapterOptions = {
   command: "openclaw",
 };
@@ -23,6 +22,16 @@ if (process.env.OPENCLAW_AGENT_ID) {
   openclawOptions.defaultAgentId = process.env.OPENCLAW_AGENT_ID;
 }
 const openclaw = new OpenClawCliAdapter(openclawOptions);
+
+const runtime: MissionExecutionRuntime = {
+  runAgentTask: (input) => openclaw.runAgentTask({
+    message: input.message,
+    timeoutSeconds: input.timeoutSeconds,
+  }),
+};
+
+const missions = new InMemoryMissionService({ storageFile: dataFile, llm, runtime });
+missions.restoreSchedulers();
 
 const server = createServer(async (req, res) => {
   try {
