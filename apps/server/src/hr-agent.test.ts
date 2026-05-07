@@ -342,12 +342,17 @@ describe("HRAgent", () => {
         },
       ];
 
-      const proposal = await hrAgent.proposeTeam("mission-123", roleSpecs, {
-        ...missionBrief,
-        goal: "Grow Xiaohongshu account to 1000 followers",
-        scope: "Xiaohongshu content operations",
-        successMetrics: ["followers >= 1000", "engagement rate improves"],
-      });
+      const proposal = await hrAgent.proposeTeam(
+        "mission-123",
+        roleSpecs,
+        {
+          ...missionBrief,
+          goal: "Grow Xiaohongshu account to 1000 followers",
+          scope: "Xiaohongshu content operations",
+          successMetrics: ["followers >= 1000", "engagement rate improves"],
+        },
+        { useLlmSchedule: true },
+      );
 
       expect(calls.at(-1)).toContain("Grow Xiaohongshu account");
       expect(proposal.schedulePlan.map((item) => item.name)).toEqual([
@@ -356,6 +361,64 @@ describe("HRAgent", () => {
         "Engagement drop alert",
       ]);
       expect(proposal.schedulePlan[2]?.conditionEvaluatePrompt).toContain("20%");
+    });
+
+    it("uses rule-based schedule plan by default and skips the LLM call", async () => {
+      let callCount = 0;
+      mockLlm.call = async (_messages, options) => {
+        callCount += 1;
+        const content = "should-not-be-used";
+        if (options?.onStream) {
+          for (const char of content) options.onStream(char);
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      };
+
+      const hrAgent = createHRAgent({ llm: mockLlm });
+      const roleSpecs: RoleSpec[] = [
+        {
+          id: "data_analyst",
+          name: "Data Analyst",
+          purpose: "Track Xiaohongshu metrics",
+          responsibilities: ["Analyze engagement", "Report follower growth"],
+          allowedTools: ["analytics"],
+          inputContract: {},
+          outputContract: {},
+          successCriteria: ["Metrics reported"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+        },
+        {
+          id: "content_strategist",
+          name: "Content Strategist",
+          purpose: "Plan Xiaohongshu content",
+          responsibilities: ["Plan posts", "Adjust strategy"],
+          allowedTools: ["editor"],
+          inputContract: {},
+          outputContract: {},
+          successCriteria: ["Plan updated"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+        },
+      ];
+
+      const proposal = await hrAgent.proposeTeam(
+        "mission-123",
+        roleSpecs,
+        {
+          ...missionBrief,
+          goal: "Grow Xiaohongshu account to 1000 followers",
+          scope: "Xiaohongshu content operations",
+          successMetrics: ["followers >= 1000", "engagement rate improves"],
+        },
+      );
+
+      expect(callCount).toBe(0);
+      expect(proposal.schedulePlan.length).toBeGreaterThan(0);
+      expect(proposal.schedulePlan[0]?.assigneeRole).toBe("data_analyst");
     });
   });
 
