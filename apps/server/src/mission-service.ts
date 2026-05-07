@@ -2709,30 +2709,6 @@ export class InMemoryMissionService {
       persist: () => this.persist(),
     });
 
-    // If isCreation=true and Owner didn't produce a MissionBrief (e.g., output task content directly),
-    // re-prompt using buildSummaryRequest to ensure the mission gets a brief
-    if (input.isCreation) {
-      const mission = this.missions.get(input.missionId);
-      if (mission && !mission.brief) {
-        const history = this.agentMessagesForMission(input.missionId);
-        const summaryMessages = buildSummaryRequest(input.systemPrompt, history);
-        await runOwnerLlmStreaming(this.llm!, {
-          missionId: input.missionId,
-          ownerId: input.owner.id,
-          systemPrompt: input.systemPrompt,
-          userMessage: undefined,
-          llmMessages: summaryMessages,
-          isCreation: false,
-        }, {
-          getMission: (id) => this.missions.get(id),
-          setMission: (m) => this.missions.set(m.id, m),
-          appendMessage: (msg) => this.appendMessage(msg as any),
-          updateAgent: (id, patch) => this.updateAgent(id, patch as any),
-          notifyStream: (id, event) => this.notifyStreamListeners(id, event as any),
-          persist: () => this.persist(),
-        });
-      }
-    }
   }
 
   private loadFromFile(): void {

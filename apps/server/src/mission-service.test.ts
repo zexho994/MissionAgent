@@ -634,6 +634,21 @@ describe("InMemoryMissionService", () => {
     expect(messages.some((message) => message.type === "owner_followup" && message.content.includes("目标人群"))).toBe(true);
   });
 
+  it("asks only one Owner question during initial Mission creation", async () => {
+    const fake = new FakeLlmAdapter(() => "请问这个 HTML 知识图的主要用途是什么？");
+    const service = new InMemoryMissionService({ llm: fake });
+
+    const mission = await service.createMission({ goal: "了解 codex 和 claude code 两者差别，并生成一张 html 的知识图" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const ownerFollowups = service.snapshot().agentMessages.filter(
+      (message) => message.missionId === mission.id && message.type === "owner_followup",
+    );
+    expect(ownerFollowups).toHaveLength(1);
+    expect(ownerFollowups[0]?.content).toContain("HTML 知识图");
+    expect(fake.stats().totalCalls).toBe(1);
+  });
+
   it("marks Owner as thinking before returning the first LLM-backed mission snapshot", async () => {
     const pendingLlm = {
       call: () => new Promise<never>(() => {}),
