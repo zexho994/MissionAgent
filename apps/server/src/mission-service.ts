@@ -1112,12 +1112,12 @@ export class InMemoryMissionService {
       completedAt: new Date().toISOString(),
     });
     this.updateAgent(worker.id, {
-      status: "done",
+      status: "idle",
       currentTaskId: undefined,
       lastAction: "Submitted execution artifact",
     });
     this.updateAgent(reviewer.id, {
-      status: "done",
+      status: "idle",
       lastAction: `Review decision: ${review.decision}`,
     });
     const decisionId = createId("decision");

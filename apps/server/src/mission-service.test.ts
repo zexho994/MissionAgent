@@ -302,6 +302,42 @@ describe("InMemoryMissionService", () => {
     ).toThrow(/runtime/i);
   });
 
+  it("worker and reviewer return to idle after artifact submission so they can be reused", async () => {
+    const runtime: MissionExecutionRuntime = {
+      async runAgentTask() {
+        return {
+          status: "completed",
+          output: {
+            payloads: [{ text: "Harness learning image prompt and core knowledge map delivered." }],
+          },
+          stderr: "",
+        };
+      },
+    };
+    const service = new InMemoryMissionService({ runtime });
+    const mission = await service.createMission({ goal: "Create a harness learning image" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+    if (!task) throw new Error("missing initial task");
+
+    service.executeTask({ missionId: mission.id, taskId: task.id, message: "go" });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const snapshot = service.snapshot();
+    const worker = snapshot.agents.find((a) => a.role === "researcher" && a.missionId === mission.id);
+    if (!worker) throw new Error("missing worker");
+    expect(worker.status).toBe("idle");
+
+    // Reviewer agent: pick anyone in the mission with role containing 'reviewer' or 'qa'
+    const reviewer = snapshot.agents.find(
+      (a) => a.missionId === mission.id && /(reviewer|qa|quality)/i.test(a.role),
+    );
+    if (reviewer) {
+      expect(reviewer.status).toBe("idle");
+    }
+  });
+
   it("persists mission state to a local JSON file and reloads it", async () => {
     const dir = mkdtempSync(join(tmpdir(), "digitalagent-store-"));
     try {
