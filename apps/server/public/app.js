@@ -575,10 +575,16 @@ function renderBriefMessage(data) {
     </div>
   `;
   const isLong = fullContent.length > 300;
+  const collapsedContent = esc(shortText([
+    brief.goal,
+    brief.scope,
+    brief.targetAudience,
+    brief.timeline,
+  ].filter(Boolean).join(" "), 200));
   return `
     <div class="bubble owner brief ${isLong ? "is-collapsed" : ""}" data-collapsible>
       <div class="bubble-content" data-full ${isLong ? "hidden" : ""}>${fullContent}</div>
-      ${isLong ? `<div class="bubble-collapsed" data-collapsed>${fullContent.slice(0, 200)}...</div>` : ""}
+      ${isLong ? `<div class="bubble-collapsed" data-collapsed>${collapsedContent}</div>` : ""}
       ${isLong ? `<button type="button" class="expand-button" data-toggle-collapse>展开</button>` : ""}
     </div>
   `;
