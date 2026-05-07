@@ -98,8 +98,10 @@
 - [x] 调度持久化（系统重启后恢复调度）（`InMemoryMissionService.restoreSchedulers`）
 
 ### 4.2 周期性任务模板
+- [ ] **[P0]** HR LLM 强制输出 `schedulePlan`：prompt 增加约束条款，LLM 不返回时显式报错而非静默回 `[]`，避免链路从源头断
+- [ ] **[P0]** HR `schedulePlan` 端到端测试（LLM stub 验证 `ScheduleRule` 真的被生成）
 - [ ] 定义 `ScheduledTaskTemplate`（触发规则、执行模板、分配角色）
-- [ ] 支持常见模式：每日检查、每周汇报、每两周回顾
+- [ ] 支持常见模式：每日检查、每周汇报、每两周回顾（HR 可填模板库）
 - [ ] Mission创建时自动注册相关调度模板
 - [ ] Mission完成/取消时清理调度
 
@@ -109,6 +111,28 @@
 - [ ] 触发器与外部数据源集成（预留接口）
 
 **验收标准**: 系统能自动在每天早上触发数据分析师检查数据，每周一触发项目经理和内容策划开"选题会"，无需人工操作。
+
+---
+
+## Phase 4.5: War Room 体验重构（与 Phase 5 可并行）
+
+**目标**: 让 War Room 真实呈现团队协作状态，让用户一眼看清"谁在做什么、刚才发生了什么、下一步是什么"，而不是被一堆 role_xxx hash 和大段产出文本淹没。
+
+### 4.5.1 信息架构修复
+- [ ] **[P1]** 角色卡用 `spec.name`（人类可读名称）替代 `role_xxx` UUID
+- [ ] **[P1]** agent 状态分层视图（活跃 / 等待 / 已完成 三档分组或排序）
+- [ ] **[P1]** 协作关系连线渲染独立层，不被卡片挤压截断
+
+### 4.5.2 产出阅读
+- [ ] 产出文本默认折叠 + 自动摘要标题 + 点击展开
+- [ ] 产出与下游任务的引用关系可视化
+- [ ] 关键事件（首任务完成、调度触发、review 决策）时间线视图
+
+### 4.5.3 实时反馈
+- [ ] agent 状态切换的过渡动画（避免突变看不出变化）
+- [ ] 当前 mission 的 token / 预算消耗实时显示
+
+**验收标准**：用户打开 War Room，5 秒内能回答"现在谁在做什么、刚才发生了什么、下一步等什么"。
 
 ---
 
@@ -130,6 +154,9 @@
 - [ ] 失败任务的自动重规划（不是简单重试，而是调整策略）
 
 ### 5.2 策略自适应
+- [ ] **[P0]** `AgentAutonomyService` action 类型新增 `create_followup_task` / `spawn_task`（当前只有 acknowledge / report_to_superior / request_info / notify_owner / escalate，没有派活能力）
+- [ ] **[P0]** Owner / 项目经理 persona 在收到 `review_completed` / `execution_completed` 事件后，能基于产出 + 成功指标决定派下一波任务，而不是只回一句 acknowledge
+- [ ] **[P0]** 自动派活的循环安全限制（每个 review 最多触发 N 个 followup、mission 总任务数上限、防止 LLM 失控自我繁殖）
 - [ ] Owner/项目经理根据执行数据判断是否需要调整Mission策略
 - [ ] 策略调整时重新触发HR评估（是否需要新角色、调整现有角色职责）
 - [ ] 调整历史记录（追踪为什么做这个调整）
@@ -163,5 +190,25 @@
 - [ ] 长期Mission的预算跟踪和预警
 - [ ] Agent级别的资源消耗统计
 - [ ] 超预算时的自动降级策略
+
+---
+
+## Phase 7: Native Lightweight Runtime — 原生轻量执行引擎
+
+**目标**: 用基于 `LlmService` 的原生 runtime 替代 OpenClaw CLI 子进程，消除冷启动开销，掌控工具链与产出格式。当前每个任务都要起一次 OpenClaw 子进程，启动延迟和不可预测性是性能瓶颈。
+
+### 7.1 工具注册与执行
+- [ ] **[P2]** 设计 `ToolRegistry`（web_search / file_read / file_write / shell / image_gen 等原子工具）
+- [ ] **[P2]** LLM 驱动的 agent loop（思考 → 工具调用 → 观察 → 继续）实现
+- [ ] **[P2]** 沙盒与权限边界（mission 级隔离，防止互相影响）
+
+### 7.2 与 OpenClaw 共存与切换
+- [ ] 在 `MissionExecutionRuntime` 接口下并行支持两套 backend（native / openclaw）
+- [ ] 性能对比基线（启动时间、token 成本、产出质量、稳定性）
+- [ ] 默认切换到 native，OpenClaw 仅作为回退（feature flag 控制）
+
+**验收标准**: 相同 mission 在 native runtime 下首任务启动延迟 < 500ms（OpenClaw 当前 5-10s 量级），产出质量持平或更优，token 成本可解释。
+
+---
 
 **项目最终验收标准**: 一个为期1个月的小红书运营Mission能从始至终持续运行，中途可以暂停恢复，有检查点，最终有完整的执行报告。
