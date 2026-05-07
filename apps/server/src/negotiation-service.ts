@@ -171,9 +171,9 @@ export function createNegotiationService(options: NegotiationServiceOptions) {
     } catch (error) {
       console.error("[Negotiation] Build proposal content failed:", error instanceof Error ? error.message : String(error));
       return {
-        message: "I propose the following team for your mission",
+        message: "我建议为这个 Mission 采用以下团队配置",
         proposal,
-        justification: "Based on mission requirements and constraints",
+        justification: "该配置基于 Mission 目标、成功指标和约束生成",
       };
     }
   }
@@ -199,7 +199,7 @@ export function createNegotiationService(options: NegotiationServiceOptions) {
         receiverId: negotiation.participantId,
         type: "counter_proposal",
         content: {
-          message: "I need more information to proceed",
+          message: "我需要更多信息才能继续调整团队提案",
           requiresClarification: true,
         },
       });
@@ -236,6 +236,7 @@ function buildNegotiationSystemPrompt(): string {
     "- Know when to escalate for user input",
     "",
     "Always respond with structured JSON that can be parsed directly.",
+    "Use Chinese for every user-facing message, justification, role description, risk, and recommendation.",
   ].join("\n");
 }
 
@@ -244,7 +245,7 @@ function buildProposalPrompt(
   ownerContext: OwnerContext,
 ): string {
   return [
-    "Present this team proposal to the mission owner:",
+    "Present this team proposal to the mission owner in Chinese:",
     "",
     `**Mission ID:** ${proposal.missionId}`,
     `**Team Size:** ${proposal.roles.length} members`,
@@ -271,9 +272,9 @@ function buildProposalPrompt(
     "",
     "Provide a JSON response with this structure:",
     "{",
-    '  "message": "Professional proposal message",',
+    '  "message": "中文团队提案说明",',
     '  "proposal": { ... },',
-    '  "justification": "Why this team composition makes sense"',
+    '  "justification": "为什么这个团队配置合理"',
     "}",
   ].join("\n");
 }

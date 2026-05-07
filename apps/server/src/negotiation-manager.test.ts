@@ -293,6 +293,20 @@ describe("NegotiationManager", () => {
       expect(deps.missions.get(mission.id)?.scheduleRules.length).toBeGreaterThan(0);
     });
 
+    it("renders HR team proposal messages in Chinese from structured proposal data", async () => {
+      const manager = new NegotiationManager(deps);
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+
+      const proposalMessage = [...deps.agentMessages.values()].find(
+        (message) => message.missionId === mission.id && message.type === "team_created",
+      );
+
+      expect(proposalMessage?.content).toContain("HR 建议");
+      expect(proposalMessage?.content).toContain("团队规模");
+      expect(proposalMessage?.content).toContain("角色分工");
+      expect(proposalMessage?.content).not.toContain("HR Agent proposes");
+    });
+
     it("uses configured default timezone for schedule rules", async () => {
       deps.config.scheduler = { defaultTimezone: "UTC" };
       const manager = new NegotiationManager(deps);

@@ -232,11 +232,46 @@ describe("handleApiRequest", () => {
       { missions, openclaw: fakeOpenClaw() },
     );
 
-    expect(response.status).toBe(200);
-    const snapshot = (response.body as { snapshot: MissionSnapshot }).snapshot;
+    expect(response.status).toBe(202);
+    const body = response.body as { execution: { status: string; taskId: string }; snapshot: MissionSnapshot };
+    const snapshot = body.snapshot;
     expect(snapshot.agents.some((agent) => agent.missionId === missionId && agent.role !== "owner" && agent.role !== "hr")).toBe(true);
     expect(snapshot.tasks.filter((task) => task.missionId === missionId)).toHaveLength(1);
+    expect(body.execution.status).toBe("running");
+    expect(snapshot.tasks.find((task) => task.id === body.execution.taskId)?.status).toBe("running");
+    expect(snapshot.agents.some((agent) => agent.missionId === missionId && agent.role !== "owner" && agent.role !== "hr" && agent.status === "running")).toBe(true);
     expect(missions.getNegotiation({ missionId })).toBeUndefined();
+  });
+
+  it("records an explicit failure when automatic HR-confirm execution cannot start OpenClaw", async () => {
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
+    const missionId = await createMissionWithConfirmedPlan(missions);
+    await missions.activateMissionWithHR({ missionId });
+    const failingOpenClaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask"> = {
+      async health() {
+        return { available: true, version: "test-openclaw" };
+      },
+      async runAgentTask() {
+        throw new Error("OpenClaw failed to start");
+      },
+    };
+
+    const response = await handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/negotiate/confirm",
+        body: { missionId },
+      },
+      { missions, openclaw: failingOpenClaw },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(response.status).toBe(202);
+    const snapshot = missions.snapshot();
+    expect(snapshot.executions.find((execution) => execution.missionId === missionId)?.status).toBe("failed");
+    expect(snapshot.agents.some((agent) => agent.missionId === missionId && agent.status === "blocked")).toBe(true);
+    expect(snapshot.agentMessages.some((message) => message.missionId === missionId && message.type === "execution_failed" && message.content.includes("OpenClaw failed to start"))).toBe(true);
   });
 
   it("rejects async API activation before creating HR work when no MissionPlan is confirmed", async () => {

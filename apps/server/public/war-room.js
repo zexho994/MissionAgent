@@ -541,9 +541,6 @@ function renderWarTab(data) {
     agents: {
       title: "Agents 看板",
       intro: "按角色查看每个 agent 的职责、状态、当前任务和最近动作。",
-      items: [...data.agents]
-        .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-        .map((agent) => `${agent.name}：${agent.lastAction || agent.responsibility}`),
     },
     tasks: {
       title: "任务列表",
@@ -562,6 +559,10 @@ function renderWarTab(data) {
     },
   };
   const content = map[state.warTab] || map.agents;
+
+  if (state.warTab === "agents") {
+    return renderAgentsPanel(data, content);
+  }
 
   if (state.warTab === "tasks") {
     const artifactByTaskId = new Map(data.artifacts.map((a) => [a.taskId, a]));
@@ -591,6 +592,86 @@ function renderWarTab(data) {
       </div>
     </div>
   `;
+}
+
+function renderAgentsPanel(data, content) {
+  const sortedAgents = [...data.agents].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  return `
+    <div class="tab-panel agents-panel">
+      <h1>${esc(content.title)}</h1>
+      <p>${esc(content.intro)}</p>
+      <div class="agent-detail-list">
+        ${sortedAgents.length ? sortedAgents.map((agent) => renderAgentDetailCard(data, agent)).join("") : `<div class="empty-state">暂无 agent</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderAgentDetailCard(data, agent) {
+  const task = agent.currentTaskId
+    ? data.tasks.find((item) => item.id === agent.currentTaskId)
+    : latestTaskForAgent(data, agent);
+  const messages = latestAgentMessages(data, agent.id);
+  const runningTool = task
+    ? data.toolCalls.find((call) => call.taskId === task.id && call.status === "running")
+    : undefined;
+  return `
+    <article class="agent-detail-card">
+      <header class="agent-detail-header">
+        <div>
+          <strong>${esc(agent.name || agent.role || "Agent")}</strong>
+          <span>${esc(agent.responsibility || "暂无职责说明")}</span>
+        </div>
+        <span class="agent-status status-${esc(agent.status || "idle")}">${esc(agentStatusLabel(agent.status || "idle"))}</span>
+      </header>
+      <div class="agent-detail-grid">
+        <div>
+          <span class="field-label">当前任务</span>
+          <span class="field-value">${task ? esc(task.title) : "暂无任务"}</span>
+        </div>
+        <div>
+          <span class="field-label">任务状态</span>
+          <span class="field-value">${task ? esc(statusLabel(task.status)) : "未分配"}</span>
+        </div>
+        <div>
+          <span class="field-label">最近动作</span>
+          <span class="field-value">${esc(agent.lastAction || "等待下一步")}</span>
+        </div>
+        <div>
+          <span class="field-label">执行工具</span>
+          <span class="field-value">${runningTool ? esc(`${runningTool.toolName} 运行中`) : "暂无运行中的工具"}</span>
+        </div>
+      </div>
+      ${task ? `
+        <div class="agent-task-objective">
+          <span class="field-label">任务目标</span>
+          <p>${esc(task.contract?.objective || "暂无任务目标")}</p>
+        </div>
+      ` : ""}
+      <div class="agent-message-feed">
+        <span class="field-label">最近进度</span>
+        ${messages.length ? messages.map((message) => `
+          <div class="agent-progress-item">
+            <time>${esc(formatTime(message.createdAt))}</time>
+            <p>${esc(shortText(message.content, 180))}</p>
+          </div>
+        `).join("") : `<div class="empty-state compact">暂无进度消息</div>`}
+      </div>
+    </article>
+  `;
+}
+
+function latestTaskForAgent(data, agent) {
+  return [...data.tasks]
+    .reverse()
+    .find((task) => task.assigneeAgentId === agent.id);
+}
+
+function latestAgentMessages(data, agentId) {
+  return [...data.messages]
+    .filter((message) => message.fromAgentId === agentId && message.type !== "user_message")
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, 3);
 }
 
 function renderTaskCard(data, task, artifact, agentById) {

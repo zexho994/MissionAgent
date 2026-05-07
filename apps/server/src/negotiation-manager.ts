@@ -65,7 +65,19 @@ export class NegotiationManager {
 
     const hrAgent = createHRAgent({ llm: this.llm });
     const analysis = await hrAgent.receiveMissionBrief(mission.brief);
+    this.appendMessage({
+      missionId: mission.id,
+      fromAgentId: hrAgentId,
+      type: "agent_notify",
+      content: `HR 已完成 MissionBrief 分析：需要 ${analysis.estimatedTeamSize} 个核心角色，复杂度为 ${analysis.complexity}。`,
+    });
     const roleSpecs = await hrAgent.generateRoleSpecs(mission.id, analysis);
+    this.appendMessage({
+      missionId: mission.id,
+      fromAgentId: hrAgentId,
+      type: "agent_notify",
+      content: `HR 已生成 ${roleSpecs.length} 个角色规格，正在整理团队提案。`,
+    });
     const proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
 
     const owner = this.agentByRole(mission.id, "owner");
@@ -88,7 +100,7 @@ export class NegotiationManager {
       fromAgentId: hrAgentId,
       toAgentId: owner.id,
       type: "team_created",
-      content: `HR Agent proposes a team of ${proposal.roles.length} members. Estimated duration: ${proposal.estimatedDuration}. Risks: ${proposal.riskAssessment.join(", ")}.`,
+      content: formatTeamProposalMessage(proposal),
     });
     this.agents.set(hrAgentId, {
       ...hrAgentRecord,
@@ -187,7 +199,7 @@ export class NegotiationManager {
       fromAgentId: hrAgentId,
       toAgentId: owner.id,
       type: "team_created",
-      content: `HR Agent revised the team proposal based on your feedback. New team of ${revisedProposal.roles.length} members. ${revisedProposal.riskAssessment.length > 0 ? `Risks: ${revisedProposal.riskAssessment.join(", ")}` : "No major risks identified."}`,
+      content: formatTeamProposalMessage(revisedProposal, "HR 已根据你的反馈更新团队提案。"),
     });
     const hrAgentRecord = this.agents.get(hrAgentId);
     if (!hrAgentRecord) {
@@ -266,7 +278,7 @@ export class NegotiationManager {
       missionId: mission.id,
       fromAgentId: hrAgentId,
       type: "team_created",
-      content: `Team confirmed! ${agents.length} agents deployed. Starting execution.`,
+      content: `团队已确认：${agents.length} 个 agent 已部署，正在自动启动首个任务。`,
     });
 
     return mission;
@@ -366,4 +378,36 @@ export class NegotiationManager {
     };
     this.agentMessages.set(message.id, message);
   }
+}
+
+function formatTeamProposalMessage(proposal: TeamProposal, lead = "HR 建议采用以下团队配置。"): string {
+  const roles = proposal.roles.map((role, index) => {
+    const responsibilities = role.responsibilities.length > 0
+      ? `职责：${role.responsibilities.join("、")}`
+      : "职责：按 MissionBrief 执行相关工作";
+    return `${index + 1}. ${role.name}：${role.purpose}。${responsibilities}`;
+  });
+  const risks = proposal.riskAssessment.length > 0
+    ? proposal.riskAssessment.join("；")
+    : "暂无重大风险";
+  const schedule = proposal.schedulePlan.length > 0
+    ? proposal.schedulePlan.map((item) => `- ${item.name}：${item.taskDescription}`).join("\n")
+    : "- 暂无额外定时节奏";
+
+  return [
+    lead,
+    "",
+    `团队规模：${proposal.roles.length} 个成员`,
+    `预计周期：${proposal.estimatedDuration}`,
+    `总预算：${proposal.totalBudget.maxRuntimeMinutes} 分钟，最多 ${proposal.totalBudget.maxTasks} 个任务`,
+    "",
+    "角色分工：",
+    ...roles,
+    "",
+    `风险评估：${risks}`,
+    `协作方式：${proposal.collaborationPlan.workflow}；沟通渠道：${proposal.collaborationPlan.communicationChannels.join("、")}；决策机制：${proposal.collaborationPlan.decisionMaking}`,
+    "",
+    "运行节奏：",
+    schedule,
+  ].join("\n");
 }

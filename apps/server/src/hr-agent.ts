@@ -242,12 +242,13 @@ function buildHRAgentSystemPrompt(): string {
     "- If anomaly detection is needed, describe the trigger condition and responder",
     "",
     "Respond with structured JSON that can be parsed directly.",
+    "Use Chinese for user-facing role names, purposes, responsibilities, risk factors, schedule names, and schedule task descriptions.",
   ].join("\n");
 }
 
 function buildMissionAnalysisPrompt(brief: MissionBrief): string {
   return [
-    "Analyze this mission brief and provide a comprehensive team analysis:",
+    "Analyze this mission brief and provide a comprehensive team analysis. Return user-facing text fields in Chinese:",
     "",
     `**Goal:** ${brief.goal}`,
     `**Scope:** ${brief.scope}`,
@@ -269,7 +270,7 @@ function buildMissionAnalysisPrompt(brief: MissionBrief): string {
 
 function buildRoleSpecsPrompt(missionId: string, analysis: MissionAnalysis): string {
   return [
-    "Generate detailed role specifications for this mission:",
+    "Generate detailed role specifications for this mission. Role names, purposes, responsibilities, and success criteria must be in Chinese:",
     "",
     `**Mission Goal:** ${analysis.missionGoal}`,
     `**Required Capabilities:** ${analysis.requiredCapabilities.join(", ")}`,
@@ -280,9 +281,9 @@ function buildRoleSpecsPrompt(missionId: string, analysis: MissionAnalysis): str
     "Provide an array of role specifications with this structure:",
     "[",
     "  {",
-    '    "name": "Role Name",',
-    '    "purpose": "Role purpose statement",',
-    '    "responsibilities": ["responsibility1", "responsibility2"],',
+    '    "name": "中文角色名",',
+    '    "purpose": "中文角色目标",',
+    '    "responsibilities": ["中文职责1", "中文职责2"],',
     '    "capabilities": ["capability1", "capability2"],',
     '    "allowedTools": ["tool1", "tool2"],',
     '    "successCriteria": ["criterion1", "criterion2"],',
@@ -294,7 +295,7 @@ function buildRoleSpecsPrompt(missionId: string, analysis: MissionAnalysis): str
 
 function buildNegotiationPrompt(spec: RoleSpec, feedback: string): string {
   return [
-    "The owner provided feedback on this role specification. Adjust accordingly:",
+    "The owner provided feedback on this role specification. Adjust accordingly and keep user-facing fields in Chinese:",
     "",
     `**Current Role:** ${spec.name}`,
     `**Purpose:** ${spec.purpose}`,
@@ -438,17 +439,17 @@ function fallbackRoleSpecs(missionId: string, analysis: MissionAnalysis): RoleSp
   return [
     {
       id: createId("role"),
-      name: "Mission Operator",
-      purpose: `Execute the mission: ${analysis.missionGoal}`,
+      name: "Mission 执行负责人",
+      purpose: `执行 Mission：${analysis.missionGoal}`,
       responsibilities: [
-        "Analyze requirements",
-        "Execute primary tasks",
-        "Review results",
+        "分析任务要求",
+        "执行核心任务",
+        "复盘执行结果",
       ],
       allowedTools: ["web_search", "code_editor", "file_operations"],
       inputContract: { task: "string" },
       outputContract: { result: "object" },
-      successCriteria: ["Mission objectives met"],
+      successCriteria: ["Mission 目标已达成"],
       budget: {
         maxRuntimeMinutes: 120,
         maxTasks: 5,
@@ -466,8 +467,8 @@ function fallbackNegotiation(spec: RoleSpec, feedback: string): RoleSpec {
     return {
       ...spec,
       id: createId("role"),
-      name: `${spec.name} (Primary)`,
-      purpose: `${spec.purpose} - Primary focus`,
+      name: `${spec.name}（主责）`,
+      purpose: `${spec.purpose} - 主责范围`,
       responsibilities: spec.responsibilities.slice(0, midPoint),
       budget: {
         maxRuntimeMinutes: Math.max(Math.floor(spec.budget.maxRuntimeMinutes * 0.6), 30),
@@ -506,7 +507,7 @@ function assessRisks(roleSpecs: RoleSpec[]): string[] {
   const risks: string[] = [];
 
   if (roleSpecs.length > 6) {
-    risks.push("Large team size may slow coordination");
+    risks.push("团队规模较大，可能增加协作成本");
   }
 
   const totalBudget = roleSpecs.reduce(
@@ -515,7 +516,7 @@ function assessRisks(roleSpecs: RoleSpec[]): string[] {
   );
 
   if (totalBudget > 480) {
-    risks.push("High budget allocation may exceed constraints");
+    risks.push("预算投入较高，可能超出约束");
   }
 
   const hasComplexTools = roleSpecs.some(spec =>
@@ -525,10 +526,10 @@ function assessRisks(roleSpecs: RoleSpec[]): string[] {
   );
 
   if (hasComplexTools) {
-    risks.push("External dependencies may introduce delays");
+    risks.push("外部依赖可能带来交付延迟");
   }
 
-  return risks.length > 0 ? risks : ["Standard project risks apply"];
+  return risks.length > 0 ? risks : ["存在常规项目风险，需要持续跟踪"];
 }
 
 function designCollaborationPlan(roleSpecs: RoleSpec[]) {

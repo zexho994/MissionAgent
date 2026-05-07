@@ -206,6 +206,25 @@ async function runTask(missionId, taskId, message = "Execute the assigned task."
   }
 }
 
+async function generatePlanForMission(missionId, feedback) {
+  state.planActionMissionId = missionId;
+  const planUi = planUiState(missionId);
+  planUi.error = "";
+  renderAll({ forceChatBottom: true });
+  try {
+    const body = feedback === undefined ? {} : { feedback };
+    const result = await api(`/api/missions/${missionId}/plan/generate`, { method: "POST", body });
+    state.snapshot = result.snapshot;
+    planUi.revisionOpen = false;
+    planUi.revisionFeedback = "";
+  } catch (error) {
+    planUi.error = error instanceof Error ? error.message : String(error);
+  } finally {
+    state.planActionMissionId = undefined;
+    renderAll({ forceChatBottom: true });
+  }
+}
+
 async function createScheduleTemplate(missionId, payload, runNow) {
   state.scheduleActionPending = true;
   state.scheduleError = "";
@@ -227,7 +246,7 @@ async function createScheduleTemplate(missionId, payload, runNow) {
   }
 }
 
-async function refresh() {
+async function refresh(options = {}) {
   state.config = await api("/api/config");
   const health = await api("/api/health");
   const version = health.openclaw.version || "unknown";
@@ -241,7 +260,7 @@ async function refresh() {
   if (state.view === "mission" && currentMission()) {
     await refreshMissionAutomation();
   }
-  renderAll();
+  renderAll(options);
 }
 
 function syncSelectedMission() {
@@ -367,7 +386,8 @@ function scoped() {
   };
 }
 
-function renderAll() {
+function renderAll(options = {}) {
+  const chatScroll = captureChatScrollState();
   renderMissionPopover();
   if (state.view === "mission" && currentMission()) {
     renderWarRoom();
@@ -375,6 +395,37 @@ function renderAll() {
     state.view = "home";
     renderHome();
   }
+  restoreChatScrollState(chatScroll, options);
+}
+
+function captureChatScrollState() {
+  const chatStream = $("chat-stream");
+  if (!chatStream) return undefined;
+  const distanceFromBottom = chatStream.scrollHeight - chatStream.scrollTop - chatStream.clientHeight;
+  return {
+    scrollTop: chatStream.scrollTop,
+    distanceFromBottom,
+    wasNearBottom: distanceFromBottom < 80,
+  };
+}
+
+function restoreChatScrollState(previous, options = {}) {
+  const chatStream = $("chat-stream");
+  if (!chatStream) return;
+  requestAnimationFrame(() => {
+    if (options.forceChatBottom || previous?.wasNearBottom) {
+      chatStream.scrollTop = chatStream.scrollHeight;
+      return;
+    }
+    if (previous) {
+      chatStream.scrollTop = previous.scrollTop;
+    }
+  });
+}
+
+function scrollChatToBottom() {
+  const chatStream = $("chat-stream");
+  if (chatStream) chatStream.scrollTop = chatStream.scrollHeight;
 }
 
 function renderMissionPopover() {
@@ -653,8 +704,9 @@ function renderMissionPlanReview(data) {
     return `
       <div class="mission-plan-card">
         <strong>Owner Agent · MissionPlan</strong>
+        <p>${pending ? "正在自动生成执行计划..." : "确认 MissionBrief 后会自动生成执行计划。"}</p>
         ${error}
-        <button type="button" data-generate-plan ${pending ? "disabled" : ""}>${pending ? "正在生成计划..." : "生成执行计划"}</button>
+        ${error ? `<button type="button" data-generate-plan ${pending ? "disabled" : ""}>重新尝试生成计划</button>` : ""}
         ${legacyWarRoomAction}
       </div>
     `;
@@ -796,7 +848,7 @@ function bindChoiceButtons() {
       $("goal").value = choiceValue;
       const form = $("mission-form");
       if (form) {
-        form.dispatchEvent(new Event('submit'));
+        form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       }
     });
   });
@@ -804,21 +856,7 @@ function bindChoiceButtons() {
     button.addEventListener("click", async () => {
       const mission = currentMission();
       if (!mission) return;
-      state.planActionMissionId = mission.id;
-      planUiState(mission.id).error = "";
-      renderAll();
-      try {
-        const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: {} });
-        state.snapshot = result.snapshot;
-        const planUi = planUiState(mission.id);
-        planUi.revisionOpen = false;
-        planUi.revisionFeedback = "";
-      } catch (error) {
-        planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
-      } finally {
-        state.planActionMissionId = undefined;
-        renderAll();
-      }
+      await generatePlanForMission(mission.id);
     });
   });
   document.querySelectorAll("[data-confirm-plan]").forEach((button) => {
@@ -870,20 +908,7 @@ function bindChoiceButtons() {
         renderAll();
         return;
       }
-      state.planActionMissionId = mission.id;
-      planUi.error = "";
-      renderAll();
-      try {
-        const result = await api(`/api/missions/${mission.id}/plan/generate`, { method: "POST", body: { feedback } });
-        state.snapshot = result.snapshot;
-        planUi.revisionOpen = false;
-        planUi.revisionFeedback = "";
-      } catch (error) {
-        planUi.error = error instanceof Error ? error.message : String(error);
-      } finally {
-        state.planActionMissionId = undefined;
-        renderAll();
-      }
+      await generatePlanForMission(mission.id, feedback);
     });
   });
   document.querySelectorAll("[data-open-war-room]").forEach((button) => {
@@ -947,12 +972,21 @@ function bindChoiceButtons() {
     button.addEventListener("click", async () => {
       const mission = currentMission();
       if (!mission) return;
-      const result = await api("/api/missions/confirm-brief", {
-        method: "POST",
-        body: { missionId: mission.id },
-      });
-      state.snapshot = result.snapshot;
-      renderAll();
+      planUiState(mission.id).error = "";
+      state.planActionMissionId = mission.id;
+      renderAll({ forceChatBottom: true });
+      try {
+        const result = await api("/api/missions/confirm-brief", {
+          method: "POST",
+          body: { missionId: mission.id },
+        });
+        state.snapshot = result.snapshot;
+        await generatePlanForMission(mission.id);
+      } catch (error) {
+        planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
+        state.planActionMissionId = undefined;
+        renderAll({ forceChatBottom: true });
+      }
     });
   });
   document.querySelectorAll("[data-confirm-negotiation]").forEach((button) => {
@@ -1170,7 +1204,7 @@ document.addEventListener("submit", async (event) => {
   state.draftMode = false;
   state.view = "home";
   state.warTab = "overview";
-  renderAll();
+  renderAll({ forceChatBottom: true });
 
   // Start SSE streaming
   const chatStream = $('chat-stream');
@@ -1255,6 +1289,7 @@ async function streamOwnerResponse(missionId, container) {
   // The 'done' event will still trigger refresh() to update the UI
   let responseBubble = container.querySelector('.owner.thinking');
   let contentEl = responseBubble?.querySelector('p');
+  let hasReceivedToken = false;
 
   // Set initial cursor if thinking bubble exists at start
   if (contentEl && !contentEl.querySelector('.streaming-cursor')) {
@@ -1284,8 +1319,7 @@ async function streamOwnerResponse(missionId, container) {
           const cursor = contentEl.querySelector('.streaming-cursor');
           const text = contentEl.textContent.replace('▋', '') + data.content;
           contentEl.innerHTML = esc(text) + '<span class="streaming-cursor">▋</span>';
-          const chatStream = $('chat-stream');
-          if (chatStream) chatStream.scrollTop = chatStream.scrollHeight;
+          scrollChatToBottom();
         }
       }
 
@@ -1298,7 +1332,7 @@ async function streamOwnerResponse(missionId, container) {
         }
 
         setTimeout(async () => {
-          await refresh();
+          await refresh({ forceChatBottom: true });
         }, 500);
       }
     } catch (error) {
@@ -1310,7 +1344,7 @@ async function streamOwnerResponse(missionId, container) {
     console.error('[SSE] Connection error:', error);
     eventSource.close();
     state.streamingMissionId = undefined;
-    const cursor = contentEl.querySelector('.streaming-cursor');
+    const cursor = contentEl?.querySelector('.streaming-cursor');
     if (cursor) cursor.remove();
   });
 }
