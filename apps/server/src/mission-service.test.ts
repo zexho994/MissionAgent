@@ -338,6 +338,87 @@ describe("InMemoryMissionService", () => {
     }
   });
 
+  it("dispatches review_completed event to AgentConversationBus when artifact is approved", async () => {
+    const runtime: MissionExecutionRuntime = {
+      async runAgentTask() {
+        return {
+          status: "completed",
+          output: {
+            payloads: [
+              { text: "Track GitHub growth metrics delivered with daily review and details." },
+            ],
+            searchResults: [
+              { url: "https://example.com/source", title: "src", snippet: "x" },
+            ],
+          },
+          stderr: "",
+        };
+      },
+    };
+    const llm = new FakeLlmAdapter(() => JSON.stringify({
+      message: "Acknowledged.",
+      type: "agent_chat",
+      shouldPropagate: false,
+      action: { type: "acknowledge" },
+    }));
+    const service = new InMemoryMissionService({ runtime, llm });
+    const mission = await service.createMission({
+      goal: "Track GitHub growth",
+      successMetrics: ["daily review generated"],
+    });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+    if (!task) throw new Error("missing initial task");
+
+    service.executeTask({ missionId: mission.id, taskId: task.id, message: "go" });
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setImmediate(r));
+    }
+
+    const snapshot = service.snapshot();
+    const finalTask = snapshot.tasks.find((t) => t.id === task.id);
+    expect(finalTask?.status).toBe("completed");
+    const reviewThread = snapshot.threads.find(
+      (thread) => thread.missionId === mission.id && thread.topic === "Review completed follow-up",
+    );
+    expect(reviewThread).toBeDefined();
+  });
+
+  it("dispatches review_revision_needed event when reviewer asks for revisions", async () => {
+    const runtime: MissionExecutionRuntime = {
+      async runAgentTask() {
+        return {
+          status: "completed",
+          // Long enough to clear the "too short" check, but no goal-relevant keywords.
+          output: { payloads: [{ text: "noise noise noise noise noise noise filler" }] },
+          stderr: "",
+        };
+      },
+    };
+    const llm = new FakeLlmAdapter(() => JSON.stringify({
+      message: "Acknowledged.",
+      type: "agent_chat",
+      shouldPropagate: false,
+      action: { type: "acknowledge" },
+    }));
+    const service = new InMemoryMissionService({ runtime, llm });
+    const mission = await service.createMission({ goal: "Track GitHub growth" });
+    service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+    if (!task) throw new Error("missing initial task");
+
+    service.executeTask({ missionId: mission.id, taskId: task.id, message: "go" });
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setImmediate(r));
+    }
+
+    const snapshot = service.snapshot();
+    const revisionThread = snapshot.threads.find(
+      (thread) => thread.missionId === mission.id && thread.topic === "Revision discussion",
+    );
+    expect(revisionThread).toBeDefined();
+  });
+
   it("persists mission state to a local JSON file and reloads it", async () => {
     const dir = mkdtempSync(join(tmpdir(), "digitalagent-store-"));
     try {

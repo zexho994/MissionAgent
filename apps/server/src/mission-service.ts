@@ -1173,6 +1173,21 @@ export class InMemoryMissionService {
       taskId: task.id,
       artifactId: artifact.id,
     }, mission.id);
+    if (review.decision === "approve") {
+      void this.dispatchToBus({
+        type: "review_completed",
+        agentId: reviewer.id,
+        taskId: task.id,
+        decision: review.decision,
+      }, mission.id);
+    } else if (review.decision === "revise") {
+      void this.dispatchToBus({
+        type: "review_revision_needed",
+        agentId: reviewer.id,
+        taskId: task.id,
+        comments: qualityResult.comments,
+      }, mission.id);
+    }
     void this.evaluateScheduleConditions(mission, resultTask, input.content);
     return { artifact, review };
   }
