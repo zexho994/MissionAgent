@@ -444,6 +444,31 @@ describe("HRAgent", () => {
       expect(first?.id).toBeTruthy();
       expect(first?.budget.maxTasks).toBeGreaterThan(0);
     });
+
+    it("forwards each LLM token to onToken when provided", async () => {
+      const seen: string[] = [];
+      mockLlm.call = async (_messages, options) => {
+        const content = "abc-def";
+        if (options?.onStream) {
+          for (const char of content) options.onStream(char);
+        }
+        return {
+          content,
+          model: "test-model",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      };
+
+      const hrAgent = createHRAgent({
+        llm: mockLlm,
+        onToken: (token) => seen.push(token),
+      });
+      await hrAgent.analyzeAndPlan("mission-stream", missionBrief);
+
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.join("")).toBe("abc-def");
+    });
   });
 
   describe("negotiateRoleSpec", () => {

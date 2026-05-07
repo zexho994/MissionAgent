@@ -7,6 +7,7 @@ const state = {
   warTab: "overview",
   popoverOpen: false,
   streamingMissionId: undefined,
+  hrStreamingMissionId: undefined,
   pollingInterval: undefined,
   automationSummaryByMissionId: {},
   feedbackSummaryByMissionId: {},
@@ -396,6 +397,17 @@ function renderAll(options = {}) {
     renderHome();
   }
   restoreChatScrollState(chatScroll, options);
+  maybeStartHrStreaming();
+}
+
+function maybeStartHrStreaming() {
+  const mission = currentMission();
+  if (!mission) return;
+  const data = scoped();
+  const hrRunning = data.agents.some((agent) => agent.role === "hr" && agent.status === "running");
+  if (hrRunning && state.hrStreamingMissionId !== mission.id) {
+    streamHrProgress(mission.id);
+  }
 }
 
 function captureChatScrollState() {
@@ -580,6 +592,17 @@ function renderChatContent(data) {
     parts.push(`
       <div class="bubble owner thinking">
         <p>${conversationMessages.length === 0 ? "正在分析你的目标..." : "正在思考你的回复..."}</p>
+      </div>
+    `);
+  }
+
+  const hrRunning = data.agents.some((agent) => agent.role === "hr" && agent.status === "running");
+  if (data.mission.briefConfirmed && hrRunning && !latestTeamProposal) {
+    parts.push(`
+      <div class="bubble hr thinking" data-hr-bubble>
+        <p>HR Agent 正在分析任务并组建团队…<br>
+          <span class="hr-progress-meta">已生成 <span data-hr-tokens>0</span> 字符 <span class="streaming-cursor">▋</span></span>
+        </p>
       </div>
     `);
   }
@@ -1346,6 +1369,46 @@ async function streamOwnerResponse(missionId, container) {
     state.streamingMissionId = undefined;
     const cursor = contentEl?.querySelector('.streaming-cursor');
     if (cursor) cursor.remove();
+  });
+}
+
+function streamHrProgress(missionId) {
+  if (state.hrStreamingMissionId === missionId) return;
+  state.hrStreamingMissionId = missionId;
+
+  const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
+
+  const cleanup = () => {
+    eventSource.close();
+    if (state.hrStreamingMissionId === missionId) {
+      state.hrStreamingMissionId = undefined;
+    }
+  };
+
+  eventSource.addEventListener('message', (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'hr_progress') {
+        const counter = document.querySelector('[data-hr-bubble] [data-hr-tokens]');
+        if (counter && typeof data.tokensReceived === 'number') {
+          counter.textContent = String(data.tokensReceived);
+        }
+      } else if (data.type === 'hr_progress_done') {
+        cleanup();
+        setTimeout(async () => {
+          await refresh({ forceChatBottom: true });
+        }, 200);
+      } else if (data.type === 'done') {
+        cleanup();
+      }
+    } catch (error) {
+      console.error('[SSE/HR] Parse error:', error);
+    }
+  });
+
+  eventSource.addEventListener('error', (error) => {
+    console.error('[SSE/HR] Connection error:', error);
+    cleanup();
   });
 }
 

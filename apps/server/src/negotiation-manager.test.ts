@@ -268,6 +268,28 @@ describe("NegotiationManager", () => {
       expect(hrAgents).toHaveLength(1);
       expect(hrAgents[0]?.id).toBe("stale_hr_1");
     });
+
+    it("emits hr_progress stream events while HR is generating", async () => {
+      const events: Array<{ type: string; tokensReceived?: number; phase?: string; messageId?: string }> = [];
+      const manager = new NegotiationManager({
+        ...deps,
+        notifyStream: (_missionId, event) => {
+          events.push(event as { type: string; tokensReceived?: number; phase?: string; messageId?: string });
+        },
+      } as NegotiationManagerOptions);
+
+      await manager.startNegotiation({ missionId: mission.id }, mission);
+
+      const progressEvents = events.filter((event) => event.type === "hr_progress");
+      expect(progressEvents.length).toBeGreaterThan(0);
+      const last = progressEvents[progressEvents.length - 1];
+      expect(last?.tokensReceived).toBeGreaterThan(0);
+      expect(last?.phase).toBe("analyzing");
+      expect(last?.messageId).toBeDefined();
+      const doneEvent = events.find((event) => event.type === "hr_progress_done");
+      expect(doneEvent).toBeDefined();
+      expect(doneEvent?.messageId).toBe(last?.messageId);
+    });
   });
 
   describe("confirmNegotiation", () => {
