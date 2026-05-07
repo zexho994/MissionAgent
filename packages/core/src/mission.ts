@@ -35,3 +35,19 @@ export function createMission(input: CreateMissionInput): Mission {
     scheduleRules: [],
   };
 }
+
+export function completeMission(mission: Mission): Mission {
+  if (mission.status === "completed") return mission;
+  if (mission.status === "cancelled") {
+    throw new Error("Cannot complete a cancelled mission");
+  }
+  return { ...mission, status: "completed" };
+}
+
+export function cancelMission(mission: Mission): Mission {
+  if (mission.status === "cancelled") return mission;
+  if (mission.status === "completed") {
+    throw new Error("Cannot cancel a completed mission");
+  }
+  return { ...mission, status: "cancelled" };
+}

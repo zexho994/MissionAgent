@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createMission } from "./mission.js";
+import { createMission, completeMission, cancelMission } from "./mission.js";
 
 describe("createMission", () => {
   it("creates an active mission with explicit success metrics and constraints", () => {
@@ -27,5 +27,47 @@ describe("createMission", () => {
         constraints: ["human approval before publishing"],
       }),
     ).toThrow("Mission requires at least one success metric");
+  });
+});
+
+describe("completeMission", () => {
+  it("transitions active mission to completed", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const completed = completeMission(mission);
+    expect(completed.status).toBe("completed");
+  });
+
+  it("returns completed mission unchanged", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const first = completeMission(mission);
+    const second = completeMission(first);
+    expect(second.status).toBe("completed");
+  });
+
+  it("throws when mission is cancelled", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const cancelled = cancelMission(mission);
+    expect(() => completeMission(cancelled)).toThrow("Cannot complete a cancelled mission");
+  });
+});
+
+describe("cancelMission", () => {
+  it("transitions active mission to cancelled", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const cancelled = cancelMission(mission);
+    expect(cancelled.status).toBe("cancelled");
+  });
+
+  it("returns cancelled mission unchanged", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const first = cancelMission(mission);
+    const second = cancelMission(first);
+    expect(second.status).toBe("cancelled");
+  });
+
+  it("throws when mission is completed", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const completed = completeMission(mission);
+    expect(() => cancelMission(completed)).toThrow("Cannot cancel a completed mission");
   });
 });
