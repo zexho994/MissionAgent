@@ -195,6 +195,7 @@ export function createHRAgent(options: HRAgentOptions) {
     missionId: string,
     roleSpecs: RoleSpec[],
     brief?: MissionBrief,
+    options?: { useLlmSchedule?: boolean },
   ): Promise<TeamProposal> {
     const enforcedSpecs = roleSpecs.length > maxTeamSize
       ? roleSpecs.slice(0, maxTeamSize)
@@ -211,9 +212,9 @@ export function createHRAgent(options: HRAgentOptions) {
     const estimatedDuration = estimateDuration(totalBudget.maxRuntimeMinutes);
     const riskAssessment = assessRisks(enforcedSpecs);
     const collaborationPlan = designCollaborationPlan(enforcedSpecs);
-    const schedulePlan = brief
+    const schedulePlan = brief && options?.useLlmSchedule === true
       ? await proposeSchedulePlan(brief, enforcedSpecs)
-      : designSchedulePlan(enforcedSpecs);
+      : designSchedulePlan(enforcedSpecs, brief);
 
     return {
       missionId,
