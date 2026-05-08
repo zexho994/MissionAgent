@@ -6,6 +6,7 @@ import {
 } from "@digitalagent/core";
 import { NegotiationManager, type NegotiationManagerOptions } from "./negotiation-manager.js";
 import type { LlmService } from "@digitalagent/runtime";
+import type { TeamProposal } from "./hr-agent.js";
 import type { WarRoomAgent, AgentRelation, AgentMessage } from "./mission-service.js";
 import type { AgentSystemConfig } from "./system-config.js";
 
@@ -372,6 +373,87 @@ describe("NegotiationManager", () => {
         (m) => m.missionId === mission.id && m.fromAgentId === `hr_${mission.id}`,
       );
       expect(syntheticIdMessages).toHaveLength(0);
+    });
+  });
+
+  describe("createScheduleRulesFromProposal templateId expansion", () => {
+    it("expands templateId to ScheduleRule using the built-in registry", () => {
+      const manager = new NegotiationManager(deps);
+      const proposal: TeamProposal = {
+        missionId: mission.id,
+        roles: [],
+        proposedBy: "hr_test",
+        totalBudget: { maxRuntimeMinutes: 0, maxTasks: 0 },
+        estimatedDuration: "0 minutes",
+        riskAssessment: [],
+        collaborationPlan: { workflow: "", communicationChannels: [], decisionMaking: "" },
+        schedulePlan: [
+          {
+            name: "daily check via template",
+            assigneeRole: "data_analyst",
+            taskDescription: "raw description that should be ignored",
+            justification: "use built-in daily metric template",
+            templateId: "daily_metric_check",
+          },
+        ],
+        createdAt: new Date(),
+      };
+
+      const rules = (manager as unknown as {
+        createScheduleRulesFromProposal: (m: Mission, p: TeamProposal) => Array<import("@digitalagent/core").ScheduleRule>;
+      }).createScheduleRulesFromProposal(mission, proposal);
+
+      expect(rules).toHaveLength(1);
+      const rule = rules[0]!;
+      expect(rule.taskTemplate.contract.objective).toBe("检查并报告关键指标");
+      expect(rule.taskTemplate.contract.objective).not.toBe("raw description that should be ignored");
+      expect(rule.taskTemplate.priority).toBe("normal");
+      expect(rule.taskTemplate.title).toBe("data_analyst 每日数据检查");
+      expect(rule.maxConcurrent).toBe(1);
+      expect(rule.metadata).toMatchObject({
+        justification: "use built-in daily metric template",
+        source: "builtin",
+        templateId: "daily_metric_check",
+      });
+      expect(rule.trigger.type).toBe("cron");
+      if (rule.trigger.type === "cron") {
+        expect(rule.trigger.expression).toBe("0 9 * * *");
+        expect(rule.trigger.timezone).toBe("UTC");
+      }
+    });
+
+    it("falls back to raw plan item when templateId is unknown", () => {
+      const manager = new NegotiationManager(deps);
+      const proposal: TeamProposal = {
+        missionId: mission.id,
+        roles: [],
+        proposedBy: "hr_test",
+        totalBudget: { maxRuntimeMinutes: 0, maxTasks: 0 },
+        estimatedDuration: "0 minutes",
+        riskAssessment: [],
+        collaborationPlan: { workflow: "", communicationChannels: [], decisionMaking: "" },
+        schedulePlan: [
+          {
+            name: "no template",
+            cronExpression: "0 8 * * *",
+            assigneeRole: "data_analyst",
+            taskDescription: "untemplated work",
+            justification: "no template available",
+            templateId: "nonexistent_template_id",
+          },
+        ],
+        createdAt: new Date(),
+      };
+
+      const rules = (manager as unknown as {
+        createScheduleRulesFromProposal: (m: Mission, p: TeamProposal) => Array<import("@digitalagent/core").ScheduleRule>;
+      }).createScheduleRulesFromProposal(mission, proposal);
+
+      expect(rules).toHaveLength(1);
+      const rule = rules[0]!;
+      expect(rule.taskTemplate.contract.objective).toBe("untemplated work");
+      expect(rule.metadata).not.toHaveProperty("source");
+      expect(rule.metadata).not.toHaveProperty("templateId");
     });
   });
 });

@@ -2,6 +2,7 @@ import {
   createScheduleRule,
   createId,
   createTask,
+  findTemplateById,
   type Mission,
   type ScheduleRule,
   SchedulePlanGenerationError,
@@ -335,17 +336,56 @@ export class NegotiationManager {
 
   private createScheduleRulesFromProposal(mission: Mission, proposal: TeamProposal): ScheduleRule[] {
     return (proposal.schedulePlan ?? []).map((planItem) => {
-      const trigger = planItem.cronExpression
+      const template = planItem.templateId ? findTemplateById(planItem.templateId) : undefined;
+
+      const trigger: ScheduleRule["trigger"] = planItem.cronExpression
         ? {
-            type: "cron" as const,
+            type: "cron",
             expression: planItem.cronExpression,
             timezone: planItem.timezone ?? this.config.scheduler?.defaultTimezone ?? "Asia/Shanghai",
           }
+        : template
+          ? template.trigger.type === "cron"
+            ? {
+                type: "cron",
+                expression: template.trigger.expression,
+                timezone: template.trigger.timezone,
+              }
+            : {
+                type: "condition",
+                description: template.trigger.description,
+                sourceAgentRole: template.trigger.sourceAgentRole,
+                evaluatePrompt: template.trigger.evaluatePrompt,
+              }
+          : {
+              type: "condition",
+              description: planItem.conditionDescription ?? "",
+              sourceAgentRole: planItem.conditionSourceRole ?? planItem.assigneeRole,
+              evaluatePrompt: planItem.conditionEvaluatePrompt ?? `Check if: ${planItem.conditionDescription ?? ""}`,
+            };
+
+      const taskTemplate = template
+        ? {
+            title: template.taskTemplate.titleTemplate.replace("{{role.name}}", planItem.assigneeRole),
+            contract: {
+              objective: template.taskTemplate.contract.objective,
+              input: { ...template.taskTemplate.contract.input },
+              outputSchema: { ...template.taskTemplate.contract.outputSchema },
+              successCriteria: [...template.taskTemplate.contract.successCriteria],
+            },
+            assigneeRole: planItem.assigneeRole,
+            priority: template.taskTemplate.priority,
+          }
         : {
-            type: "condition" as const,
-            description: planItem.conditionDescription ?? "",
-            sourceAgentRole: planItem.conditionSourceRole ?? planItem.assigneeRole,
-            evaluatePrompt: planItem.conditionEvaluatePrompt ?? `Check if: ${planItem.conditionDescription ?? ""}`,
+            title: planItem.taskDescription,
+            contract: {
+              objective: planItem.taskDescription,
+              input: {},
+              outputSchema: { report: "object" },
+              successCriteria: [`Complete: ${planItem.taskDescription}`],
+            },
+            assigneeRole: planItem.assigneeRole,
+            priority: "normal" as const,
           };
 
       return createScheduleRule({
@@ -353,19 +393,12 @@ export class NegotiationManager {
         missionId: mission.id,
         enabled: true,
         trigger,
-        taskTemplate: {
-          title: planItem.taskDescription,
-          contract: {
-            objective: planItem.taskDescription,
-            input: {},
-            outputSchema: { report: "object" },
-            successCriteria: [`Complete: ${planItem.taskDescription}`],
-          },
-          assigneeRole: planItem.assigneeRole,
-          priority: "normal",
+        taskTemplate,
+        maxConcurrent: template?.maxConcurrent ?? 1,
+        metadata: {
+          justification: planItem.justification,
+          ...(template ? { source: "builtin", templateId: template.id } : {}),
         },
-        maxConcurrent: 1,
-        metadata: { justification: planItem.justification },
       });
     });
   }
