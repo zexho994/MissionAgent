@@ -144,8 +144,12 @@ export async function handleApiRequest(
         return json(400, { error: "missionId required" });
       }
       const body = request.body ? expectObject(request.body) : {};
+      const summary = typeof body?.summary === "string" ? body.summary : undefined;
       try {
-        const result = deps.missions.completeMission({ missionId, summary: body?.summary as string | undefined });
+        const result = deps.missions.completeMission({
+          missionId,
+          ...(summary === undefined ? {} : { summary }),
+        });
         return json(200, { success: true, data: result });
       } catch (error) {
         return json(400, { success: false, error: error instanceof Error ? error.message : String(error) });
@@ -159,8 +163,12 @@ export async function handleApiRequest(
         return json(400, { error: "missionId required" });
       }
       const body = request.body ? expectObject(request.body) : {};
+      const reason = typeof body?.reason === "string" ? body.reason : undefined;
       try {
-        const result = deps.missions.cancelMission({ missionId, reason: body?.reason as string | undefined });
+        const result = deps.missions.cancelMission({
+          missionId,
+          ...(reason === undefined ? {} : { reason }),
+        });
         return json(200, { success: true, data: result });
       } catch (error) {
         return json(400, { success: false, error: error instanceof Error ? error.message : String(error) });
