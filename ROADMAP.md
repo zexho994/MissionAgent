@@ -2,213 +2,201 @@
 
 ## Vision
 
-一个AI驱动的目标达成系统。用户提供目标（如"小红书1个月涨粉1000"），AI负责从战略对齐、团队组建、任务执行到持续优化的全流程。系统像真正的团队一样紧密协作——分析师定期看数据、项目经理协调调整、内容策划响应变化。
+DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建作战室（Mission），AI 团队在作战室内自动循环工作（**观察 → 分析 → 优化**），无需用户全程介入。
 
-## Current State
+平台抽象 4 块通用能力（**看 / 做 / 想 / 不失控**），让任意"长循环"型 Mission 都能在同一套底层上跑：内容运营、股票投资、网站迭代、邮件营销、社群运营……都共享同一个引擎，差别只在"配置"。
 
-- 核心领域模型（Mission/Task/Artifact/Review/Agent）已建立
-- Owner Agent 和 HR Agent 作为预设角色存在
-- 关键词匹配驱动的团队组建
-- 线性任务编排（plan → execute → review → done）
-- 结构化事件消息，无Agent间对话
+## Mental Model
 
----
+> 一个 Mission = 一个作战室。用户描述目标 → Owner 多轮对话明确战略 → HR 组建团队 → 团队进入作战室 → **平台保证作战室能接到真实世界并自我调整**。
 
-## Phase 1: AI-Powered Owner — 智能目标澄清
-
-**目标**: Owner Agent 能像真正的项目经理一样，通过多轮对话理解用户目标，主动追问缺失信息，直到达成战略共识。
-
-### 1.1 LLM集成基础
-- [x] 设计通用的LLM调用接口（支持多provider：OpenAI、Claude、GLM）
-- [x] 实现LLM调用服务，包含重试、超时、token统计
-- [x] 在MissionService中注入LLM服务依赖
-
-### 1.2 Owner多轮对话
-- [x] 设计对话上下文管理（累积用户补充的信息）
-- [x] Owner根据目标内容主动生成追问（而非模板填充）
-- [x] Owner判断信息是否足够进入下一阶段（战略共识判断）
-- [x] 用户确认环节：Owner输出战略摘要，等待用户确认
-
-### 1.3 战略对齐输出
-- [x] 定义 `MissionBrief` 结构体（目标、范围、约束、成功指标、关键假设）
-- [x] Owner将多轮对话结果汇总为结构化MissionBrief
-- [x] MissionBrief作为后续HR招募的输入
-
-**验收标准**: 用户输入"运营一个小红书账号，一个月涨到1000粉丝"，Owner能追问账号现状、内容方向、目标人群等，最终生成结构化的MissionBrief。
+平台不是"做某种业务的 AI"，平台是**"让任意长循环业务都能自动跑的容器"**。
 
 ---
 
-## Phase 2: AI-Powered HR — 智能团队组建
+## 当前状态（2026 Q2）
 
-**目标**: HR Agent能根据MissionBrief分析岗位需求，动态生成RoleSpec，与Owner谈判直到达成共识，然后创建团队成员。
+### ✅ 已经做完的能力（Mission Harness 的"骨架"）
 
-### 2.1 HR岗位需求分析
-- [x] HR接收MissionBrief，分析需要哪些角色（`activateMissionWithHR()` 已实现，但尚未设为默认路径）
-- [x] HR生成每个角色的RoleSpec（职责、能力要求、工具权限、预算）（`generateRoleSpecs()` 已实现）
-- [x] 替换当前的关键词匹配逻辑（`planMissionTeam` → LLM驱动）（`activateMissionWithHR()` 已设为默认路径，走谈判流程）
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| **Owner 多轮对话** | ✅ | LLM 驱动，能追问、能输出 MissionBrief |
+| **HR 智能组团** | ✅ | LLM 分析需求、生成 RoleSpec、与 Owner 谈判 |
+| **MissionPlan 生成** | ✅ | 阶段、工作流、汇报线、调度节奏一次产出 |
+| **War Room 可视化** | ✅ | 协作图、任务列表、产出列表、定时任务、协作对话、反馈面板 |
+| **Agent 间通信** | ✅ | 报告、请求、通知、讨论 4 类 |
+| **Agent 自评循环** | ✅ | 周期性自评，能 acknowledge / report / request / notify / escalate |
+| **任务调度器** | ✅ | cron + 模板，4 个内置模板（每日检查/每周汇报/双周复盘/异常告警） |
+| **Mission 持久化** | ✅ | JSON store，重启自动恢复调度 |
+| **反馈基础设施** | ✅ | 评估 / 失败分析 / 策略提案 域类型已建，自动从执行结果生成 |
+| **Mission 完成/取消** | ✅ | 终止态守卫、scheduler & autonomy 自动停 |
 
-### 2.2 HR与Owner谈判循环
-- [x] 设计Agent间多轮对话协议（request → respond → negotiate → agree）（`NegotiationRound` 支持多轮）
-- [x] HR向Owner提出团队方案，Owner审核并提出修改意见（`proposeTeamPlan()` / `respondToNegotiation()`）
-- [x] 谈判循环：双方可以多轮协商直到达成一致
-- [x] 谈判失败时的升级机制（请求用户介入）（`NegotiationManager` maxRounds + 自动升级）
+### ❌ 真正缺的——4 块平台核心能力都不完整
 
-### 2.3 动态Agent创建
-- [x] 根据协商结果动态创建WarRoomAgent（`agent-factory.ts` 的 `createAgentFromSpec()`）
-- [x] 为每个Agent生成个性化的system prompt（`buildSystemPrompt()`）
-- [x] 建立Agent间的协作关系（AgentRelation）
-- [x] HR向每个Agent"交代"岗位职责和任务上下文（onboarding 流程）
+| 能力 | 缺什么 | 后果 |
+|---|---|---|
+| **看**（外部数据接入） | 完全没有，runtime 只有 OpenClaw CLI | AI 团队"开假会"，看不到真实世界数据 |
+| **做**（外部产出发布） | 完全没有，artifact 只在数据库里 | AI 写完没法挂到墙上，用户必须手动发 |
+| **想**（反馈驱动决策） | Agent 只能 acknowledge/report，**不能派活** | 反馈进来了也没用，循环合不上 |
+| **不失控**（熔断监控） | 只有基础预算计数，没有熔断/告警/通知 | 用户不敢真"按一次启动就不管" |
 
-**验收标准**: 用户确认MissionBrief后，HR能分析出需要数据分析师、内容策划、文案写手等角色，并与Owner就团队构成达成一致，然后自动创建团队。
-
----
-
-## Phase 3: Agent-to-Agent Collaboration — Agent间协作
-
-**目标**: Agent之间能像真正团队成员一样主动沟通、汇报、讨论，而非仅通过结构化事件传递信息。
-
-### 3.1 对话式通信
-- [x] 扩展AgentMessage支持自由文本对话（不只是结构化事件类型）
-- [x] 设计对话上下文：Agent能理解之前的对话历史
-- [x] Agent可以主动发起对话（不限于API触发）（`AgentAutonomyService` 周期性自评 + LLM决策）
-
-### 3.2 团队协作机制
-- [x] 汇报机制：下级Agent定期向上级汇报进展（`findSuperiors()` + `periodic_report` 事件 + `report_to_superior` action）
-- [x] 请求机制：Agent可以向其他Agent请求信息或协助
-- [x] 通知机制：异常情况主动通知相关负责人
-- [x] 讨论机制：多个Agent围绕一个议题展开讨论
-
-### 3.3 共享上下文
-- [x] 设计团队级别的共享知识库（Mission级记忆）（`KnowledgeEntry` + CRUD + 持久化）
-- [x] Agent能读取其他Agent的工作产出（Artifact共享）
-- [ ] 上下文窗口管理策略（长期任务中保持关键信息不丢失）（推迟到 Phase 6）
-
-**验收标准**: 数据分析师能主动告诉项目经理"昨天互动率下降30%"，项目经理能与内容策划讨论调整方案，整个过程无需用户介入。
+**结论**：平台 80% 的"对话/协作"骨架已经搭好，但**让作战室真正接到外部世界的 4 块能力一块都没补上**——这就是为什么虽然功能很多但跑不出"真实循环"。
 
 ---
 
-## Phase 4: Scheduler & Periodic Execution — 调度与周期执行
+## Phase A: 平台核心能力补齐（4 周，平台层）
 
-**目标**: 支持长期Mission中的定时任务、周期性检查、和条件触发的执行。
+**目标**：把"看 / 做 / 想 / 不失控"4 块能力都做出第一版，让任何"长循环"Mission 都能跑。
 
-### 4.1 任务调度器
-- [x] 设计调度器接口（cron表达式 + 任务模板）（`MissionScheduler` + `SchedulerDeps`）
-- [x] 实现调度器服务，支持注册/取消/修改调度（`MissionScheduler.start/stop/addRule/removeRule/updateRule`）
-- [x] 调度触发时自动创建Task并分配给对应Agent（执行入口已通过 `MissionService.executeTask` + `executeScheduledTask` 回调接通）
-- [x] 调度持久化（系统重启后恢复调度）（`InMemoryMissionService.restoreSchedulers`）
+### A.1 让 Mission 能"看"——外部数据接入框架
 
-### 4.2 周期性任务模板
-- [ ] **AI 量身定制周期任务**（opt-in 能力，默认关闭）：HR 在 `scheduleStrategy: "auto" | "llm"` 时调用 LLM 按 mission brief 生成定制化 schedulePlan，失败抛 `SchedulePlanGenerationError`；当前生产默认走"模板套用"，AI 路径作为隐藏开关保留
-- [x] AI 模式端到端测试（hr-agent.test.ts `AC1`：LLM 返空时正确抛 `SchedulePlanGenerationError`）
-- [x] 定义 `ScheduledTaskTemplate`（触发规则、执行模板、分配角色）（`packages/core/src/types.ts` + `schedule-templates.ts`）
-- [x] 支持常见模式：每日检查、每周汇报、每两周回顾（`BUILTIN_SCHEDULE_TEMPLATES` 4 个内置：daily_metric_check / weekly_team_report / biweekly_strategy_retrospective / engagement_drop_alert）
-- [x] Mission 创建时自动注册相关调度模板（`confirmNegotiation` 后自动启动 `MissionScheduler`，`createScheduleRulesFromProposal` 支持 `templateId` 展开）
-- [x] Mission 完成/取消时清理调度（`completeMission` / `cancelMission` 停 scheduler + 停 autonomy loop + 终止态守卫禁止再 `addScheduleRule`）
+**是什么**：用户在 Mission 配置里声明"要观察哪些数据源"，系统定期拉回来给 AI 团队查。
 
-### 4.3 条件触发器
-- [ ] 设计条件触发规则（如"互动率下降超过20%"）
-- [ ] 触发器绑定到特定Agent（如数据分析师检测到异常 → 通知项目经理）
-- [ ] 触发器与外部数据源集成（预留接口）
+**包含**：
+- **数据源适配器接口**（统一抽象）
+- **HTTP 接口适配器**（用户开放接口、Google Search Console 这种 API）
+- **浏览器自动化适配器**（无开放接口的平台，复用同一引擎）
+- **数据落到 Mission 知识库**（KnowledgeEntry 已建好，复用）
+- **失败重试 + 数据保鲜度标记**
 
-**验收标准**: 系统能自动在每天早上触发数据分析师检查数据，每周一触发项目经理和内容策划开"选题会"，无需人工操作。
+**验收**：speakin.cc Mission 跑起来后，AI 团队能在协作对话里引用真实的 GSC / 知乎 / 掘金 数据。
 
----
+### A.2 让 Mission 能"做"——外部产出发布框架
 
-## Phase 4.5: War Room 体验重构（与 Phase 5 可并行）
+**是什么**：用户在 Mission 配置里声明"产出物发到哪些目标"，AI 写完自动发出去。
 
-**目标**: 让 War Room 真实呈现团队协作状态，让用户一眼看清"谁在做什么、刚才发生了什么、下一步是什么"，而不是被一堆 role_xxx hash 和大段产出文本淹没。
+**包含**：
+- **发布目标适配器接口**（与 A.1 同结构，对偶设计）
+- **HTTP 接口适配器**（用户自家发文接口、邮件平台等）
+- **浏览器自动化适配器**（复用 A.1 的引擎，给"发"用）
+- **发布失败重试 + 限流处理 + 人工 fallback**（被限流时自动通知用户手动发）
+- **发布状态追踪**（已发 / 待发 / 失败 / 待人工）
 
-### 4.5.1 信息架构修复
-- [ ] **[P1]** 角色卡用 `spec.name`（人类可读名称）替代 `role_xxx` UUID
-- [ ] **[P1]** agent 状态分层视图（活跃 / 等待 / 已完成 三档分组或排序）
-- [ ] **[P1]** 协作关系连线渲染独立层，不被卡片挤压截断
+**验收**：speakin.cc Mission 的 4 周累计产出物全部挂到 3 个真实渠道。
 
-### 4.5.2 产出阅读
-- [ ] 产出文本默认折叠 + 自动摘要标题 + 点击展开
-- [ ] 产出与下游任务的引用关系可视化
-- [ ] 关键事件（首任务完成、调度触发、review 决策）时间线视图
+### A.3 让 Mission 能"想"——反馈驱动决策
 
-### 4.5.3 实时反馈
-- [ ] agent 状态切换的过渡动画（避免突变看不出变化）
-- [ ] 当前 mission 的 token / 预算消耗实时显示
+**是什么**：AI 项目经理收到执行结果或分析师汇报后，**基于数据 LLM 决策派下一波任务**，不是只回"收到"。
 
-**验收标准**：用户打开 War Room，5 秒内能回答"现在谁在做什么、刚才发生了什么、下一步等什么"。
+**包含**：
+- **新增 Agent action 类型**：`create_followup_task`（项目经理派任务）、`spawn_task`（一般 Agent 派任务给同事）
+- **LLM 决策推理**：项目经理 persona 用 LLM 基于"成功指标 + 最新反馈数据 + Mission 历史" 推理下一波任务
+- **决策可解释**：每个新派任务必须带"为什么派"（基于哪条反馈/哪个指标），可在 War Room 直接看到推理链
+- **Owner / 项目经理 persona 升级**：收到 `review_completed` / `execution_completed` 不再只 acknowledge
 
----
+**这是原 ROADMAP Phase 5.2 标了 P0 但完全没动的那块——Phase A.3 就是它的实施。**
 
-## Phase 5: Feedback Loops & Adaptation — 反馈闭环与自适应
+**验收**：speakin.cc Mission 第 2 周的选题决策能在协作对话里看到"基于第 1 周 GSC 数据的归因 + 下一波方向"的明确推理过程。
 
-**目标**: 执行结果能驱动策略调整，形成"执行→监控→分析→调整→再执行"的闭环。
+### A.4 让 Mission 不会失控——熔断和监控框架
 
-### 5.0 反馈基础设施
-- [x] 反馈领域类型定义（`MissionOutcomeEvaluation`, `TaskFailureAnalysis`, `StrategyAdjustment`）
-- [x] 确定性反馈生成（执行结果/执行失败 → 反馈记录）
-- [x] 反馈持久化（随 Mission 状态恢复）
-- [x] 反馈 API（summary、evaluations、failure-analyses、strategy-adjustments）
-- [x] War Room 反馈面板展示
+**是什么**：Mission 级安全机制，让用户敢真的"按一次启动就不管"。
 
-### 5.1 执行结果反馈
-- [x] 任务完成后自动触发评估（`submitExecutionResult()` → `buildExecutionResultFeedback()`）
-- [x] 评估结果通知相关Agent（`review_completed` / `review_revision_needed` 事件已 dispatch 到 `AgentConversationBus`）
-- [x] 反馈记录持久化与查询
-- [ ] 失败任务的自动重规划（不是简单重试，而是调整策略）
+**包含**：
+- **任务上限护栏**（每次反馈最多派 N 个任务、Mission 总产出/总 token 上限、超限自动暂停叫人）
+- **Mission 级熔断按钮**（用户随时一键叫停 Mission，scheduler + autonomy + runtime 全停）
+- **异常事件主动通知**（账号被限/封、外部接口失败、超预算、循环异常等触发 push 给用户）
+- **分层托管开关**（Mission 配置里能选"哪些动作 AI 自己做 / 哪些 AI 建议你拍板 / 哪些 AI 必须叫你"）
 
-### 5.2 策略自适应
-- [ ] **[P0]** `AgentAutonomyService` action 类型新增 `create_followup_task` / `spawn_task`（当前只有 acknowledge / report_to_superior / request_info / notify_owner / escalate，没有派活能力）
-- [ ] **[P0]** Owner / 项目经理 persona 在收到 `review_completed` / `execution_completed` 事件后，能基于产出 + 成功指标决定派下一波任务，而不是只回一句 acknowledge
-- [ ] **[P0]** 自动派活的循环安全限制（每个 review 最多触发 N 个 followup、mission 总任务数上限、防止 LLM 失控自我繁殖）
-- [ ] Owner/项目经理根据执行数据判断是否需要调整Mission策略
-- [ ] 策略调整时重新触发HR评估（是否需要新角色、调整现有角色职责）
-- [ ] 调整历史记录（追踪为什么做这个调整）
+**验收**：speakin.cc Mission 跑 4 周中至少触发 1 次"AI 主动叫人"且用户能在 War Room 直接看到原因 + 一键继续/中止。
 
-### 5.3 外部系统集成
-- [ ] 设计外部数据源适配器接口
-- [ ] 实现社媒数据采集适配器（小红书、知乎等）
-- [ ] 数据自动摄入 → 分析师Agent处理 → 结果流入反馈循环
-- [ ] 支持Agent调用外部API（发布内容、查看数据等）
+### Phase A 验收标准
 
-**验收标准**: 内容发布后，系统自动采集互动数据，分析师发现问题后项目经理调整内容策略，内容策划根据新策略修改后续选题，整个过程形成闭环。
+完成上面 4 块能力后，平台具备"任意长循环 Mission"的容器能力。speakin.cc Mission（Phase B）作为首验收场景。
 
 ---
 
-## Phase 6: Long-Running Mission Lifecycle — 长期任务生命周期
+## Phase B: 首个真实 Mission 验证（与 Phase A 交织进行，4 周）
 
-**目标**: 支持天/周/月级别的长期Mission，包含持久化、恢复、检查点等机制。
+**目标**：用 **speakin.cc 内容运营 Mission** 作为 Phase A 4 块能力的首验收场景。**这不是平台功能，是验收用例**。
 
-### 6.1 长期Mission管理
-- [ ] Mission状态扩展：加入 `milestone` 概念
-- [ ] 定期检查点：自动保存Mission进展快照
-- [ ] Mission暂停/恢复机制
-- [ ] Mission时间线可视化
+**与 Phase A 的关系**：B 不是 A 之后才开始的项目，B **驱动** A 每周该做什么。每周 A 做出来的能力，B 立刻拿来用、立刻暴露 A 的不完整。两者交织前进。
 
-### 6.2 Agent长期记忆
-- [ ] Agent记忆持久化（跨session保持）
-- [ ] 记忆摘要机制（避免上下文窗口溢出）
-- [ ] 重要事件归档（关键决策、转折点、教训）
+### B.1 Mission 配置
 
-### 6.3 资源与成本管理
-- [ ] 长期Mission的预算跟踪和预警
-- [ ] Agent级别的资源消耗统计
-- [ ] 超预算时的自动降级策略
+| 平台能力 | speakin Mission 怎么用 |
+|---|---|
+| **看** | GSC（HTTP 适配器）+ 知乎/掘金后台数据（浏览器适配器） |
+| **做** | speakin 发文接口（HTTP 适配器）+ 知乎/掘金发布（浏览器适配器） |
+| **想** | 周循环：每周看上周数据 → 派下一波选题 + 写作任务 |
+| **不失控** | 标准护栏 + 熔断按钮 + "账号被限/超预算/循环异常"3 类必叫人 |
+
+### B.2 4 周分周计划
+
+| 周 | 核心目标 | 这周结束你能看到 |
+|---|---|---|
+| **Week 1** | 跑通 **第 1 条线** 完整循环（speakin 博文） | 1 篇 AI 自写自发的博文 + GSC 数据回流 + 团队基于数据讨论下一篇 |
+| **Week 2** | 把"发布"抽象成可复用引擎，接通 **知乎** | 知乎上有 1 篇 AI 自写自发的文章 + 知乎数据回流 + 团队为 2 路协调 |
+| **Week 3** | 复用引擎接通 **掘金**，3 路并行 | 3 渠道同时产出，AI 团队为 3 路协调 |
+| **Week 4** | 不加新功能，跑稳 + 看效果 | 累计约 9-10 篇产出物 + 选题方向出现可观察的演化 |
+
+### B.3 成功标准（不是流量，是循环）
+
+**算成功的事实**：
+- 9-10 篇 AI 自写自发的内容挂到 3 个真实渠道
+- 至少 1 篇博文被 Google 收录、至少 1 个搜索词带来真实点击
+- 至少 1 个知乎/掘金帖有真实互动
+- AI 团队的对话里能看到"基于 X 数据 → 决定本周写 Y"的归因
+- 至少 1 次"AI 主动叫人"被正确触发
+
+**不算失败的事**（SEO 周期天然慢）：
+- speakin 没涨 1000 注册
+- 知乎/掘金没涨 1000 粉
+- AI 写得"合格但不出彩"
+
+**真正的失败**：
+- AI 产出和真实数据没任何关联（**循环没合上**）
+- 系统出问题 AI 不叫你（**熔断没接通**）
+- AI 之间扯皮没结论，内容发不出去（**多角色协调跑不动**）
 
 ---
 
-## Phase 7: Native Lightweight Runtime — 原生轻量执行引擎
+## Phase C: 第 2 跑——基于 Phase B 真实数据决定方向（不预先选）
 
-**目标**: 用基于 `LlmService` 的原生 runtime 替代 OpenClaw CLI 子进程，消除冷启动开销，掌控工具链与产出格式。当前每个任务都要起一次 OpenClaw 子进程，启动延迟和不可预测性是性能瓶颈。
+Phase B 跑完后看真实数据，从下面 3 条路径选一条：
 
-### 7.1 工具注册与执行
-- [ ] **[P2]** 设计 `ToolRegistry`（web_search / file_read / file_write / shell / image_gen 等原子工具）
-- [ ] **[P2]** LLM 驱动的 agent loop（思考 → 工具调用 → 观察 → 继续）实现
-- [ ] **[P2]** 沙盒与权限边界（mission 级隔离，防止互相影响）
+| 路径 | 描述 | 适合什么情况 |
+|---|---|---|
+| **C-1: 横向扩**（渠道矩阵） | 复用浏览器自动化引擎加 小红书 / 微博 / B 站，验证"换平台只是换配置"的设计是否成立 | Week 4 后想验证"渠道矩阵覆盖更广" |
+| **C-2: 纵向深**（增长闭环） | 加付费投放建议系统、A/B 测试、转化漏斗优化、邮件召回，扩展"看/做"的类型 | Week 4 后流量进来了但转化差 |
+| **C-3: 切第二主线**（迭代主线） | 用户反馈采集 → AI 提需求 → 写代码 → PR（OpenClaw runtime 派上用场） | Week 4 后想验证"AI 真的能改产品" |
 
-### 7.2 与 OpenClaw 共存与切换
-- [ ] 在 `MissionExecutionRuntime` 接口下并行支持两套 backend（native / openclaw）
-- [ ] 性能对比基线（启动时间、token 成本、产出质量、稳定性）
-- [ ] 默认切换到 native，OpenClaw 仅作为回退（feature flag 控制）
-
-**验收标准**: 相同 mission 在 native runtime 下首任务启动延迟 < 500ms（OpenClaw 当前 5-10s 量级），产出质量持平或更优，token 成本可解释。
+**重要**：Phase B 跑完 **不要现在就锁死** Phase C 走哪条。看真实数据再说。
 
 ---
 
-**项目最终验收标准**: 一个为期1个月的小红书运营Mission能从始至终持续运行，中途可以暂停恢复，有检查点，最终有完整的执行报告。
+## 已完成的能力（不动，作为 Phase A 的基础）
+
+下面这些能力已经做完且稳定，Phase A 直接复用：
+
+| 原 Phase | 能力 | 复用点 |
+|---|---|---|
+| Phase 1 | Owner 多轮对话 + MissionBrief | Mission 创建入口不变 |
+| Phase 2 | HR 智能组团 + 谈判 | 团队组建不变 |
+| Phase 3 | Agent 通信 + 自评循环 + 共享知识库 | A.1 的数据落到 KnowledgeEntry，A.3 在自评循环里加 `create_followup_task` |
+| Phase 4.1 | 任务调度器 | A.1 / A.2 的"定时拉数据 / 定时发布"复用 |
+| Phase 4.2 | 周期任务模板 | 内置模板可直接给 Mission 配置时选 |
+| Phase 5.0 / 5.1 | 反馈基础设施 + 反馈面板 | A.3 的决策基于这些反馈数据 |
+
+---
+
+## 暂时不做的能力（清楚是"暂缓"不是"砍掉"）
+
+| 原 Phase | 能力 | 为什么暂缓 |
+|---|---|---|
+| Phase 4.3 | 条件触发器 | A.3 的"反馈驱动决策"实质上覆盖了大部分场景，纯条件触发可以等 Phase B 跑通后看是否真需要 |
+| Phase 4.5 | War Room UX 重构 | 当前 UI 够用，体验不够好但不影响"循环跑通"，等 Phase B 后再优化 |
+| Phase 5.2（仅"失败任务自动重规划"那条） | 失败任务自动重规划 | A.3 的决策能力升级后，重规划是其副产品。**Phase 5.2 主体已并入 A.3** |
+| Phase 6 | 长期记忆 / Milestone / 检查点 | 月级 Mission 才需要，Phase B 是 4 周，不卡这个 |
+| Phase 7 | 原生轻量 Runtime（替换 OpenClaw） | 性能优化，OpenClaw 当前够用，不在关键路径 |
+
+---
+
+## 项目最终验收标准（重写）
+
+**原版**："1 个月小红书运营 Mission 能从始至终持续运行"
+
+**新版**：
+> 用户能在平台上**同时跑多个完全不同形态的 Mission**（如 speakin.cc 内容运营 + 个人股票组合监控 + 自家产品迭代），每个 Mission 都自动循环（观察→分析→优化），用户日常只需要看汇报和处理"AI 必叫人"的少数节点。
+
+speakin.cc Mission 是**第一个**这样的 Mission，但平台不为它定制。
