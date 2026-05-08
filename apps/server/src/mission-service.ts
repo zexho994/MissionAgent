@@ -1556,6 +1556,8 @@ export class InMemoryMissionService {
       scheduler.stop();
       this.schedulers.delete(input.missionId);
     }
+    // Stop the autonomy loop so cancelled/completed missions don't keep running
+    this.autonomyService?.stopLoop(input.missionId);
 
     this.missions.set(updated.id, updated);
     this.appendMessage({
@@ -1581,6 +1583,8 @@ export class InMemoryMissionService {
       scheduler.stop();
       this.schedulers.delete(input.missionId);
     }
+    // Stop the autonomy loop so cancelled missions don't keep running
+    this.autonomyService?.stopLoop(input.missionId);
 
     this.missions.set(updated.id, updated);
     this.appendMessage({
