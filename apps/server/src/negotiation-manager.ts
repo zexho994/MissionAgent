@@ -5,7 +5,6 @@ import {
   findTemplateById,
   type Mission,
   type ScheduleRule,
-  SchedulePlanGenerationError,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
 import { createHRAgent, type TeamProposal } from "./hr-agent.js";
@@ -92,19 +91,7 @@ export class NegotiationManager {
         type: "agent_notify",
         content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
       });
-      try {
-        proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
-      } catch (error) {
-        if (error instanceof SchedulePlanGenerationError) {
-          this.appendMessage({
-            missionId: mission.id,
-            fromAgentId: hrAgentId,
-            type: "team_planning_failed",
-            content: `Schedule planning failed: ${error.reason}`,
-          });
-        }
-        throw error;
-      }
+      proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
     } finally {
       stream.done();
     }
@@ -214,19 +201,7 @@ export class NegotiationManager {
         proposal.roles.map((spec) => hrAgent.negotiateRoleSpec(mission.id, spec, input.feedback)),
       );
       const flatSpecs = revisedSpecs.flat();
-      try {
-        revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
-      } catch (error) {
-        if (error instanceof SchedulePlanGenerationError) {
-          this.appendMessage({
-            missionId: mission.id,
-            fromAgentId: hrAgentId,
-            type: "team_planning_failed",
-            content: `Schedule planning failed: ${error.reason}`,
-          });
-        }
-        throw error;
-      }
+      revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
     } finally {
       stream.done();
     }

@@ -158,8 +158,7 @@ export type AgentMessageType =
   | "agent_discussion"
   | "negotiation_escalated"
   | "mission_completed"
-  | "mission_cancelled"
-  | "team_planning_failed";
+  | "mission_cancelled";
 
 export interface ParsedChoice {
   label: string;
