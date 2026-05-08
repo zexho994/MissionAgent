@@ -7,6 +7,7 @@ export * from "./ids.js";
 export * from "./mission.js";
 export * from "./negotiation.js";
 export * from "./schedule.js";
+export * from "./schedule-templates.js";
 export * from "./task.js";
 export * from "./task-state-machine.js";
 export type * from "./types.js";

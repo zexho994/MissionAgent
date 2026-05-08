@@ -158,8 +158,7 @@ export type AgentMessageType =
   | "agent_discussion"
   | "negotiation_escalated"
   | "mission_completed"
-  | "mission_cancelled"
-  | "team_planning_failed";
+  | "mission_cancelled";
 
 export interface ParsedChoice {
   label: string;
@@ -1557,6 +1556,8 @@ export class InMemoryMissionService {
       scheduler.stop();
       this.schedulers.delete(input.missionId);
     }
+    // Stop the autonomy loop so cancelled/completed missions don't keep running
+    this.autonomyService?.stopLoop(input.missionId);
 
     this.missions.set(updated.id, updated);
     this.appendMessage({
@@ -1582,6 +1583,8 @@ export class InMemoryMissionService {
       scheduler.stop();
       this.schedulers.delete(input.missionId);
     }
+    // Stop the autonomy loop so cancelled missions don't keep running
+    this.autonomyService?.stopLoop(input.missionId);
 
     this.missions.set(updated.id, updated);
     this.appendMessage({

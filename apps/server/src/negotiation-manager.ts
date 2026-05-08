@@ -2,9 +2,9 @@ import {
   createScheduleRule,
   createId,
   createTask,
+  findTemplateById,
   type Mission,
   type ScheduleRule,
-  SchedulePlanGenerationError,
 } from "@digitalagent/core";
 import type { LlmService } from "@digitalagent/runtime";
 import { createHRAgent, type TeamProposal } from "./hr-agent.js";
@@ -91,19 +91,7 @@ export class NegotiationManager {
         type: "agent_notify",
         content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
       });
-      try {
-        proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
-      } catch (error) {
-        if (error instanceof SchedulePlanGenerationError) {
-          this.appendMessage({
-            missionId: mission.id,
-            fromAgentId: hrAgentId,
-            type: "team_planning_failed",
-            content: `Schedule planning failed: ${error.reason}`,
-          });
-        }
-        throw error;
-      }
+      proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
     } finally {
       stream.done();
     }
@@ -213,19 +201,7 @@ export class NegotiationManager {
         proposal.roles.map((spec) => hrAgent.negotiateRoleSpec(mission.id, spec, input.feedback)),
       );
       const flatSpecs = revisedSpecs.flat();
-      try {
-        revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
-      } catch (error) {
-        if (error instanceof SchedulePlanGenerationError) {
-          this.appendMessage({
-            missionId: mission.id,
-            fromAgentId: hrAgentId,
-            type: "team_planning_failed",
-            content: `Schedule planning failed: ${error.reason}`,
-          });
-        }
-        throw error;
-      }
+      revisedProposal = await hrAgent.proposeTeam(mission.id, flatSpecs, mission.brief);
     } finally {
       stream.done();
     }
@@ -335,17 +311,56 @@ export class NegotiationManager {
 
   private createScheduleRulesFromProposal(mission: Mission, proposal: TeamProposal): ScheduleRule[] {
     return (proposal.schedulePlan ?? []).map((planItem) => {
-      const trigger = planItem.cronExpression
+      const template = planItem.templateId ? findTemplateById(planItem.templateId) : undefined;
+
+      const trigger: ScheduleRule["trigger"] = planItem.cronExpression
         ? {
-            type: "cron" as const,
+            type: "cron",
             expression: planItem.cronExpression,
             timezone: planItem.timezone ?? this.config.scheduler?.defaultTimezone ?? "Asia/Shanghai",
           }
+        : template
+          ? template.trigger.type === "cron"
+            ? {
+                type: "cron",
+                expression: template.trigger.expression,
+                timezone: template.trigger.timezone,
+              }
+            : {
+                type: "condition",
+                description: template.trigger.description,
+                sourceAgentRole: template.trigger.sourceAgentRole,
+                evaluatePrompt: template.trigger.evaluatePrompt,
+              }
+          : {
+              type: "condition",
+              description: planItem.conditionDescription ?? "",
+              sourceAgentRole: planItem.conditionSourceRole ?? planItem.assigneeRole,
+              evaluatePrompt: planItem.conditionEvaluatePrompt ?? `Check if: ${planItem.conditionDescription ?? ""}`,
+            };
+
+      const taskTemplate = template
+        ? {
+            title: template.taskTemplate.titleTemplate.replace("{{role.name}}", planItem.assigneeRole),
+            contract: {
+              objective: template.taskTemplate.contract.objective,
+              input: { ...template.taskTemplate.contract.input },
+              outputSchema: { ...template.taskTemplate.contract.outputSchema },
+              successCriteria: [...template.taskTemplate.contract.successCriteria],
+            },
+            assigneeRole: planItem.assigneeRole,
+            priority: template.taskTemplate.priority,
+          }
         : {
-            type: "condition" as const,
-            description: planItem.conditionDescription ?? "",
-            sourceAgentRole: planItem.conditionSourceRole ?? planItem.assigneeRole,
-            evaluatePrompt: planItem.conditionEvaluatePrompt ?? `Check if: ${planItem.conditionDescription ?? ""}`,
+            title: planItem.taskDescription,
+            contract: {
+              objective: planItem.taskDescription,
+              input: {},
+              outputSchema: { report: "object" },
+              successCriteria: [`Complete: ${planItem.taskDescription}`],
+            },
+            assigneeRole: planItem.assigneeRole,
+            priority: "normal" as const,
           };
 
       return createScheduleRule({
@@ -353,19 +368,12 @@ export class NegotiationManager {
         missionId: mission.id,
         enabled: true,
         trigger,
-        taskTemplate: {
-          title: planItem.taskDescription,
-          contract: {
-            objective: planItem.taskDescription,
-            input: {},
-            outputSchema: { report: "object" },
-            successCriteria: [`Complete: ${planItem.taskDescription}`],
-          },
-          assigneeRole: planItem.assigneeRole,
-          priority: "normal",
+        taskTemplate,
+        maxConcurrent: template?.maxConcurrent ?? 1,
+        metadata: {
+          justification: planItem.justification,
+          ...(template ? { source: "builtin", templateId: template.id } : {}),
         },
-        maxConcurrent: 1,
-        metadata: { justification: planItem.justification },
       });
     });
   }

@@ -2381,19 +2381,35 @@ describe("InMemoryMissionService", () => {
   });
 
   describe("completeMission", () => {
-  it("AC4: after completeMission, scheduler is not running", async () => {
+  it("AC4: completeMission stops and removes the scheduler", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({
       goal: "Test mission",
       successMetrics: ["done"],
       constraints: ["budget"],
     });
-    service.completeMission({ missionId: mission.id, summary: "Mission done" });
-    const snapshot = service.snapshot();
-    const schedulers = (snapshot as any).schedulers || [];
-    const ourScheduler = schedulers.find((s: any) => s.missionId === mission.id);
-    // After completeMission, scheduler should be stopped
-    expect(ourScheduler?.status).not.toBe("running");
+    service.addScheduleRule(mission.id, {
+      id: "rule-ac4",
+      name: "AC4 rule",
+      missionId: mission.id,
+      enabled: true,
+      trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
+      taskTemplate: {
+        title: "AC4 task",
+        contract: { objective: "AC4", input: {}, outputSchema: {}, successCriteria: ["done"] },
+        assigneeRole: "analyst",
+        priority: "normal",
+      },
+      maxConcurrent: 1,
+      metadata: {},
+    });
+    const schedulersMap = (service as unknown as { schedulers: Map<string, unknown> }).schedulers;
+    expect(schedulersMap.has(mission.id)).toBe(true);
+
+    const result = service.completeMission({ missionId: mission.id, summary: "Mission done" });
+
+    expect(result.status).toBe("completed");
+    expect(schedulersMap.has(mission.id)).toBe(false);
   });
 });
 

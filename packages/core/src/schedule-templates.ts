@@ -1,4 +1,4 @@
-import type { ScheduledTaskTemplate, ScheduleTrigger } from "./types.js";
+import type { ScheduledTaskTemplate } from "./types.js";
 
 export const BUILTIN_SCHEDULE_TEMPLATES: ScheduledTaskTemplate[] = [
   {
@@ -6,7 +6,7 @@ export const BUILTIN_SCHEDULE_TEMPLATES: ScheduledTaskTemplate[] = [
     name: "Daily metric check",
     description: "Run a daily check on key metrics and alert on anomalies",
     applicableRolePatterns: ["analyst", "data", "monitor", "research"],
-    trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" } as ScheduleTrigger,
+    trigger: { type: "cron", expression: "0 9 * * *", timezone: "UTC" },
     taskTemplate: {
       titleTemplate: "{{role.name}} 每日数据检查",
       contract: {
@@ -25,7 +25,7 @@ export const BUILTIN_SCHEDULE_TEMPLATES: ScheduledTaskTemplate[] = [
     name: "Weekly team report",
     description: "Generate a weekly summary of team progress and blockers",
     applicableRolePatterns: ["manager", "lead", "owner", "coordinator"],
-    trigger: { type: "cron", expression: "0 10 * * 1", timezone: "UTC" } as ScheduleTrigger,
+    trigger: { type: "cron", expression: "0 10 * * 1", timezone: "UTC" },
     taskTemplate: {
       titleTemplate: "{{role.name}} 周报",
       contract: {
@@ -44,7 +44,7 @@ export const BUILTIN_SCHEDULE_TEMPLATES: ScheduledTaskTemplate[] = [
     name: "Biweekly strategy retrospective",
     description: "Review strategy execution and adapt approach every two weeks",
     applicableRolePatterns: ["content", "strategist", "planner", "manager"],
-    trigger: { type: "cron", expression: "0 10 */14 * *", timezone: "UTC" } as ScheduleTrigger,
+    trigger: { type: "cron", expression: "0 10 */14 * *", timezone: "UTC" },
     taskTemplate: {
       titleTemplate: "{{role.name}} 双周战略复盘",
       contract: {
@@ -63,7 +63,7 @@ export const BUILTIN_SCHEDULE_TEMPLATES: ScheduledTaskTemplate[] = [
     name: "Engagement drop alert",
     description: "Trigger when engagement metrics drop significantly",
     applicableRolePatterns: ["analyst", "data", "monitor"],
-    trigger: { type: "condition", description: "用户参与度显著下降", sourceAgentRole: "analyst", evaluatePrompt: "检查参与度指标是否低于阈值" } as ScheduleTrigger,
+    trigger: { type: "condition", description: "用户参与度显著下降", sourceAgentRole: "analyst", evaluatePrompt: "检查参与度指标是否低于阈值" },
     taskTemplate: {
       titleTemplate: "{{role.name}} 参与度下降告警",
       contract: {
