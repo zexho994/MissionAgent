@@ -98,12 +98,12 @@
 - [x] 调度持久化（系统重启后恢复调度）（`InMemoryMissionService.restoreSchedulers`）
 
 ### 4.2 周期性任务模板
-- [ ] **[P0]** HR LLM 强制输出 `schedulePlan`：prompt 增加约束条款，LLM 不返回时显式报错而非静默回 `[]`，避免链路从源头断
-- [ ] **[P0]** HR `schedulePlan` 端到端测试（LLM stub 验证 `ScheduleRule` 真的被生成）
-- [ ] 定义 `ScheduledTaskTemplate`（触发规则、执行模板、分配角色）
-- [ ] 支持常见模式：每日检查、每周汇报、每两周回顾（HR 可填模板库）
-- [ ] Mission创建时自动注册相关调度模板
-- [ ] Mission完成/取消时清理调度
+- [ ] **AI 量身定制周期任务**（opt-in 能力，默认关闭）：HR 在 `scheduleStrategy: "auto" | "llm"` 时调用 LLM 按 mission brief 生成定制化 schedulePlan，失败抛 `SchedulePlanGenerationError`；当前生产默认走"模板套用"，AI 路径作为隐藏开关保留
+- [x] AI 模式端到端测试（hr-agent.test.ts `AC1`：LLM 返空时正确抛 `SchedulePlanGenerationError`）
+- [x] 定义 `ScheduledTaskTemplate`（触发规则、执行模板、分配角色）（`packages/core/src/types.ts` + `schedule-templates.ts`）
+- [x] 支持常见模式：每日检查、每周汇报、每两周回顾（`BUILTIN_SCHEDULE_TEMPLATES` 4 个内置：daily_metric_check / weekly_team_report / biweekly_strategy_retrospective / engagement_drop_alert）
+- [x] Mission 创建时自动注册相关调度模板（`confirmNegotiation` 后自动启动 `MissionScheduler`，`createScheduleRulesFromProposal` 支持 `templateId` 展开）
+- [x] Mission 完成/取消时清理调度（`completeMission` / `cancelMission` 停 scheduler + 停 autonomy loop + 终止态守卫禁止再 `addScheduleRule`）
 
 ### 4.3 条件触发器
 - [ ] 设计条件触发规则（如"互动率下降超过20%"）
