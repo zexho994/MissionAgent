@@ -138,11 +138,9 @@ export async function handleApiRequest(
     }
 
     // POST /api/missions/:id/complete
-    if (request.method === "POST" && request.path.startsWith("/api/missions/") && request.path.endsWith("/complete")) {
-      const missionId = request.path.slice("/api/missions/".length, -"/complete".length);
-      if (!missionId) {
-        return json(400, { error: "missionId required" });
-      }
+    const completeMatch = request.method === "POST" ? request.path.match(/^\/api\/missions\/([^/]+)\/complete$/) : null;
+    if (completeMatch) {
+      const missionId = completeMatch[1]!;
       const body = request.body ? expectObject(request.body) : {};
       const summary = typeof body?.summary === "string" ? body.summary : undefined;
       try {
@@ -157,11 +155,9 @@ export async function handleApiRequest(
     }
 
     // POST /api/missions/:id/cancel
-    if (request.method === "POST" && request.path.startsWith("/api/missions/") && request.path.endsWith("/cancel")) {
-      const missionId = request.path.slice("/api/missions/".length, -"/cancel".length);
-      if (!missionId) {
-        return json(400, { error: "missionId required" });
-      }
+    const cancelMatch = request.method === "POST" ? request.path.match(/^\/api\/missions\/([^/]+)\/cancel$/) : null;
+    if (cancelMatch) {
+      const missionId = cancelMatch[1]!;
       const body = request.body ? expectObject(request.body) : {};
       const reason = typeof body?.reason === "string" ? body.reason : undefined;
       try {
