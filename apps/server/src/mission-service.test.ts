@@ -2845,6 +2845,29 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("createMissionFromTemplate", () => {
+    it("creates a mission with data sources and publish targets from speakin-content template", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMissionFromTemplate({ templateId: "speakin-content" });
+      expect(mission.goal).toContain("speakin");
+      expect(service.listDataSources(mission.id).length).toBeGreaterThanOrEqual(1);
+      expect(service.listPublishTargets(mission.id).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("rejects unknown template id", async () => {
+      const service = new InMemoryMissionService();
+      await expect(
+        service.createMissionFromTemplate({ templateId: "no-such-template" }),
+      ).rejects.toThrow(/Unknown mission template/);
+    });
+
+    it("applies the template budget", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMissionFromTemplate({ templateId: "speakin-content" });
+      expect(mission.budget.maxFollowupTasks).toBe(30);
+    });
+  });
+
   describe("budget enforcement (maxFollowupTasks)", () => {
     it("auto-pauses mission when total tasks reach maxFollowupTasks", async () => {
       const service = new InMemoryMissionService({
