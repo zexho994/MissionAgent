@@ -2365,6 +2365,7 @@ export class InMemoryMissionService {
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
         maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 5,
         cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
+        createFollowupTask: (input) => this.createFollowupTask(input),
       });
     }
     return this.conversationBus;

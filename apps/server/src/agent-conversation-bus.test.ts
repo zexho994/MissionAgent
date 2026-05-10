@@ -76,7 +76,7 @@ function makeBusDeps(overrides?: {
       responseGuidelines: "Be helpful",
       availableActions: ["report_findings", "request_info", "notify_risk", "acknowledge"],
     }),
-  } as AgentPersonaRegistry;
+  } as unknown as AgentPersonaRegistry;
 
   const contextRetriever: ContextRetriever = {
     getRelevantContext: () => [],
@@ -233,7 +233,7 @@ describe("AgentConversationBus", () => {
           responseGuidelines: "respond when mission risk",
           availableActions: ["acknowledge", "create_followup_task"],
         }),
-      } as AgentPersonaRegistry;
+      } as unknown as AgentPersonaRegistry;
       const messages: AgentMessage[] = [];
       const bus = new AgentConversationBus({
         llm,
@@ -266,6 +266,78 @@ describe("AgentConversationBus", () => {
       expect(allPrompts).toContain("\"objective\"");
       expect(allPrompts).toContain("\"assigneeRole\"");
       expect(allPrompts).toContain("\"reason\"");
+    });
+  });
+
+  describe("Bus dispatches create_followup_task action", () => {
+    it("calls deps.createFollowupTask when LLM returns create_followup_task", async () => {
+      const createFollowupCalls: Array<{ missionId: string; triggeringEventId: string; payload: unknown }> = [];
+      const llm: LlmService = {
+        call: async () => ({
+          content: JSON.stringify({
+            message: "派下一个",
+            type: "agent_chat",
+            shouldPropagate: false,
+            action: {
+              type: "create_followup_task",
+              payload: {
+                title: "T2",
+                objective: "Do the next step",
+                assigneeRole: "researcher",
+                reason: "based on review",
+                sourceTaskId: "t-1",
+              },
+            },
+          }),
+          model: "test",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        }),
+        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const personas: AgentPersonaRegistry = {
+        personaFor: () => ({
+          role: "owner",
+          systemPrompt: "you are owner",
+          communicationStyle: "direct",
+          responseGuidelines: "respond when mission risk",
+          availableActions: ["acknowledge", "create_followup_task"],
+        }),
+      } as unknown as AgentPersonaRegistry;
+      const messages: AgentMessage[] = [];
+      const bus = new AgentConversationBus({
+        llm,
+        personas,
+        contextRetriever: { getRelevantContext: () => [] } as unknown as ContextRetriever,
+        getSnapshot: () => baseSnapshot,
+        appendMessage: (m) => {
+          const appended = { ...m, id: `m_${messages.length}`, createdAt: new Date().toISOString() } as AgentMessage;
+          messages.push(appended);
+          return appended;
+        },
+        createThread: (t) => ({ ...t, id: "t1", createdAt: new Date().toISOString() } as ConversationThread),
+        resolveThread: () => undefined,
+        updateAgent: () => undefined,
+        maxConversationDepth: 3,
+        maxDiscussionRounds: 1,
+        cooldownMs: 0,
+        createFollowupTask: async (input) => {
+          createFollowupCalls.push(input);
+          return { created: true, taskId: "new-task-id" };
+        },
+      });
+
+      await bus.dispatchEvent({
+        missionId: "m1",
+        event: { type: "review_completed", agentId: "owner", taskId: "t-1", decision: "approve" },
+      });
+
+      expect(createFollowupCalls.length).toBeGreaterThanOrEqual(1);
+      const call = createFollowupCalls[0]!;
+      expect(call.missionId).toBe("m1");
+      expect(call.triggeringEventId).toBeTruthy();
+      const payload = call.payload as { title: string };
+      expect(payload.title).toBe("T2");
     });
   });
 

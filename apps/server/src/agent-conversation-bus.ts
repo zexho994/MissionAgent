@@ -33,6 +33,14 @@ export class AgentConversationBus {
     maxConversationDepth: number;
     maxDiscussionRounds: number;
     cooldownMs: number;
+    createFollowupTask?: (input: {
+      missionId: string;
+      triggeringEventId: string;
+      payload: CreateFollowupTaskPayload;
+    }) => Promise<
+      | { created: true; taskId: string }
+      | { created: false; reason: string; escalateMessageSent?: boolean }
+    >;
   }) {}
 
   async dispatchEvent(input: {
@@ -112,6 +120,25 @@ export class AgentConversationBus {
           });
           this.recordCooldown(input.event, target.id);
 
+          if (
+            response.action?.type === "create_followup_task" &&
+            this.deps.createFollowupTask
+          ) {
+            const triggeringEventId = `${thread.id}:${target.id}:${lastMessage.id}`;
+            try {
+              await this.deps.createFollowupTask({
+                missionId: input.missionId,
+                triggeringEventId,
+                payload: response.action.payload,
+              });
+            } catch (error) {
+              console.error(
+                "[AgentConversationBus] createFollowupTask failed:",
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          }
+
           const propagated = this.propagationTargets(response, responded, agentById);
           nextRoundTargets.push(...propagated);
         } catch (error) {
@@ -148,7 +175,7 @@ export class AgentConversationBus {
   ): WarRoomAgent[] {
     if (!response.shouldPropagate) return [];
     const candidateIds: string[] = [];
-    if (response.action?.targetAgentId) {
+    if (response.action && response.action.type !== "create_followup_task" && response.action.targetAgentId) {
       candidateIds.push(response.action.targetAgentId);
     }
     if (response.mentionedAgentIds?.length) {
