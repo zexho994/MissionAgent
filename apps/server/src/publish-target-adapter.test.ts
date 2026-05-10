@@ -9,7 +9,7 @@ describe("PublishTargetAdapterRegistry", () => {
   it("returns registered adapter by type", () => {
     const stub: PublishTargetAdapter = {
       async publish() {
-        return { ok: true, response: { id: "p-1" } };
+        return { ok: true, response: { id: "p-1" }, attemptCount: 1 };
       },
     };
     const reg = new PublishTargetAdapterRegistry();
@@ -24,7 +24,7 @@ describe("PublishTargetAdapterRegistry", () => {
 
   it("has() returns true for registered types", () => {
     const reg = new PublishTargetAdapterRegistry();
-    reg.register("stub", { async publish() { return { ok: true, response: {} }; } });
+    reg.register("stub", { async publish() { return { ok: true, response: {}, attemptCount: 1 }; } });
     expect(reg.has("stub")).toBe(true);
   });
 });
@@ -60,7 +60,11 @@ describe("HttpPublishTargetAdapter", () => {
 
   it("returns error on non-2xx response", async () => {
     const fakeFetch = async () => new Response("bad request", { status: 400 });
-    const adapter = new HttpPublishTargetAdapter({ fetch: fakeFetch });
+    const adapter = new HttpPublishTargetAdapter({
+      fetch: fakeFetch,
+      sleep: async () => undefined,
+      retry: { maxAttempts: 1, initialDelayMs: 0 },
+    });
     const result = await adapter.publish(
       { artifactId: "a", artifactContent: {}, missionGoal: "g" },
       { url: "https://x", method: "POST" },
@@ -73,7 +77,11 @@ describe("HttpPublishTargetAdapter", () => {
     const fakeFetch = async () => {
       throw new Error("ECONNREFUSED");
     };
-    const adapter = new HttpPublishTargetAdapter({ fetch: fakeFetch });
+    const adapter = new HttpPublishTargetAdapter({
+      fetch: fakeFetch,
+      sleep: async () => undefined,
+      retry: { maxAttempts: 1, initialDelayMs: 0 },
+    });
     const result = await adapter.publish(
       { artifactId: "a", artifactContent: {}, missionGoal: "g" },
       { url: "https://x", method: "POST" },
@@ -90,5 +98,28 @@ describe("HttpPublishTargetAdapter", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/url/i);
+  });
+
+  it("retries on failure and succeeds on later attempt", async () => {
+    let calls = 0;
+    const fakeFetch = async () => {
+      calls += 1;
+      if (calls < 2) return new Response("err", { status: 500 });
+      return new Response(JSON.stringify({ id: "p" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const adapter = new HttpPublishTargetAdapter({
+      fetch: fakeFetch,
+      sleep: async () => undefined,
+      retry: { maxAttempts: 3, initialDelayMs: 1 },
+    });
+    const result = await adapter.publish(
+      { artifactId: "a", artifactContent: {}, missionGoal: "g" },
+      { url: "https://x", method: "POST" },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.attemptCount).toBe(2);
   });
 });

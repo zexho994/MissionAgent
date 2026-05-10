@@ -30,6 +30,9 @@ export function createMission(input: CreateMissionInput): Mission {
       ...(input.budget?.maxTokenSpendUsd === undefined
         ? {}
         : { maxTokenSpendUsd: input.budget.maxTokenSpendUsd }),
+      ...(input.budget?.maxFollowupTasks === undefined
+        ? {}
+        : { maxFollowupTasks: input.budget.maxFollowupTasks }),
     },
     createdAt: new Date(),
     scheduleRules: [],
@@ -50,4 +53,26 @@ export function cancelMission(mission: Mission): Mission {
     throw new Error("Cannot cancel a completed mission");
   }
   return { ...mission, status: "cancelled" };
+}
+
+export function pauseMission(mission: Mission): Mission {
+  if (mission.status === "paused") return mission;
+  if (mission.status === "completed") {
+    throw new Error("Cannot pause a completed mission");
+  }
+  if (mission.status === "cancelled") {
+    throw new Error("Cannot pause a cancelled mission");
+  }
+  return { ...mission, status: "paused" };
+}
+
+export function resumeMission(mission: Mission): Mission {
+  if (mission.status === "active") return mission;
+  if (mission.status === "completed") {
+    throw new Error("Cannot resume a completed mission");
+  }
+  if (mission.status === "cancelled") {
+    throw new Error("Cannot resume a cancelled mission");
+  }
+  return { ...mission, status: "active" };
 }

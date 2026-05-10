@@ -9,6 +9,8 @@ import {
   validateScheduleRule,
   completeMission,
   cancelMission,
+  pauseMission,
+  resumeMission,
   type Artifact,
   type Mission,
   type MissionBrief,
@@ -90,6 +92,11 @@ export interface CreateMissionRequest {
   goal: string;
   successMetrics?: string[];
   constraints?: string[];
+  budget?: {
+    maxRuntimeMinutes?: number;
+    maxTokenSpendUsd?: number;
+    maxFollowupTasks?: number;
+  };
 }
 
 export interface SubmitExecutionResultRequest {
@@ -605,12 +612,20 @@ export class InMemoryMissionService {
     this.dataSourceAdapters = new DataSourceAdapterRegistry();
     this.dataSourceAdapters.register(
       "http",
-      new HttpDataSourceAdapter(options.fetch ? { fetch: options.fetch } : {}),
+      new HttpDataSourceAdapter(
+        options.fetch
+          ? { fetch: options.fetch, sleep: async () => undefined, retry: { maxAttempts: 1, initialDelayMs: 0 } }
+          : {},
+      ),
     );
     this.publishTargetAdapters = new PublishTargetAdapterRegistry();
     this.publishTargetAdapters.register(
       "http",
-      new HttpPublishTargetAdapter(options.fetch ? { fetch: options.fetch } : {}),
+      new HttpPublishTargetAdapter(
+        options.fetch
+          ? { fetch: options.fetch, sleep: async () => undefined, retry: { maxAttempts: 1, initialDelayMs: 0 } }
+          : {},
+      ),
     );
     this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
     this.contextRetriever = new ContextRetriever(() => this.snapshot());
@@ -643,8 +658,11 @@ export class InMemoryMissionService {
       successMetrics: input.successMetrics?.length ? input.successMetrics : ownerBrief.successMetrics,
       constraints: input.constraints?.length ? input.constraints : ownerBrief.constraints,
       budget: {
-        maxRuntimeMinutes: 180,
-        maxTokenSpendUsd: 20,
+        maxRuntimeMinutes: input.budget?.maxRuntimeMinutes ?? 180,
+        maxTokenSpendUsd: input.budget?.maxTokenSpendUsd ?? 20,
+        ...(input.budget?.maxFollowupTasks === undefined
+          ? {}
+          : { maxFollowupTasks: input.budget.maxFollowupTasks }),
       },
     });
 
@@ -1633,6 +1651,61 @@ export class InMemoryMissionService {
       fromAgentId: "system",
       type: "mission_cancelled",
       content: input.reason ?? "Mission cancelled",
+    });
+    this.persist();
+    return updated;
+  }
+
+  pauseMissionLifecycle(input: { missionId: string; reason?: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (mission.status === "paused") return mission;
+    const updated = pauseMission(mission);
+
+    const scheduler = this.schedulers.get(input.missionId);
+    if (scheduler) {
+      scheduler.stop();
+      this.schedulers.delete(input.missionId);
+    }
+    this.autonomyService?.stopLoop(input.missionId);
+
+    this.missions.set(updated.id, updated);
+    const owner = [...this.agents.values()].find(
+      (a) => a.missionId === input.missionId && a.role === "owner",
+    );
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      ...(owner ? { toAgentId: owner.id } : {}),
+      type: "agent_notify",
+      content: `Mission paused: ${input.reason ?? "manual pause"}`,
+    });
+    this.persist();
+    return updated;
+  }
+
+  resumeMissionLifecycle(input: { missionId: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (mission.status === "active") return mission;
+    const updated = resumeMission(mission);
+    this.missions.set(updated.id, updated);
+
+    // Restart scheduler with current rules + autonomy loop
+    if (updated.scheduleRules.length > 0) {
+      this.getOrCreateScheduler(updated.id).start(updated.scheduleRules);
+    }
+    this.autonomyService?.startLoop(updated.id);
+
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      type: "agent_notify",
+      content: "Mission resumed",
     });
     this.persist();
     return updated;
@@ -2798,7 +2871,7 @@ export class InMemoryMissionService {
     | { created: true; taskId: string }
     | {
         created: false;
-        reason: "per_event_limit" | "mission_cap" | "no_assignee";
+        reason: "per_event_limit" | "mission_cap" | "no_assignee" | "mission_paused" | "budget_exceeded";
         escalateMessageSent: boolean;
       }
   > {
@@ -2807,9 +2880,26 @@ export class InMemoryMissionService {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
 
+    if (mission.status !== "active") {
+      return { created: false, reason: "mission_paused", escalateMessageSent: false };
+    }
+
     const totalTasksInMission = [...this.tasks.values()].filter(
       (t) => t.missionId === input.missionId,
     ).length;
+
+    // Mission-level budget enforcement: auto-pause if over budget
+    if (
+      mission.budget.maxFollowupTasks !== undefined &&
+      totalTasksInMission >= mission.budget.maxFollowupTasks
+    ) {
+      this.pauseMissionLifecycle({
+        missionId: input.missionId,
+        reason: `Budget exceeded: ${totalTasksInMission} tasks reached the maxFollowupTasks limit of ${mission.budget.maxFollowupTasks}`,
+      });
+      return { created: false, reason: "budget_exceeded", escalateMessageSent: true };
+    }
+
     const followupsForEvent = this.followupCountByEvent.get(input.triggeringEventId) ?? 0;
 
     const safety = checkFollowupSafety(this.followupSafetyConfig, {
