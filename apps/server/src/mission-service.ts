@@ -1224,6 +1224,7 @@ export class InMemoryMissionService {
         taskId: task.id,
         decision: review.decision,
       }, mission.id);
+      this.autoPublishApprovedArtifact(mission.id, artifact.id, artifact.type);
     } else if (review.decision === "revise") {
       void this.dispatchToBus({
         type: "review_revision_needed",
@@ -2230,6 +2231,139 @@ export class InMemoryMissionService {
     this.missions.set(missionId, updatedMission);
     this.persist();
     return record;
+  }
+
+  addPublishTarget(
+    missionId: string,
+    input: Omit<CreateMissionPublishTargetInput, "missionId">,
+  ): MissionPublishTarget {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const target = createMissionPublishTarget({ ...input, missionId });
+    const updated: Mission = {
+      ...mission,
+      publishTargets: [...(mission.publishTargets ?? []), target],
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+    return target;
+  }
+
+  removePublishTarget(missionId: string, targetId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updated: Mission = {
+      ...mission,
+      publishTargets: (mission.publishTargets ?? []).filter((t) => t.id !== targetId),
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+  }
+
+  listPublishTargets(missionId: string): MissionPublishTarget[] {
+    const mission = this.missions.get(missionId);
+    return mission?.publishTargets ? [...mission.publishTargets] : [];
+  }
+
+  async triggerPublish(
+    missionId: string,
+    targetId: string,
+    artifactId: string,
+  ): Promise<PublishAttempt> {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const target = mission.publishTargets?.find((t) => t.id === targetId);
+    if (!target) {
+      throw new Error(`Publish target not found: ${targetId}`);
+    }
+    const artifact = this.artifacts.get(artifactId);
+    if (!artifact || this.tasks.get(artifact.taskId)?.missionId !== missionId) {
+      throw new Error(`Artifact not found in mission: ${artifactId}`);
+    }
+    const task = this.tasks.get(artifact.taskId);
+    const adapter = this.publishTargetAdapters.get(target.adapter);
+    const attemptedAt = new Date().toISOString();
+    const result = await adapter.publish(
+      {
+        artifactId: artifact.id,
+        artifactContent: artifact.content,
+        missionGoal: mission.goal,
+        ...(task?.title ? { taskTitle: task.title } : {}),
+      },
+      target.config,
+    );
+
+    const attempt: PublishAttempt = result.ok
+      ? {
+          id: createId("attempt"),
+          targetId: target.id,
+          artifactId: artifact.id,
+          attemptedAt,
+          status: "ok",
+          responseSnippet: JSON.stringify(result.response).slice(0, 500),
+        }
+      : {
+          id: createId("attempt"),
+          targetId: target.id,
+          artifactId: artifact.id,
+          attemptedAt,
+          status: "failed",
+          errorMessage: result.error,
+        };
+
+    if (!result.ok) {
+      const owner = [...this.agents.values()].find(
+        (a) => a.missionId === missionId && a.role === "owner",
+      );
+      if (owner) {
+        this.appendMessage({
+          missionId,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: `Publish to "${target.name}" failed: ${result.error}`,
+        });
+      }
+    }
+
+    const trimmed = [attempt, ...target.attempts].slice(0, 50);
+    const updatedTarget: MissionPublishTarget = {
+      ...target,
+      status: result.ok ? "ok" : "failed",
+      attempts: trimmed,
+      lastAttemptAt: attemptedAt,
+    };
+    const updatedMission: Mission = {
+      ...mission,
+      publishTargets: (mission.publishTargets ?? []).map((t) =>
+        t.id === targetId ? updatedTarget : t,
+      ),
+    };
+    this.missions.set(missionId, updatedMission);
+    this.persist();
+    return attempt;
+  }
+
+  private autoPublishApprovedArtifact(missionId: string, artifactId: string, artifactType: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission?.publishTargets?.length) return;
+    const matching = mission.publishTargets.filter(
+      (t) => t.contentTypes.includes("*") || t.contentTypes.includes(artifactType),
+    );
+    for (const target of matching) {
+      void this.triggerPublish(missionId, target.id, artifactId).catch((err: unknown) => {
+        console.error(
+          `[MissionService] auto-publish failed (target ${target.id}, artifact ${artifactId}):`,
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+    }
   }
 
   async triggerAgentConversation(input: {
