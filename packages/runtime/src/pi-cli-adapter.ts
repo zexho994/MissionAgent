@@ -72,6 +72,42 @@ export class PiCliAdapter {
       version: result.stdout.trim(),
     };
   }
+
+  async runAgentTask(task: PiAgentTask): Promise<PiAgentResult> {
+    if (!task.message.trim()) {
+      throw new Error("pi agent task message is required");
+    }
+    if (task.timeoutSeconds <= 0) {
+      throw new Error("pi agent task timeoutSeconds must be positive");
+    }
+
+    const tools = (task.tools ?? this.defaultTools).join(",");
+    const extensions = task.extensions ?? this.defaultExtensions;
+    const args: string[] = ["-p", "--no-session", "--tools", tools];
+
+    if (task.systemPrompt) {
+      args.push("--system-prompt", task.systemPrompt);
+    }
+    for (const ext of extensions) {
+      args.push("-e", ext);
+    }
+    args.push(task.message);
+
+    const result = await this.runCommand(this.command, args, {
+      timeoutSeconds: task.timeoutSeconds + 30,
+    });
+
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || `pi exited ${result.exitCode}`);
+    }
+
+    const output = result.stdout.trim() ? result.stdout : result.stderr;
+    return {
+      status: "completed",
+      output: parsePiOutputJson(output),
+      stderr: result.stderr,
+    };
+  }
 }
 
 export function parsePiOutputJson(output: string): unknown {
