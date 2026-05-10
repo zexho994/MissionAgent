@@ -135,4 +135,107 @@ plugin loaded
       payloads: [{ text: "ok" }],
     });
   });
+
+  describe("retry on transient failure", () => {
+    it("retries runAgentTask once on transient non-zero exit and succeeds", async () => {
+      let agentTaskCalls = 0;
+      const adapter = new OpenClawCliAdapter({
+        defaultAgentId: "agent-x",
+        run: async (_command, args) => {
+          if (args[0] !== "agent") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          agentTaskCalls += 1;
+          if (agentTaskCalls === 1) {
+            return { exitCode: 1, stdout: "", stderr: "transient error" };
+          }
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ text: "ok after retry" }),
+            stderr: "",
+          };
+        },
+        retry: { maxAttempts: 2, initialDelayMs: 0 },
+        sleep: async () => undefined,
+      });
+
+      const result = await adapter.runAgentTask({
+        message: "go",
+        timeoutSeconds: 30,
+      });
+
+      expect(result.status).toBe("completed");
+      expect(agentTaskCalls).toBe(2);
+    });
+
+    it("gives up after maxAttempts attempts and throws with the last stderr", async () => {
+      let agentTaskCalls = 0;
+      const adapter = new OpenClawCliAdapter({
+        defaultAgentId: "agent-x",
+        run: async (_command, args) => {
+          if (args[0] !== "agent") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          agentTaskCalls += 1;
+          return { exitCode: 1, stdout: "", stderr: `attempt ${agentTaskCalls} failed` };
+        },
+        retry: { maxAttempts: 3, initialDelayMs: 0 },
+        sleep: async () => undefined,
+      });
+
+      await expect(
+        adapter.runAgentTask({ message: "go", timeoutSeconds: 30 }),
+      ).rejects.toThrow(/attempt 3 failed/);
+      expect(agentTaskCalls).toBe(3);
+    });
+
+    it("does NOT retry on timeout (exit code 124)", async () => {
+      let agentTaskCalls = 0;
+      const adapter = new OpenClawCliAdapter({
+        defaultAgentId: "agent-x",
+        run: async (_command, args) => {
+          if (args[0] !== "agent") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          agentTaskCalls += 1;
+          return {
+            exitCode: 124,
+            stdout: "",
+            stderr: "OpenClaw command timed out after 30 seconds",
+          };
+        },
+        retry: { maxAttempts: 3, initialDelayMs: 0 },
+        sleep: async () => undefined,
+      });
+
+      await expect(
+        adapter.runAgentTask({ message: "go", timeoutSeconds: 30 }),
+      ).rejects.toThrow(/timed out/);
+      expect(agentTaskCalls).toBe(1);
+    });
+
+    it("uses exponential backoff between retry attempts", async () => {
+      const sleeps: number[] = [];
+      let agentTaskCalls = 0;
+      const adapter = new OpenClawCliAdapter({
+        defaultAgentId: "agent-x",
+        run: async (_command, args) => {
+          if (args[0] !== "agent") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          agentTaskCalls += 1;
+          return { exitCode: 1, stdout: "", stderr: "fail" };
+        },
+        retry: { maxAttempts: 3, initialDelayMs: 100 },
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      });
+
+      await expect(
+        adapter.runAgentTask({ message: "go", timeoutSeconds: 30 }),
+      ).rejects.toThrow();
+      expect(sleeps).toEqual([100, 200]);
+    });
+  });
 });
