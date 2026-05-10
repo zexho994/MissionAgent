@@ -1,7 +1,11 @@
 import type { Source } from "@digitalagent/core";
 
 export interface MissionExecutionRuntime {
-  runAgentTask(input: { message: string; timeoutSeconds: number }): Promise<{
+  runAgentTask(input: {
+    message: string;
+    timeoutSeconds: number;
+    systemPrompt?: string;
+  }): Promise<{
     status: string;
     output: unknown;
     stderr: string;
