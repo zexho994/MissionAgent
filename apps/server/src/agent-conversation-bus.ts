@@ -5,6 +5,7 @@ import type {
   AgentConversationResponse,
   BusEvent,
   ConversationThread,
+  CreateFollowupTaskPayload,
 } from "./agent-conversation-types.js";
 import type { AgentMessage, AgentMessageType, MissionSnapshot, WarRoomAgent } from "./mission-service.js";
 import { findSuperiors } from "./agent-hierarchy.js";
@@ -359,10 +360,39 @@ function parseAction(action: unknown): AgentConversationResponse["action"] {
   }
   const value = action as Record<string, unknown>;
   const type = value.type;
+  if (type === "create_followup_task") {
+    const payload = value.payload as Record<string, unknown> | undefined;
+    if (
+      !payload ||
+      typeof payload.title !== "string" || !payload.title.trim() ||
+      typeof payload.objective !== "string" || !payload.objective.trim() ||
+      typeof payload.assigneeRole !== "string" || !payload.assigneeRole.trim() ||
+      typeof payload.reason !== "string" || !payload.reason.trim()
+    ) {
+      return { type: "acknowledge" };
+    }
+    const followupPayload: CreateFollowupTaskPayload = {
+      title: payload.title.trim(),
+      objective: payload.objective.trim(),
+      assigneeRole: payload.assigneeRole.trim(),
+      reason: payload.reason.trim(),
+    };
+    if (typeof payload.sourceTaskId === "string" && payload.sourceTaskId.trim()) {
+      followupPayload.sourceTaskId = payload.sourceTaskId.trim();
+    }
+    if (
+      payload.inputContext &&
+      typeof payload.inputContext === "object" &&
+      !Array.isArray(payload.inputContext)
+    ) {
+      followupPayload.inputContext = payload.inputContext as Record<string, unknown>;
+    }
+    return { type: "create_followup_task", payload: followupPayload };
+  }
   if (type !== "request_info" && type !== "notify_owner" && type !== "escalate" && type !== "acknowledge" && type !== "report_to_superior") {
     return { type: "acknowledge" };
   }
-  const parsed: NonNullable<AgentConversationResponse["action"]> = { type };
+  const parsed: { type: typeof type; targetAgentId?: string; payload?: Record<string, unknown> } = { type };
   if (typeof value.targetAgentId === "string") parsed.targetAgentId = value.targetAgentId;
   if (value.payload && typeof value.payload === "object" && !Array.isArray(value.payload)) {
     parsed.payload = value.payload as Record<string, unknown>;

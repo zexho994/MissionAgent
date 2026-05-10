@@ -21,16 +21,32 @@ export type BusEvent =
   | { type: "user_message"; content: string; agentId: string }
   | { type: "periodic_report"; fromAgentId: string; content: string; taskId?: string };
 
+export interface CreateFollowupTaskPayload {
+  title: string;
+  objective: string;
+  assigneeRole: string;
+  reason: string;
+  sourceTaskId?: string;
+  inputContext?: Record<string, unknown>;
+}
+
+export type AgentConversationAction =
+  | {
+      type: "request_info" | "notify_owner" | "escalate" | "acknowledge" | "report_to_superior";
+      targetAgentId?: string;
+      payload?: Record<string, unknown>;
+    }
+  | {
+      type: "create_followup_task";
+      payload: CreateFollowupTaskPayload;
+    };
+
 export interface AgentConversationResponse {
   message: string;
   type: AgentMessageType;
   mentionedAgentIds?: string[];
   shouldPropagate: boolean;
-  action?: {
-    type: "request_info" | "notify_owner" | "escalate" | "acknowledge" | "report_to_superior";
-    targetAgentId?: string;
-    payload?: Record<string, unknown>;
-  };
+  action?: AgentConversationAction;
 }
 
 export interface ContextSnippet {

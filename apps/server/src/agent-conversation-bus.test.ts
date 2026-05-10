@@ -154,6 +154,60 @@ describe("AgentConversationBus", () => {
       expect(result.message).toBe("fenced");
       expect(result.shouldPropagate).toBe(true);
     });
+
+    it("parses create_followup_task action with valid payload", () => {
+      const result = parseAgentConversationResponse(
+        JSON.stringify({
+          message: "派下一波任务",
+          type: "agent_chat",
+          shouldPropagate: false,
+          action: {
+            type: "create_followup_task",
+            payload: {
+              title: "Write second SEO article on topic X",
+              objective: "Produce a second article based on first article's data",
+              assigneeRole: "content_strategist",
+              reason: "First article's keyword Y had high CTR",
+              sourceTaskId: "task-1",
+            },
+          },
+        }),
+      );
+      expect(result.action?.type).toBe("create_followup_task");
+      if (result.action?.type === "create_followup_task") {
+        expect(result.action.payload).toMatchObject({
+          title: "Write second SEO article on topic X",
+          objective: "Produce a second article based on first article's data",
+          assigneeRole: "content_strategist",
+          reason: "First article's keyword Y had high CTR",
+          sourceTaskId: "task-1",
+        });
+      }
+    });
+
+    it("falls back to acknowledge when create_followup_task payload missing title", () => {
+      const result = parseAgentConversationResponse(
+        JSON.stringify({
+          message: "...",
+          type: "agent_chat",
+          shouldPropagate: false,
+          action: { type: "create_followup_task", payload: { objective: "x", assigneeRole: "r", reason: "y" } },
+        }),
+      );
+      expect(result.action?.type).toBe("acknowledge");
+    });
+
+    it("falls back to acknowledge when create_followup_task payload missing assigneeRole", () => {
+      const result = parseAgentConversationResponse(
+        JSON.stringify({
+          message: "...",
+          type: "agent_chat",
+          shouldPropagate: false,
+          action: { type: "create_followup_task", payload: { title: "T", objective: "x", reason: "y" } },
+        }),
+      );
+      expect(result.action?.type).toBe("acknowledge");
+    });
   });
 
   describe("multi-round discussion", () => {
