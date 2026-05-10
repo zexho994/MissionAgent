@@ -24,3 +24,4 @@ test-*.js
 *.png
 apps/server/test-results/
 .sisyphus/run-continuation/*.json
+pi-interview-notes.md
