@@ -2513,6 +2513,258 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("data sources (HTTP)", () => {
+    it("addDataSource persists a new source on the mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      expect(ds.id).toMatch(/^datasource_/);
+      const list = service.listDataSources(mission.id);
+      expect(list).toHaveLength(1);
+      expect(list[0]?.name).toBe("GSC");
+    });
+
+    it("removeDataSource removes by id", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      service.removeDataSource(mission.id, ds.id);
+      expect(service.listDataSources(mission.id)).toHaveLength(0);
+    });
+
+    it("triggerDataSourceFetch on success creates a KnowledgeEntry and records ok", async () => {
+      const fakeFetch = async () =>
+        new Response(JSON.stringify({ rows: [1, 2] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      const record = await service.triggerDataSourceFetch(mission.id, ds.id);
+      expect(record.status).toBe("ok");
+      expect(record.knowledgeEntryId).toBeDefined();
+      const entries = service.listKnowledge({ missionId: mission.id });
+      expect(entries.some((e) => e.key.startsWith("dataSource:GSC:"))).toBe(true);
+    });
+
+    it("triggerDataSourceFetch on failure records error and notifies owner", async () => {
+      const fakeFetch = async () => new Response("nope", { status: 503 });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      const record = await service.triggerDataSourceFetch(mission.id, ds.id);
+      expect(record.status).toBe("failed");
+      expect(record.errorMessage).toMatch(/503/);
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const ownerNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.includes("GSC"),
+      );
+      expect(ownerNotify).toBeDefined();
+    });
+
+    it("fetchHistory caps at 50 entries", async () => {
+      const fakeFetch = async () =>
+        new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      for (let i = 0; i < 55; i += 1) {
+        await service.triggerDataSourceFetch(mission.id, ds.id);
+      }
+      const list = service.listDataSources(mission.id);
+      expect(list[0]?.fetchHistory.length).toBe(50);
+    });
+  });
+
+  describe("publish targets (HTTP)", () => {
+    function makeApprovableRuntime(): MissionExecutionRuntime {
+      return {
+        async runAgentTask() {
+          return {
+            status: "completed",
+            output: {
+              payloads: [
+                { text: "research GitHub growth metrics delivered with daily review (run 1)." },
+              ],
+              searchResults: [
+                { url: "https://example.com/source", title: "src", snippet: "x" },
+              ],
+            },
+            stderr: "",
+          };
+        },
+      };
+    }
+
+    it("addPublishTarget persists a new target", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const t = service.addPublishTarget(mission.id, {
+        name: "speakin",
+        adapter: "http",
+        config: { url: "https://speakin.cc/api/posts", method: "POST" },
+        contentTypes: ["execution_log"],
+      });
+      expect(t.id).toMatch(/^publishtarget_/);
+      const list = service.listPublishTargets(mission.id);
+      expect(list).toHaveLength(1);
+    });
+
+    it("removePublishTarget removes by id", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const t = service.addPublishTarget(mission.id, {
+        name: "x",
+        adapter: "http",
+        config: { url: "https://x", method: "POST" },
+        contentTypes: ["*"],
+      });
+      service.removePublishTarget(mission.id, t.id);
+      expect(service.listPublishTargets(mission.id)).toHaveLength(0);
+    });
+
+    it("auto-publishes approved artifact to matching HTTP publish target", async () => {
+      const fetched: { url: string; body: string }[] = [];
+      const fakeFetch = async (url: string, init?: RequestInit) => {
+        fetched.push({ url, body: String(init?.body ?? "") });
+        return new Response(JSON.stringify({ id: "post-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      const service = new InMemoryMissionService({
+        runtime: makeApprovableRuntime(),
+        fetch: fakeFetch,
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+        successMetrics: ["daily review generated"],
+      });
+      service.activateMission({ missionId: mission.id });
+      service.addPublishTarget(mission.id, {
+        name: "speakin",
+        adapter: "http",
+        config: { url: "https://speakin.cc/api/posts", method: "POST" },
+        contentTypes: ["*"],
+      });
+
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+      if (!initialTask) throw new Error("missing initial task");
+      service.executeTask({
+        missionId: mission.id,
+        taskId: initialTask.id,
+        message: "go",
+      });
+      for (let i = 0; i < 12; i += 1) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      expect(fetched.length).toBeGreaterThanOrEqual(1);
+      expect(fetched[0]?.url).toBe("https://speakin.cc/api/posts");
+      const target = service.listPublishTargets(mission.id)[0]!;
+      expect(target.attempts.length).toBeGreaterThanOrEqual(1);
+      expect(target.attempts[0]?.status).toBe("ok");
+    });
+
+    it("auto-publish failure notifies owner without blocking the approval", async () => {
+      const fakeFetch = async () => new Response("nope", { status: 500 });
+      const service = new InMemoryMissionService({
+        runtime: makeApprovableRuntime(),
+        fetch: fakeFetch,
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+        successMetrics: ["daily review generated"],
+      });
+      service.activateMission({ missionId: mission.id });
+      service.addPublishTarget(mission.id, {
+        name: "speakin",
+        adapter: "http",
+        config: { url: "https://speakin.cc/api/posts", method: "POST" },
+        contentTypes: ["*"],
+      });
+
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id)!;
+      service.executeTask({
+        missionId: mission.id,
+        taskId: initialTask.id,
+        message: "go",
+      });
+      for (let i = 0; i < 12; i += 1) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const failureNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.includes("speakin"),
+      );
+      expect(failureNotify).toBeDefined();
+      const target = service.listPublishTargets(mission.id)[0]!;
+      expect(target.attempts[0]?.status).toBe("failed");
+      // Approval flow not blocked: task moved to completed
+      const finalTask = service.snapshot().tasks.find((t) => t.id === initialTask.id);
+      expect(finalTask?.status).toBe("completed");
+    });
+
+    it("does NOT auto-publish if contentTypes do not match", async () => {
+      const fetched: string[] = [];
+      const fakeFetch = async (url: string) => {
+        fetched.push(url);
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const service = new InMemoryMissionService({
+        runtime: makeApprovableRuntime(),
+        fetch: fakeFetch,
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+        successMetrics: ["daily review generated"],
+      });
+      service.activateMission({ missionId: mission.id });
+      service.addPublishTarget(mission.id, {
+        name: "specific",
+        adapter: "http",
+        config: { url: "https://specific.example.com/api", method: "POST" },
+        contentTypes: ["content_draft"],
+      });
+
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id)!;
+      service.executeTask({
+        missionId: mission.id,
+        taskId: initialTask.id,
+        message: "go",
+      });
+      for (let i = 0; i < 12; i += 1) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      // Initial task artifacts are type "execution_log", not "content_draft" — skip
+      expect(fetched.length).toBe(0);
+    });
+  });
+
   describe("createFollowupTask", () => {
     function makeRuntime(): { runtime: MissionExecutionRuntime; calls: { message: string }[] } {
       const calls: { message: string }[] = [];

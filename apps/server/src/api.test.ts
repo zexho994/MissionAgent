@@ -1037,4 +1037,135 @@ describe("schedule API endpoints", () => {
     expect(missions.getScheduleRules(missionId).find((rule) => rule.id === enabledRuleId)?.enabled).toBe(true);
     expect(missions.getScheduleRules(missionId).find((rule) => rule.id === disabledRuleId)?.enabled).toBe(false);
   });
+
+  describe("data sources REST endpoints", () => {
+    it("POST /data-sources adds and GET lists", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+
+      const createResp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/data-sources`,
+          body: {
+            name: "GSC",
+            adapter: "http",
+            config: { url: "https://api.example.com/x", method: "GET" },
+          },
+        },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(createResp.status).toBe(201);
+
+      const listResp = await handleApiRequest(
+        { method: "GET", path: `/api/missions/${missionId}/data-sources` },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(listResp.status).toBe(200);
+      expect((listResp.body as { dataSources: unknown[] }).dataSources).toHaveLength(1);
+    });
+
+    it("rejects invalid method on data source create", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/data-sources`,
+          body: {
+            name: "X",
+            adapter: "http",
+            config: { url: "https://x", method: "DELETE" },
+          },
+        },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it("DELETE /data-sources/:id removes the source", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      const ds = missions.addDataSource(missionId, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      const resp = await handleApiRequest(
+        { method: "DELETE", path: `/api/missions/${missionId}/data-sources/${ds.id}` },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect(missions.listDataSources(missionId)).toHaveLength(0);
+    });
+
+    it("POST /data-sources/:id/fetch triggers a fetch", async () => {
+      const fakeFetch = async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const missions = new InMemoryMissionService({ fetch: fakeFetch });
+      const missionId = await createMissionViaApi(missions);
+      const ds = missions.addDataSource(missionId, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      const resp = await handleApiRequest(
+        { method: "POST", path: `/api/missions/${missionId}/data-sources/${ds.id}/fetch` },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect((resp.body as { record: { status: string } }).record.status).toBe("ok");
+    });
+  });
+
+  describe("publish targets REST endpoints", () => {
+    it("POST /publish-targets adds and GET lists", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+
+      const createResp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/publish-targets`,
+          body: {
+            name: "speakin",
+            adapter: "http",
+            config: { url: "https://speakin.cc/api/posts", method: "POST" },
+            contentTypes: ["*"],
+          },
+        },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(createResp.status).toBe(201);
+
+      const listResp = await handleApiRequest(
+        { method: "GET", path: `/api/missions/${missionId}/publish-targets` },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(listResp.status).toBe(200);
+      expect((listResp.body as { publishTargets: unknown[] }).publishTargets).toHaveLength(1);
+    });
+
+    it("rejects invalid method on publish target create", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/publish-targets`,
+          body: {
+            name: "X",
+            adapter: "http",
+            config: { url: "https://x", method: "GET" },
+            contentTypes: ["*"],
+          },
+        },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(400);
+    });
+  });
 });
