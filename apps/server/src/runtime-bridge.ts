@@ -12,16 +12,12 @@ export interface MissionExecutionRuntime {
   }>;
 }
 
-export function buildOpenClawMessage(input: {
+export function buildAgentMessage(input: {
   message: string;
   mission: unknown;
   task: unknown;
 }): string {
   return [
-    "You are executing a DigitalAgent Mission task.",
-    "Use the mission context below. Do not look for local Mission files.",
-    "Return one valid JSON object only.",
-    "",
     "Mission context:",
     JSON.stringify(
       {
