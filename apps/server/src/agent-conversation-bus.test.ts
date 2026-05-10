@@ -76,7 +76,7 @@ function makeBusDeps(overrides?: {
       responseGuidelines: "Be helpful",
       availableActions: ["report_findings", "request_info", "notify_risk", "acknowledge"],
     }),
-  } as AgentPersonaRegistry;
+  } as unknown as AgentPersonaRegistry;
 
   const contextRetriever: ContextRetriever = {
     getRelevantContext: () => [],
@@ -153,6 +153,191 @@ describe("AgentConversationBus", () => {
       );
       expect(result.message).toBe("fenced");
       expect(result.shouldPropagate).toBe(true);
+    });
+
+    it("parses create_followup_task action with valid payload", () => {
+      const result = parseAgentConversationResponse(
+        JSON.stringify({
+          message: "派下一波任务",
+          type: "agent_chat",
+          shouldPropagate: false,
+          action: {
+            type: "create_followup_task",
+            payload: {
+              title: "Write second SEO article on topic X",
+              objective: "Produce a second article based on first article's data",
+              assigneeRole: "content_strategist",
+              reason: "First article's keyword Y had high CTR",
+              sourceTaskId: "task-1",
+            },
+          },
+        }),
+      );
+      expect(result.action?.type).toBe("create_followup_task");
+      if (result.action?.type === "create_followup_task") {
+        expect(result.action.payload).toMatchObject({
+          title: "Write second SEO article on topic X",
+          objective: "Produce a second article based on first article's data",
+          assigneeRole: "content_strategist",
+          reason: "First article's keyword Y had high CTR",
+          sourceTaskId: "task-1",
+        });
+      }
+    });
+
+    it("falls back to acknowledge when create_followup_task payload missing title", () => {
+      const result = parseAgentConversationResponse(
+        JSON.stringify({
+          message: "...",
+          type: "agent_chat",
+          shouldPropagate: false,
+          action: { type: "create_followup_task", payload: { objective: "x", assigneeRole: "r", reason: "y" } },
+        }),
+      );
+      expect(result.action?.type).toBe("acknowledge");
+    });
+
+    it("falls back to acknowledge when create_followup_task payload missing assigneeRole", () => {
+      const result = parseAgentConversationResponse(
+        JSON.stringify({
+          message: "...",
+          type: "agent_chat",
+          shouldPropagate: false,
+          action: { type: "create_followup_task", payload: { title: "T", objective: "x", reason: "y" } },
+        }),
+      );
+      expect(result.action?.type).toBe("acknowledge");
+    });
+  });
+
+  describe("LLM prompt mentions create_followup_task", () => {
+    it("includes create_followup_task usage hint when persona advertises it", async () => {
+      const captured: string[] = [];
+      const llm: LlmService = {
+        call: async (msgs: LlmMessage[]) => {
+          captured.push(msgs.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n"));
+          return {
+            content: JSON.stringify({ message: "ok", type: "agent_chat", shouldPropagate: false, action: { type: "acknowledge" } }),
+            model: "test",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+          };
+        },
+        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const personas: AgentPersonaRegistry = {
+        personaFor: () => ({
+          role: "owner",
+          systemPrompt: "you are owner",
+          communicationStyle: "direct",
+          responseGuidelines: "respond when mission risk",
+          availableActions: ["acknowledge", "create_followup_task"],
+        }),
+      } as unknown as AgentPersonaRegistry;
+      const messages: AgentMessage[] = [];
+      const bus = new AgentConversationBus({
+        llm,
+        personas,
+        contextRetriever: { getRelevantContext: () => [] } as unknown as ContextRetriever,
+        getSnapshot: () => baseSnapshot,
+        appendMessage: (m) => {
+          const appended = { ...m, id: `m_${messages.length}`, createdAt: new Date().toISOString() } as AgentMessage;
+          messages.push(appended);
+          return appended;
+        },
+        createThread: (t) => ({ ...t, id: "t1", createdAt: new Date().toISOString() } as ConversationThread),
+        resolveThread: () => undefined,
+        updateAgent: () => undefined,
+        maxConversationDepth: 3,
+        maxDiscussionRounds: 1,
+        cooldownMs: 0,
+      });
+
+      await bus.dispatchEvent({
+        missionId: "m1",
+        event: { type: "execution_completed", agentId: "analyst", taskId: "t1", artifactId: "a1" },
+      });
+
+      expect(captured.length).toBeGreaterThan(0);
+      const allPrompts = captured.join("\n");
+      expect(allPrompts).toContain("create_followup_task");
+      // Must teach the LLM the payload schema for create_followup_task, not just list the name
+      expect(allPrompts).toContain("\"title\"");
+      expect(allPrompts).toContain("\"objective\"");
+      expect(allPrompts).toContain("\"assigneeRole\"");
+      expect(allPrompts).toContain("\"reason\"");
+    });
+  });
+
+  describe("Bus dispatches create_followup_task action", () => {
+    it("calls deps.createFollowupTask when LLM returns create_followup_task", async () => {
+      const createFollowupCalls: Array<{ missionId: string; triggeringEventId: string; payload: unknown }> = [];
+      const llm: LlmService = {
+        call: async () => ({
+          content: JSON.stringify({
+            message: "派下一个",
+            type: "agent_chat",
+            shouldPropagate: false,
+            action: {
+              type: "create_followup_task",
+              payload: {
+                title: "T2",
+                objective: "Do the next step",
+                assigneeRole: "researcher",
+                reason: "based on review",
+                sourceTaskId: "t-1",
+              },
+            },
+          }),
+          model: "test",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        }),
+        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const personas: AgentPersonaRegistry = {
+        personaFor: () => ({
+          role: "owner",
+          systemPrompt: "you are owner",
+          communicationStyle: "direct",
+          responseGuidelines: "respond when mission risk",
+          availableActions: ["acknowledge", "create_followup_task"],
+        }),
+      } as unknown as AgentPersonaRegistry;
+      const messages: AgentMessage[] = [];
+      const bus = new AgentConversationBus({
+        llm,
+        personas,
+        contextRetriever: { getRelevantContext: () => [] } as unknown as ContextRetriever,
+        getSnapshot: () => baseSnapshot,
+        appendMessage: (m) => {
+          const appended = { ...m, id: `m_${messages.length}`, createdAt: new Date().toISOString() } as AgentMessage;
+          messages.push(appended);
+          return appended;
+        },
+        createThread: (t) => ({ ...t, id: "t1", createdAt: new Date().toISOString() } as ConversationThread),
+        resolveThread: () => undefined,
+        updateAgent: () => undefined,
+        maxConversationDepth: 3,
+        maxDiscussionRounds: 1,
+        cooldownMs: 0,
+        createFollowupTask: async (input) => {
+          createFollowupCalls.push(input);
+          return { created: true, taskId: "new-task-id" };
+        },
+      });
+
+      await bus.dispatchEvent({
+        missionId: "m1",
+        event: { type: "review_completed", agentId: "owner", taskId: "t-1", decision: "approve" },
+      });
+
+      expect(createFollowupCalls.length).toBeGreaterThanOrEqual(1);
+      const call = createFollowupCalls[0]!;
+      expect(call.missionId).toBe("m1");
+      expect(call.triggeringEventId).toBeTruthy();
+      const payload = call.payload as { title: string };
+      expect(payload.title).toBe("T2");
     });
   });
 

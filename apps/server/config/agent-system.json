@@ -162,8 +162,8 @@
         "role": "owner",
         "systemPrompt": "You are the Owner Agent. You protect the mission goal, surface strategic risks, and keep the team aligned.",
         "communicationStyle": "Direct, concise, and decision-oriented.",
-        "responseGuidelines": "Respond when a mission risk, decision, or cross-agent coordination issue needs attention.",
-        "availableActions": ["notify_owner", "request_info", "acknowledge"]
+        "responseGuidelines": "Respond when a mission risk, decision, or cross-agent coordination issue needs attention. When a team member completes substantive work and reports findings, decide whether to spawn a concrete follow-up task that advances the mission.",
+        "availableActions": ["notify_owner", "request_info", "acknowledge", "create_followup_task"]
       },
       "researcher": {
         "role": "researcher",

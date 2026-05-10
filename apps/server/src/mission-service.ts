@@ -47,7 +47,7 @@ import { runOwnerLlmStreaming } from "./owner-streaming.js";
 import { AgentConversationBus } from "./agent-conversation-bus.js";
 import { AgentPersonaRegistry } from "./agent-personas.js";
 import { ContextRetriever } from "./context-retriever.js";
-import type { BusEvent, ConversationThread } from "./agent-conversation-types.js";
+import type { BusEvent, ConversationThread, CreateFollowupTaskPayload } from "./agent-conversation-types.js";
 import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
 import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
@@ -62,6 +62,11 @@ import {
   type ExecutionFailureFeedback,
   type ExecutionResultFeedback,
 } from "./feedback-generation.js";
+import {
+  checkFollowupSafety,
+  DEFAULT_FOLLOWUP_SAFETY,
+  type FollowupSafetyConfig,
+} from "./followup-task-safety.js";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -515,6 +520,7 @@ export interface MissionServiceOptions {
   configFile?: string | undefined;
   llm?: LlmService | undefined;
   runtime?: MissionExecutionRuntime | undefined;
+  followupSafety?: FollowupSafetyConfig | undefined;
 }
 
 export type StreamEventListener = (event: {
@@ -560,6 +566,8 @@ export class InMemoryMissionService {
   private readonly personas: AgentPersonaRegistry;
   private readonly contextRetriever: ContextRetriever;
   private readonly runtime: MissionExecutionRuntime | undefined;
+  private readonly followupSafetyConfig: FollowupSafetyConfig;
+  private readonly followupCountByEvent = new Map<string, number>();
 
   private static readonly realClock: SchedulerClock = {
     now: () => new Date(),
@@ -572,6 +580,7 @@ export class InMemoryMissionService {
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
     this.runtime = options.runtime;
+    this.followupSafetyConfig = options.followupSafety ?? DEFAULT_FOLLOWUP_SAFETY;
     this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
     this.contextRetriever = new ContextRetriever(() => this.snapshot());
     this.loadFromFile();
@@ -2356,6 +2365,7 @@ export class InMemoryMissionService {
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
         maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 5,
         cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
+        createFollowupTask: (input) => this.createFollowupTask(input),
       });
     }
     return this.conversationBus;
@@ -2385,6 +2395,7 @@ export class InMemoryMissionService {
         },
         updateAgent: (id, patch) => this.updateAgent(id, patch),
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
+        createFollowupTask: (input) => this.createFollowupTask(input),
       });
     }
     return this.autonomyService;
@@ -2505,6 +2516,130 @@ export class InMemoryMissionService {
     scheduler = new MissionScheduler(deps);
     this.schedulers.set(missionId, scheduler);
     return scheduler;
+  }
+
+  async createFollowupTask(input: {
+    missionId: string;
+    triggeringEventId: string;
+    payload: CreateFollowupTaskPayload;
+  }): Promise<
+    | { created: true; taskId: string }
+    | {
+        created: false;
+        reason: "per_event_limit" | "mission_cap" | "no_assignee";
+        escalateMessageSent: boolean;
+      }
+  > {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+
+    const totalTasksInMission = [...this.tasks.values()].filter(
+      (t) => t.missionId === input.missionId,
+    ).length;
+    const followupsForEvent = this.followupCountByEvent.get(input.triggeringEventId) ?? 0;
+
+    const safety = checkFollowupSafety(this.followupSafetyConfig, {
+      missionId: input.missionId,
+      triggeringEventId: input.triggeringEventId,
+      totalTasksInMission,
+      followupsAlreadyCreatedForEvent: followupsForEvent,
+    });
+
+    if (!safety.allowed) {
+      let escalateMessageSent = false;
+      if (safety.escalateToUser) {
+        const owner = [...this.agents.values()].find(
+          (a) => a.missionId === input.missionId && a.role === "owner",
+        );
+        if (owner) {
+          this.appendMessage({
+            missionId: input.missionId,
+            fromAgentId: "system",
+            toAgentId: owner.id,
+            type: "agent_notify",
+            content: `Mission cap reached (${safety.limit} tasks). Followup task "${input.payload.title}" was blocked. Manual review required before more followup tasks.`,
+          });
+          escalateMessageSent = true;
+        }
+      }
+      this.persist();
+      return { created: false, reason: safety.reason, escalateMessageSent };
+    }
+
+    const assignee = [...this.agents.values()].find(
+      (a) =>
+        a.missionId === input.missionId &&
+        (a.role === input.payload.assigneeRole ||
+          a.role.includes(input.payload.assigneeRole) ||
+          input.payload.assigneeRole.includes(a.role)),
+    );
+    if (!assignee) {
+      const owner = [...this.agents.values()].find(
+        (a) => a.missionId === input.missionId && a.role === "owner",
+      );
+      let escalateMessageSent = false;
+      if (owner) {
+        this.appendMessage({
+          missionId: input.missionId,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: `Followup task "${input.payload.title}" could not be assigned: no agent for role "${input.payload.assigneeRole}".`,
+        });
+        escalateMessageSent = true;
+      }
+      this.persist();
+      return { created: false, reason: "no_assignee", escalateMessageSent };
+    }
+
+    const task = createTask({
+      missionId: input.missionId,
+      title: input.payload.title,
+      dependencies: [],
+      contract: {
+        objective: input.payload.objective,
+        input: input.payload.inputContext ?? {},
+        outputSchema: {},
+        successCriteria: [`Output addresses: ${input.payload.objective}`],
+      },
+      approvalRequired: false,
+      origin: {
+        type: "followup",
+        reason: input.payload.reason,
+        ...(input.payload.sourceTaskId ? { sourceTaskId: input.payload.sourceTaskId } : {}),
+        triggeredByEventId: input.triggeringEventId,
+      },
+    });
+    const assigned: Task = { ...task, assigneeAgentId: assignee.id };
+    this.tasks.set(assigned.id, assigned);
+    this.followupCountByEvent.set(input.triggeringEventId, followupsForEvent + 1);
+
+    this.appendMessage({
+      missionId: input.missionId,
+      fromAgentId: "system",
+      type: "task_plan",
+      content: `Followup task "${input.payload.title}" assigned to ${assignee.name} (reason: ${input.payload.reason}).`,
+    });
+
+    if (this.runtime) {
+      try {
+        this.executeTask({
+          missionId: input.missionId,
+          taskId: assigned.id,
+          message: input.payload.objective,
+        });
+      } catch (error) {
+        console.error(
+          `[MissionService] Followup task execution failed to start (mission ${input.missionId}, task ${assigned.id}):`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+
+    this.persist();
+    return { created: true, taskId: assigned.id };
   }
 
   private createTaskFromScheduleRule(mission: Mission, rule: ScheduleRule): Task | undefined {
