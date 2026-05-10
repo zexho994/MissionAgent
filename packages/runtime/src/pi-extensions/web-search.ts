@@ -111,7 +111,9 @@ export default function webSearchExtension(pi: any) {
       "Search the public web. Returns a JSON list of {url, title, snippet}. Sources are also exposed via tool result details.",
     parameters: WEB_SEARCH_TOOL_PARAMETERS,
     async execute(_toolCallId: string, params: { query: string; count?: number }) {
-      const search = await searchWeb({ query: params.query, count: params.count });
+      const opts: SearchOptions = { query: params.query };
+      if (params.count !== undefined) opts.count = params.count;
+      const search = await searchWeb(opts);
       const text =
         search.results.length === 0
           ? search.note ?? "No results found."
