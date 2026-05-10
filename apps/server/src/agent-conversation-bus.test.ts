@@ -210,6 +210,65 @@ describe("AgentConversationBus", () => {
     });
   });
 
+  describe("LLM prompt mentions create_followup_task", () => {
+    it("includes create_followup_task usage hint when persona advertises it", async () => {
+      const captured: string[] = [];
+      const llm: LlmService = {
+        call: async (msgs: LlmMessage[]) => {
+          captured.push(msgs.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n"));
+          return {
+            content: JSON.stringify({ message: "ok", type: "agent_chat", shouldPropagate: false, action: { type: "acknowledge" } }),
+            model: "test",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+          };
+        },
+        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const personas: AgentPersonaRegistry = {
+        personaFor: () => ({
+          role: "owner",
+          systemPrompt: "you are owner",
+          communicationStyle: "direct",
+          responseGuidelines: "respond when mission risk",
+          availableActions: ["acknowledge", "create_followup_task"],
+        }),
+      } as AgentPersonaRegistry;
+      const messages: AgentMessage[] = [];
+      const bus = new AgentConversationBus({
+        llm,
+        personas,
+        contextRetriever: { getRelevantContext: () => [] } as unknown as ContextRetriever,
+        getSnapshot: () => baseSnapshot,
+        appendMessage: (m) => {
+          const appended = { ...m, id: `m_${messages.length}`, createdAt: new Date().toISOString() } as AgentMessage;
+          messages.push(appended);
+          return appended;
+        },
+        createThread: (t) => ({ ...t, id: "t1", createdAt: new Date().toISOString() } as ConversationThread),
+        resolveThread: () => undefined,
+        updateAgent: () => undefined,
+        maxConversationDepth: 3,
+        maxDiscussionRounds: 1,
+        cooldownMs: 0,
+      });
+
+      await bus.dispatchEvent({
+        missionId: "m1",
+        event: { type: "execution_completed", agentId: "analyst", taskId: "t1", artifactId: "a1" },
+      });
+
+      expect(captured.length).toBeGreaterThan(0);
+      const allPrompts = captured.join("\n");
+      expect(allPrompts).toContain("create_followup_task");
+      // Must teach the LLM the payload schema for create_followup_task, not just list the name
+      expect(allPrompts).toContain("\"title\"");
+      expect(allPrompts).toContain("\"objective\"");
+      expect(allPrompts).toContain("\"assigneeRole\"");
+      expect(allPrompts).toContain("\"reason\"");
+    });
+  });
+
   describe("multi-round discussion", () => {
     it("should propagate discussion to mentioned agents", async () => {
       const { bus, messages, resolvedThreadIds } = makeBusDeps({

@@ -202,7 +202,8 @@ export class AgentConversationBus {
           `Shared context: ${JSON.stringify(context)}`,
           `Thread history:\n${threadMessages || "(none)"}`,
           knowledgeSummary(context),
-          "Respond with one JSON object only: {\"message\":\"...\",\"type\":\"agent_chat|agent_report|agent_request|agent_notify|agent_discussion\",\"mentionedAgentIds\":[],\"shouldPropagate\":false,\"action\":{\"type\":\"acknowledge\"}}",
+          "Choose `action.type` based on your persona's `Available actions`. If `create_followup_task` is among your available actions AND the event indicates substantive work has just completed (or a review approved a result) AND the mission needs the next concrete work step, you MAY return: {\"action\":{\"type\":\"create_followup_task\",\"payload\":{\"title\":\"<short task name>\",\"objective\":\"<one-sentence what to deliver>\",\"assigneeRole\":\"<role name from team>\",\"reason\":\"<why this is the right next step>\",\"sourceTaskId\":\"<optional id of the task this builds on>\"}}}. Otherwise return one of: acknowledge / report_to_superior / request_info / notify_owner / escalate.",
+          "Respond with one JSON object only: {\"message\":\"...\",\"type\":\"agent_chat|agent_report|agent_request|agent_notify|agent_discussion\",\"mentionedAgentIds\":[],\"shouldPropagate\":false,\"action\":{...}}",
         ].join("\n\n"),
       },
     ];
