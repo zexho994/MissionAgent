@@ -2395,6 +2395,7 @@ export class InMemoryMissionService {
         },
         updateAgent: (id, patch) => this.updateAgent(id, patch),
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
+        createFollowupTask: (input) => this.createFollowupTask(input),
       });
     }
     return this.autonomyService;
