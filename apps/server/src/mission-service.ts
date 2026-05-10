@@ -31,7 +31,7 @@ import {
 import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { loadAgentSystemConfig, type AgentSystemConfig } from "./system-config.js";
+import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
 import {
   buildMissionPlanMessages,
   buildOwnerSystemPrompt,
@@ -54,7 +54,7 @@ import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
 import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
 import {
-  buildOpenClawMessage,
+  buildAgentMessage,
   extractSourcesFromOpenClawOutput,
   type MissionExecutionRuntime,
 } from "./runtime-bridge.js";
@@ -1112,11 +1112,14 @@ export class InMemoryMissionService {
       taskId: input.taskId,
     });
     const runtime = this.runtime;
+    const executor = this.executionAgent(mission.id);
+    const systemPrompt = getRoleSystemPrompt(executor.role, this.config);
 
     void runtime
       .runAgentTask({
-        message: buildOpenClawMessage({ message: input.message, mission, task }),
+        message: buildAgentMessage({ message: input.message, mission, task }),
         timeoutSeconds: 300,
+        ...(systemPrompt ? { systemPrompt } : {}),
       })
       .then((result) => {
         const sources = extractSourcesFromOpenClawOutput(result.output);
