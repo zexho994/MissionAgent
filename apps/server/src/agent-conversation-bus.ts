@@ -41,6 +41,11 @@ export class AgentConversationBus {
       | { created: true; taskId: string }
       | { created: false; reason: string; escalateMessageSent?: boolean }
     >;
+    recordLlmCall?: (input: {
+      missionId: string;
+      promptTokens: number;
+      completionTokens: number;
+    }) => void;
   }) {}
 
   async dispatchEvent(input: {
@@ -235,6 +240,13 @@ export class AgentConversationBus {
       },
     ];
     const result = await this.deps.llm.call(messages, { temperature: 0.2 });
+    if (this.deps.recordLlmCall) {
+      this.deps.recordLlmCall({
+        missionId: input.missionId,
+        promptTokens: result.usage?.promptTokens ?? 0,
+        completionTokens: result.usage?.completionTokens ?? 0,
+      });
+    }
     return parseAgentConversationResponse(result.content);
   }
 

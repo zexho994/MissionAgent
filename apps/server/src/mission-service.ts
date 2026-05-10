@@ -369,6 +369,14 @@ export interface DecisionRecord {
   createdAt: string;
 }
 
+export interface MissionTokenUsage {
+  totalCalls: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  lastCallAt?: string;
+}
+
 export interface MissionSnapshot {
   missions: Mission[];
   plans: MissionPlan[];
@@ -388,6 +396,7 @@ export interface MissionSnapshot {
   missionOutcomeEvaluations: MissionOutcomeEvaluation[];
   taskFailureAnalyses: TaskFailureAnalysis[];
   strategyAdjustments: StrategyAdjustment[];
+  tokenUsageByMission: Record<string, MissionTokenUsage>;
 }
 
 interface StoredMissionSnapshot extends MissionSnapshot {
@@ -595,6 +604,7 @@ export class InMemoryMissionService {
   private readonly runtime: MissionExecutionRuntime | undefined;
   private readonly followupSafetyConfig: FollowupSafetyConfig;
   private readonly followupCountByEvent = new Map<string, number>();
+  private readonly tokenUsageByMission = new Map<string, MissionTokenUsage>();
   private readonly dataSourceAdapters: DataSourceAdapterRegistry;
   private readonly publishTargetAdapters: PublishTargetAdapterRegistry;
 
@@ -1507,6 +1517,7 @@ export class InMemoryMissionService {
       missionOutcomeEvaluations: [...this.missionOutcomeEvaluations.values()],
       taskFailureAnalyses: [...this.taskFailureAnalyses.values()],
       strategyAdjustments: [...this.strategyAdjustments.values()],
+      tokenUsageByMission: Object.fromEntries(this.tokenUsageByMission.entries()),
     };
   }
 
@@ -1728,6 +1739,33 @@ export class InMemoryMissionService {
     });
     this.persist();
     return updated;
+  }
+
+  recordLlmCall(input: {
+    missionId: string;
+    promptTokens: number;
+    completionTokens: number;
+  }): MissionTokenUsage {
+    const previous = this.tokenUsageByMission.get(input.missionId) ?? {
+      totalCalls: 0,
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalTokens: 0,
+    };
+    const updated: MissionTokenUsage = {
+      totalCalls: previous.totalCalls + 1,
+      totalPromptTokens: previous.totalPromptTokens + input.promptTokens,
+      totalCompletionTokens: previous.totalCompletionTokens + input.completionTokens,
+      totalTokens:
+        previous.totalTokens + input.promptTokens + input.completionTokens,
+      lastCallAt: new Date().toISOString(),
+    };
+    this.tokenUsageByMission.set(input.missionId, updated);
+    return updated;
+  }
+
+  getTokenUsage(missionId: string): MissionTokenUsage | undefined {
+    return this.tokenUsageByMission.get(missionId);
   }
 
   addScheduleRule(missionId: string, rule: ScheduleRule): void {
@@ -2730,6 +2768,9 @@ export class InMemoryMissionService {
         maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 5,
         cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
         createFollowupTask: (input) => this.createFollowupTask(input),
+        recordLlmCall: (input) => {
+          this.recordLlmCall(input);
+        },
       });
     }
     return this.conversationBus;
