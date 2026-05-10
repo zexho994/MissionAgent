@@ -74,20 +74,23 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 
 | 版本 | 谁能派活 | 完成后能看到 | 包含在哪个 Plan |
 |---|---|---|---|
-| **v1**（MVP） | 仅 Owner | Mission 不再停滞、task 1 → 2 → 3 接龙 | **Plan 1** ← 当前优先 |
+| **v1**（MVP） | 仅 Owner | Mission 不再停滞、task 1 → 2 → 3 接龙 | **Plan 1** ✅ 已完成（2026-05-10） |
 | v2 | Owner + Agent 提"建议"由 Owner 批 | Agent 体现专业判断，Owner 保有否决 | 暂未规划 |
 | v3 | Agent 可派"角色内任务"，Owner 派"跨角色" | 各角色有自己节奏，Owner 解放 | 暂未规划 |
 | v4 | 全员自治 + Owner 只管战略 | 真正"AI 团队"形态 | 暂未规划 |
 
-**v1 包含**：
-- 新增 Agent action 类型 `create_followup_task`
-- Owner persona 的 `availableActions` 加入此 action
-- LLM 提示语告知新 action 的用法和参数
-- 安全护栏（每 event 最多 1 个 followup、Mission 总任务数软上限触发 escalate）
+**v1 已完成（2026-05-10）**：
+- 新增 Agent action 类型 `create_followup_task`（types + parser + LLM prompt）
+- Owner persona 的 `availableActions` 加入此 action（仅 Owner，非 Owner 角色继续 v2 再开放）
+- 安全护栏：每 event 最多 1 个 followup、Mission 总任务数软上限触发 escalate
+- Bus 与 Autonomy 都接入 dispatch 路径
+- E2E 测试覆盖：初始 task 完成 → Owner 派 task #2 → task #2 自动执行
+- 343 个测试全部通过，typecheck 通过
 
 **这是原 ROADMAP Phase 5.2 标了 P0 但完全没动的那块——A.3 v1 就是它的最小实施。**
 
 **验收**：speakin.cc Mission 启动后，第 1 个任务完成 → Owner 派出第 2 个具体任务（不是"自检"），且第 2 个任务自动执行、再触发第 3 个任务。
+✅ 集成测试已验证此循环（`autonomous-flow.test.ts > Mission task spawning loop`）。手动 UI 验收待实际启动 speakin Mission 时进行（属于 Phase B Week 1）。
 
 ### A.1 让 Mission 能"看"——外部数据接入框架
 
@@ -133,7 +136,7 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 
 | # | 名称 | 包含的能力 | 依赖 | 状态 | 工作量 |
 |---|---|---|---|---|---|
-| **1** | **派活机器 v1**（Owner 派活） | A.3 v1 | 无 | ✅ 已写 plan | 3-4 天 |
+| **1** | **派活机器 v1**（Owner 派活） | A.3 v1 | 无 | ✅ 已完成（2026-05-10） | 3-4 天 |
 | **2** | HTTP 接入与发布基础 | A.1 + A.2（HTTP 部分） | Plan 1 | 待写 | 3-4 天 |
 | **3** | 安全和监控 | A.4 完整 | Plan 1 | 待写 | 3-4 天 |
 | **4** | 浏览器自动化引擎 + 知乎/掘金适配 | A.1 + A.2（浏览器部分） | Plan 1 + Plan 2 | 待写 | 5-6 天 |
