@@ -75,6 +75,7 @@ function makeTestDeps(): {
     missionOutcomeEvaluations: [],
     taskFailureAnalyses: [],
     strategyAdjustments: [],
+    tokenUsageByMission: {},
   };
 
   const deps: AgentAutonomyDeps = {
