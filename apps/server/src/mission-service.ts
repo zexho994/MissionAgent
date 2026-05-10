@@ -92,6 +92,11 @@ export interface CreateMissionRequest {
   goal: string;
   successMetrics?: string[];
   constraints?: string[];
+  budget?: {
+    maxRuntimeMinutes?: number;
+    maxTokenSpendUsd?: number;
+    maxFollowupTasks?: number;
+  };
 }
 
 export interface SubmitExecutionResultRequest {
@@ -645,8 +650,11 @@ export class InMemoryMissionService {
       successMetrics: input.successMetrics?.length ? input.successMetrics : ownerBrief.successMetrics,
       constraints: input.constraints?.length ? input.constraints : ownerBrief.constraints,
       budget: {
-        maxRuntimeMinutes: 180,
-        maxTokenSpendUsd: 20,
+        maxRuntimeMinutes: input.budget?.maxRuntimeMinutes ?? 180,
+        maxTokenSpendUsd: input.budget?.maxTokenSpendUsd ?? 20,
+        ...(input.budget?.maxFollowupTasks === undefined
+          ? {}
+          : { maxFollowupTasks: input.budget.maxFollowupTasks }),
       },
     });
 
@@ -2871,6 +2879,19 @@ export class InMemoryMissionService {
     const totalTasksInMission = [...this.tasks.values()].filter(
       (t) => t.missionId === input.missionId,
     ).length;
+
+    // Mission-level budget enforcement: auto-pause if over budget
+    if (
+      mission.budget.maxFollowupTasks !== undefined &&
+      totalTasksInMission >= mission.budget.maxFollowupTasks
+    ) {
+      this.pauseMissionLifecycle({
+        missionId: input.missionId,
+        reason: `Budget exceeded: ${totalTasksInMission} tasks reached the maxFollowupTasks limit of ${mission.budget.maxFollowupTasks}`,
+      });
+      return { created: false, reason: "budget_exceeded", escalateMessageSent: true };
+    }
+
     const followupsForEvent = this.followupCountByEvent.get(input.triggeringEventId) ?? 0;
 
     const safety = checkFollowupSafety(this.followupSafetyConfig, {

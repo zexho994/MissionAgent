@@ -3,6 +3,7 @@ export type MissionStatus = "active" | "paused" | "completed" | "cancelled";
 export interface MissionBudget {
   maxRuntimeMinutes: number;
   maxTokenSpendUsd?: number;
+  maxFollowupTasks?: number;
 }
 
 export interface MissionBrief {

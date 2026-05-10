@@ -30,6 +30,9 @@ export function createMission(input: CreateMissionInput): Mission {
       ...(input.budget?.maxTokenSpendUsd === undefined
         ? {}
         : { maxTokenSpendUsd: input.budget.maxTokenSpendUsd }),
+      ...(input.budget?.maxFollowupTasks === undefined
+        ? {}
+        : { maxFollowupTasks: input.budget.maxFollowupTasks }),
     },
     createdAt: new Date(),
     scheduleRules: [],
