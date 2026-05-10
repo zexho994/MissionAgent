@@ -2513,4 +2513,155 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("createFollowupTask", () => {
+    function makeRuntime(): { runtime: MissionExecutionRuntime; calls: { message: string }[] } {
+      const calls: { message: string }[] = [];
+      const runtime: MissionExecutionRuntime = {
+        async runAgentTask(input) {
+          calls.push({ message: input.message });
+          return {
+            status: "completed",
+            output: {
+              payloads: [{ text: "Followup work delivered with detailed output." }],
+            },
+            stderr: "",
+          };
+        },
+      };
+      return { runtime, calls };
+    }
+
+    it("creates a followup task with origin metadata, assigns it to a matching role, and triggers execution", async () => {
+      const { runtime, calls } = makeRuntime();
+      const service = new InMemoryMissionService({ runtime });
+      const mission = await service.createMission({ goal: "Create a harness learning image" });
+      service.activateMission({ missionId: mission.id });
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+      if (!initialTask) throw new Error("expected initial task");
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-1",
+        payload: {
+          title: "Step 2: Refine image based on feedback",
+          objective: "Refine the harness learning image based on first version output",
+          assigneeRole: "researcher",
+          reason: "First task surfaced topic X",
+          sourceTaskId: initialTask.id,
+        },
+      });
+
+      expect(result.created).toBe(true);
+      const tasks = service.snapshot().tasks.filter((t) => t.missionId === mission.id);
+      const newTask = tasks.find((t) => t.title === "Step 2: Refine image based on feedback");
+      expect(newTask).toBeDefined();
+      expect(newTask?.origin).toEqual({
+        type: "followup",
+        reason: "First task surfaced topic X",
+        sourceTaskId: initialTask.id,
+        triggeredByEventId: "evt-1",
+      });
+      expect(newTask?.assigneeAgentId).toBeDefined();
+
+      // Drain runtime promise + downstream
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      // Execution was triggered
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("blocks creating a second followup for the same triggering event (per_event_limit)", async () => {
+      const { runtime } = makeRuntime();
+      const service = new InMemoryMissionService({ runtime });
+      const mission = await service.createMission({ goal: "Create a harness learning image" });
+      service.activateMission({ missionId: mission.id });
+
+      const first = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-A",
+        payload: {
+          title: "First followup",
+          objective: "Do thing 1",
+          assigneeRole: "researcher",
+          reason: "r1",
+        },
+      });
+      expect(first.created).toBe(true);
+
+      const second = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-A",
+        payload: {
+          title: "Second followup (should be blocked)",
+          objective: "Do thing 2",
+          assigneeRole: "researcher",
+          reason: "r2",
+        },
+      });
+      expect(second.created).toBe(false);
+      if (!second.created) {
+        expect(second.reason).toBe("per_event_limit");
+      }
+    });
+
+    it("escalates to owner when mission cap reached", async () => {
+      const { runtime } = makeRuntime();
+      const service = new InMemoryMissionService({
+        runtime,
+        followupSafety: { maxFollowupsPerEvent: 99, maxTotalTasksPerMission: 1 },
+      });
+      const mission = await service.createMission({ goal: "Cap test" });
+      service.activateMission({ missionId: mission.id });
+      // mission already has 1 task (initial); cap is 1, so any followup should fail
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-cap",
+        payload: {
+          title: "Should be blocked",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "r",
+        },
+      });
+      expect(result.created).toBe(false);
+      if (!result.created) {
+        expect(result.reason).toBe("mission_cap");
+        expect(result.escalateMessageSent).toBe(true);
+      }
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const ownerNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.toLowerCase().includes("mission cap"),
+      );
+      expect(ownerNotify).toBeDefined();
+    });
+
+    it("falls back when no agent matches assigneeRole, notifying owner", async () => {
+      const { runtime } = makeRuntime();
+      const service = new InMemoryMissionService({ runtime });
+      const mission = await service.createMission({ goal: "No match test" });
+      service.activateMission({ missionId: mission.id });
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-noassignee",
+        payload: {
+          title: "Should not be assigned",
+          objective: "x",
+          assigneeRole: "non_existent_role_xyz",
+          reason: "r",
+        },
+      });
+      expect(result.created).toBe(false);
+      if (!result.created) {
+        expect(result.reason).toBe("no_assignee");
+      }
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const ownerNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.includes("non_existent_role_xyz"),
+      );
+      expect(ownerNotify).toBeDefined();
+    });
+  });
+
 });
