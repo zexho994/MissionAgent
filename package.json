@@ -8,6 +8,7 @@
     "build": "pnpm -r build",
     "dev": "pnpm --filter @digitalagent/server dev",
     "test": "pnpm -r test",
+    "test:smoke": "PI_SMOKE=1 pnpm -r --workspace-concurrency=1 test",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
