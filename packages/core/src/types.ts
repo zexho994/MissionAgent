@@ -76,6 +76,8 @@ export interface Mission {
   briefConfirmed?: boolean;
   confirmedPlanId?: string;
   scheduleRules: ScheduleRule[];
+  dataSources?: MissionDataSource[];
+  publishTargets?: MissionPublishTarget[];
 }
 
 export interface RoleBudget {
@@ -314,4 +316,64 @@ export interface ScheduleRule {
   };
   maxConcurrent: number;
   metadata: Record<string, unknown>;
+}
+
+export type MissionDataSourceStatus = "idle" | "fetching" | "ok" | "failed";
+
+export interface HttpDataSourceConfig {
+  url: string;
+  method: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+export interface DataSourceFetchRecord {
+  id: string;
+  fetchedAt: string;
+  status: "ok" | "failed";
+  knowledgeEntryId?: string;
+  errorMessage?: string;
+}
+
+export interface MissionDataSource {
+  id: string;
+  missionId: string;
+  name: string;
+  adapter: "http";
+  config: HttpDataSourceConfig;
+  status: MissionDataSourceStatus;
+  fetchHistory: DataSourceFetchRecord[];
+  createdAt: string;
+  lastFetchedAt?: string;
+}
+
+export type MissionPublishTargetStatus = "idle" | "publishing" | "ok" | "failed";
+
+export interface HttpPublishTargetConfig {
+  url: string;
+  method: "POST" | "PUT";
+  headers?: Record<string, string>;
+}
+
+export interface PublishAttempt {
+  id: string;
+  targetId: string;
+  artifactId: string;
+  attemptedAt: string;
+  status: "ok" | "failed";
+  responseSnippet?: string;
+  errorMessage?: string;
+}
+
+export interface MissionPublishTarget {
+  id: string;
+  missionId: string;
+  name: string;
+  adapter: "http";
+  config: HttpPublishTargetConfig;
+  status: MissionPublishTargetStatus;
+  contentTypes: string[];
+  attempts: PublishAttempt[];
+  createdAt: string;
+  lastAttemptAt?: string;
 }
