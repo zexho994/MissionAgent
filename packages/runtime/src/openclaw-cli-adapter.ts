@@ -39,21 +39,39 @@ export interface OpenClawAgentResult {
   stderr: string;
 }
 
+export interface OpenClawRetryConfig {
+  maxAttempts: number;
+  initialDelayMs: number;
+}
+
+export const DEFAULT_OPENCLAW_RETRY: OpenClawRetryConfig = {
+  maxAttempts: 2,
+  initialDelayMs: 1_000,
+};
+
 export interface OpenClawCliAdapterOptions {
   command?: string;
   defaultAgentId?: string;
   run?: CommandRunner;
+  retry?: OpenClawRetryConfig;
+  sleep?: (ms: number) => Promise<void>;
 }
+
+const TIMEOUT_EXIT_CODE = 124;
 
 export class OpenClawCliAdapter {
   private readonly command: string;
   private readonly configuredDefaultAgentId: string | undefined;
   private readonly runCommand: CommandRunner;
+  private readonly retry: OpenClawRetryConfig;
+  private readonly sleepFn: (ms: number) => Promise<void>;
 
   constructor(options: OpenClawCliAdapterOptions = {}) {
     this.command = options.command ?? "openclaw";
     this.configuredDefaultAgentId = options.defaultAgentId ?? process.env.OPENCLAW_AGENT_ID;
     this.runCommand = options.run ?? runProcess;
+    this.retry = options.retry ?? DEFAULT_OPENCLAW_RETRY;
+    this.sleepFn = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   async health(): Promise<OpenClawHealth> {
@@ -92,32 +110,49 @@ export class OpenClawCliAdapter {
       throw new Error("OpenClaw agent id is required");
     }
 
-    const result = await this.runCommand(this.command, [
-      "agent",
-      "--local",
-      "--json",
-      "--agent",
-      agentId,
-      "--timeout",
-      String(task.timeoutSeconds),
-      "--message",
-      task.message,
-    ], { timeoutSeconds: task.timeoutSeconds + 30 });
+    let lastError = "";
+    for (let attempt = 1; attempt <= this.retry.maxAttempts; attempt += 1) {
+      const result = await this.runCommand(this.command, [
+        "agent",
+        "--local",
+        "--json",
+        "--agent",
+        agentId,
+        "--timeout",
+        String(task.timeoutSeconds),
+        "--message",
+        task.message,
+      ], { timeoutSeconds: task.timeoutSeconds + 30 });
 
-    if (result.exitCode !== 0) {
-      throw new Error(result.stderr.trim() || result.stdout.trim() || `OpenClaw exited ${result.exitCode}`);
+      if (result.exitCode === 0) {
+        try {
+          const output = result.stdout.trim() ? result.stdout : result.stderr;
+          return {
+            status: "completed",
+            output: parseOpenClawJson(output),
+            stderr: result.stderr,
+          };
+        } catch {
+          throw new Error("OpenClaw returned non-JSON output");
+        }
+      }
+
+      lastError = result.stderr.trim() || result.stdout.trim() || `OpenClaw exited ${result.exitCode}`;
+
+      // Don't retry on timeout — process actually hung, retrying is unlikely to help quickly.
+      if (result.exitCode === TIMEOUT_EXIT_CODE) {
+        throw new Error(lastError);
+      }
+
+      if (attempt < this.retry.maxAttempts) {
+        console.warn(
+          `[OpenClawCliAdapter] runAgentTask attempt ${attempt}/${this.retry.maxAttempts} failed (exit ${result.exitCode}); retrying. stderr: ${lastError.slice(0, 200)}`,
+        );
+        await this.sleepFn(this.retry.initialDelayMs * 2 ** (attempt - 1));
+      }
     }
 
-    try {
-      const output = result.stdout.trim() ? result.stdout : result.stderr;
-      return {
-        status: "completed",
-        output: parseOpenClawJson(output),
-        stderr: result.stderr,
-      };
-    } catch {
-      throw new Error("OpenClaw returned non-JSON output");
-    }
+    throw new Error(lastError);
   }
 
   private async resolveDefaultAgentId(): Promise<string> {
