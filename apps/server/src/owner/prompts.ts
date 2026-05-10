@@ -6,7 +6,7 @@ export function buildOwnerSystemPrompt(systemPrompt: string, gatheringInstructio
 
 ${gatheringInstruction}
 
-When you need more information, ask exactly one question. If answer choices would help, put them on separate lines using this format:
+CRITICAL: You may ONLY ask ONE question per response. Ask more than one question and the conversation will be rejected. If answer choices would help, put them on separate lines using this format:
 A. First option
 B. Second option
 C. Third option
