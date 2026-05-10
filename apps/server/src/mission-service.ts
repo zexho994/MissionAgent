@@ -69,6 +69,7 @@ import {
   DEFAULT_FOLLOWUP_SAFETY,
   type FollowupSafetyConfig,
 } from "./followup-task-safety.js";
+import { getMissionTemplate } from "./mission-templates.js";
 import {
   DataSourceAdapterRegistry,
   HttpDataSourceAdapter,
@@ -690,6 +691,24 @@ export class InMemoryMissionService {
     }
 
     return mission;
+  }
+
+  async createMissionFromTemplate(input: { templateId: string }): Promise<Mission> {
+    const template = getMissionTemplate(input.templateId);
+    const createInput: CreateMissionRequest = {
+      goal: template.goal,
+      successMetrics: template.successMetrics,
+      constraints: template.constraints,
+      ...(template.budget ? { budget: template.budget } : {}),
+    };
+    const mission = await this.createMission(createInput);
+    for (const ds of template.dataSources ?? []) {
+      this.addDataSource(mission.id, ds);
+    }
+    for (const target of template.publishTargets ?? []) {
+      this.addPublishTarget(mission.id, target);
+    }
+    return this.missions.get(mission.id) ?? mission;
   }
 
   activateMission(input: ActivateMissionRequest): Mission {

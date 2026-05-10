@@ -169,22 +169,58 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 
 ---
 
-## 5 个 Plan 的执行顺序与依赖
+## 6 个 Plan 的执行顺序与依赖
 
 | # | 名称 | 包含的能力 | 依赖 | 状态 | 工作量 |
 |---|---|---|---|---|---|
 | **1** | **派活机器 v1**（Owner 派活） | A.3 v1 | 无 | ✅ 已完成（2026-05-10） | 3-4 天 |
 | **2** | HTTP 接入与发布基础 | A.1 + A.2（HTTP 部分） | Plan 1 | ✅ 已完成（2026-05-10） | 3-4 天 |
 | **3** | 安全和监控 | A.4 完整 + 多次重试 + cadence 调度 | Plan 1 + Plan 2 | ✅ 已完成（2026-05-10，cadence 调度推迟到独立 plan） | 3-4 天 |
-| **4** | 浏览器自动化引擎 + 知乎/掘金适配 | A.1 + A.2（浏览器部分） | Plan 1 + Plan 2 | 待写 | 5-6 天 |
-| **5** | speakin.cc Mission 第 1 跑 | Phase B 配置 + 4 周观察 | Plan 1+2 起步即可，3/4 完成会增强 | 待写 | 4 周观察 |
+| **4** | 浏览器自动化引擎 + 知乎/掘金适配 | A.1 + A.2（浏览器部分） | Plan 1 + Plan 2 | 推迟到 Phase C（看 Phase B 数据决定是否做） | 5-6 天 |
+| **5** | speakin Mission 模板 + 集成测试 | Mission 模板 + 端到端 Plans 1+2+3 集成验证 | Plan 1 + Plan 2 + Plan 3 | ✅ 已完成（2026-05-10） | 1 天 |
+| **6** | **运行时底座迁移**（pi 替换 OpenClaw） | runtime 重构（v1 CLI 替换 + v2 SDK 嵌入） | 与 Plan 4/5 解耦，可并行 | 待写 | v1: 1-2 天；v2: 1-2 周 |
 
 **节奏建议**：写 1 个 → 执行 1 个 → 用执行中学到的修正下一个 → 写下一个。**不要一次性写 5 个 plan**——执行中会暴露 ROADMAP 没考虑到的细节，后面 plan 都得改。
 
 **总时间预估**：
 - 平台层 Plan 1-4 ≈ 3-4 周（连续）
 - Plan 5 Mission 观察 = 4 周（与 Plan 2/3/4 后期重叠）
+- Plan 6 运行时底座迁移 ≈ v1 1-2 天 + v2 1-2 周（与 Plan 4/5 并行；v1 建议在 Plan 5 启动前落地）
 - **整体 ≈ 6-7 周**（不是原本想的 4 周）
+
+---
+
+## Plan 6: 运行时底座迁移——用 pi 替换 OpenClaw
+
+**是什么**：把"AI 团队真正干活"的执行引擎从 OpenClaw 切换到开源项目 [pi](https://github.com/earendil-works/pi)（4.7w stars，MIT，2026-05 仍在更新）。pi 自己的 README 把 OpenClaw 列为"基于 pi 构建的 SDK 集成示例"——这次替换大概率是去掉一层壳，而不是换底盘。
+
+**为什么换**：
+- 接入面已经收得很窄（1 个适配器 + 1 处调用，约 360 行），是切换底座成本最低的窗口
+- pi 自带读 / 写 / 编辑 / 搜索 / Shell 工具，原生覆盖 25+ LLM 提供商（含订阅登录），有完整事件流
+- v2 完成后能消除一层进程边界，并把项目里另一份"多 LLM 提供商"封装一并并入，少维护一份基础设施
+
+**v1（1-2 天）：CLI 直接替换，行为对齐**
+- 新建 pi 适配器，沿用现有运行时接口（所有现有测试 mock 不变）
+- 任务执行从 `openclaw` 命令切到 `pi` 命令，输出走 JSON 模式
+- 实现一个 pi 的 web 搜索扩展（research / social mission 不能因为换底座退化）
+- agent 角色定义（system prompt）从配置文件下发，替代原 OpenClaw 的"agent 注册表"
+
+**v2（1-2 周）：SDK 嵌入，砍进程**
+- 运行时不再 spawn 子进程，pi 作为 npm 包直接进 Node 进程
+- AI 角色对话用的 LLM 调用层（多 provider 封装）合并到 pi 自带的 LLM 网关
+- 用 pi 的标准事件流替代当前的文本解析逻辑
+- 任务级 prompt cache（pi 支持跨任务复用同一会话）
+
+**验收**：
+- v1：同一组 mission 在 pi 和 OpenClaw 下双跑，产出质量相当或更好
+- v2：运行时不再启动任何外部子进程；mission 端到端循环未退化；test suite 全绿
+
+**风险与前置**：
+- 当前抽取"搜索来源"的逻辑深度耦合 OpenClaw 输出格式——v1 上线前需选一种方案：让 pi 输出同样的格式（最快），或改造抽取器去消费 pi 的事件流（更干净）
+- pi 不内置 web search——v1 启动前必须先做这个扩展
+- 立项前最后确认：当前在跑的 OpenClaw 是不是就是 pi-README 提到的那个项目；如是，v1 工作量再降
+
+**依赖**：与 Plan 4（浏览器自动化）和 Plan 5（speakin 观察）解耦，可并行。但**建议 v1 在 Plan 5 启动前完成**——观察期切换底座会污染数据对照基线。
 
 ---
 
@@ -192,30 +228,33 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 
 **目标**：用 **speakin.cc 内容运营 Mission** 作为 Phase A 4 块能力的首验收场景。**这不是平台功能，是验收用例**。
 
+**Phase A 状态（2026-05-10）**：Plans 1+2+3+5 已 ✅，Plan 4（浏览器自动化）推迟到 Phase C 决策。Mission 模板 `speakin-content` 已注册（Plan 5），可通过 `POST /api/missions/from-template` 启动；端到端集成测试 (`speakin-mission.integration.test.ts`) 已验证 Plans 1+2+3 在该模板上的协作正确性。
+
 **与 Phase A 的关系**：
 - **Plan 1 完成**是 Mission 能启动的最小条件（基础接龙）
-- Plan 2/3/4 完成会**逐步增强 Mission**
-- 所以 Phase B 的 "Week 1" 实际是 Plan 1 完成后的第 1 周
+- Plan 2/3 完成 → Mission 真正"挂上墙"（HTTP 数据 + 自动发文 + 安全护栏）
+- Plan 4 推迟 → Phase B 用 HTTP-only 渠道跑（speakin 自家发文 + GSC 数据），知乎/掘金 等 Phase B 数据回来再决定要不要做
 
-### B.1 Mission 配置
+### B.1 Mission 配置（HTTP-only v1）
 
 | 平台能力 | speakin Mission 怎么用 |
 |---|---|
-| **看** | GSC（HTTP 适配器，Plan 2）+ 知乎/掘金后台数据（浏览器适配器，Plan 4） |
-| **做** | speakin 发文接口（HTTP 适配器，Plan 2）+ 知乎/掘金发布（浏览器适配器，Plan 4） |
-| **想** | 周循环：每周看上周数据 → 派下一波选题 + 写作任务（Plan 1 v1） |
-| **不失控** | 标准护栏 + 熔断按钮 + "账号被限/超预算/循环异常"3 类必叫人（Plan 3） |
+| **看** | GSC（HTTP 适配器，Plan 2，已配在 speakin-content 模板） |
+| **做** | speakin 发文接口（HTTP 适配器，Plan 2，已配在模板） |
+| **想** | 每次反馈周期：当前文章 review approved → Owner 派下一波选题任务（Plan 1 v1） |
+| **不失控** | maxFollowupTasks budget + pause/resume 熔断按钮 + 失败 owner notify（Plan 3） |
 
-### B.2 4 周观察分周计划（按 Plan 完成节奏更新）
+启动方式：`POST /api/missions/from-template body={"templateId":"speakin-content"}`。
 
-| 周 | 平台层完成 | Mission 此时的能力 | 这周结束你能看到 |
+### B.2 观察分周（按当前 Plan 完成节奏调整）
+
+| 周 | 平台层状态 | Mission 此时的能力 | 这周结束你能看到 |
 |---|---|---|---|
-| **Week 1** | Plan 1（派活 v1）+ Plan 2（HTTP） | 基础接龙 + speakin 自动发文 + GSC 数据回流 | speakin.cc 上有 1 篇 AI 自写自发的博文，团队基于 GSC 数据讨论下一篇 |
-| **Week 2** | Plan 3（安全） | + 安全护栏 + 熔断按钮 | 至少 1 次"AI 主动叫人"被触发，用户在 War Room 能看到原因 |
-| **Week 3** | Plan 4 上半（浏览器引擎 + 知乎） | + 知乎适配 | 知乎上有 1 篇 AI 自写自发的文章，团队为博文+知乎 2 路协调 |
-| **Week 4** | Plan 4 下半（掘金） | + 掘金适配 | 3 渠道并行产出，AI 团队为 3 路协调，累计约 6-8 篇 |
+| **Week 1** | Plans 1+2+3 ✅，Plan 5 模板 ✅ | HTTP-only 接龙：speakin 自动发文 + GSC 数据回流 + 安全护栏全开 | speakin.cc 上有 1 篇 AI 自写自发的博文，团队基于 GSC 数据讨论下一篇 |
+| **Week 2** | （同 Week 1） | （同 Week 1，监测稳定性） | 至少 1 次"AI 主动叫人"被触发；至少 2 篇博文累计 |
+| **Week 3-4** | （同 Week 1） | （同 Week 1，累积数据） | 累积 4-6 篇博文；GSC 真实数据有 1 个搜索词带来真实点击 |
 
-注：Week 1 比原版重，因为 Plan 1+2 都要在 Week 1 内完成才能让 Mission 真正"挂上墙"。如果时间紧，可拆成 Week 1 = Plan 1 完成 + Mission 启动只跑接龙；Week 2 = Plan 2 完成接通 speakin/GSC。
+注：原 Plan 4 (知乎/掘金) 推迟。Phase B 跑通后看真实数据决定是否做 Plan 4，或转 Phase C 其他方向。
 
 ### B.3 成功标准（不是流量，是循环）
 
@@ -277,7 +316,6 @@ Phase B 跑完后看真实数据，从下面 3 条路径选一条：
 | Phase 4.5 | War Room UX 重构 | 当前 UI 够用，体验不够好但不影响"循环跑通"，等 Phase B 后再优化 |
 | Phase 5.2（仅"失败任务自动重规划"那条） | 失败任务自动重规划 | A.3 的决策能力升级后，重规划是其副产品。**Phase 5.2 主体已并入 A.3 v1（Plan 1）** |
 | Phase 6 | 长期记忆 / Milestone / 检查点 | 月级 Mission 才需要，Phase B 是 4 周观察，不卡这个 |
-| Phase 7 | 原生轻量 Runtime（替换 OpenClaw） | 性能优化，OpenClaw 当前够用，不在关键路径 |
 
 ---
 

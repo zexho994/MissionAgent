@@ -1,6 +1,7 @@
 import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
 import type { OpenClawCliAdapter } from "@digitalagent/runtime";
 import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
+import { listMissionTemplates } from "./mission-templates.js";
 
 export interface ApiRequest {
   method: string;
@@ -502,6 +503,17 @@ export async function handleApiRequest(
         deps.missions.triggerScheduleRule(missionId, ruleId);
         return json(200, { triggered: true, snapshot: deps.missions.snapshot() });
       }
+    }
+
+    if (request.method === "GET" && request.path === "/api/mission-templates") {
+      return json(200, { templates: listMissionTemplates() });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/from-template") {
+      const body = expectObject(request.body);
+      const templateId = expectString(body.templateId, "templateId");
+      const mission = await deps.missions.createMissionFromTemplate({ templateId });
+      return json(201, { mission, snapshot: deps.missions.snapshot() });
     }
 
     const lifecycleMatch = request.path.match(
