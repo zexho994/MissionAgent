@@ -71,6 +71,7 @@ export interface ConfigAgentSpec {
   role: string;
   name: string;
   responsibility: string;
+  systemPrompt?: string;
   status: "idle" | "thinking" | "running" | "blocked" | "done";
   currentTask: boolean;
   lastAction: string;
@@ -84,6 +85,37 @@ export function loadAgentSystemConfig(configFile = join(process.cwd(), "config",
   const config = JSON.parse(readFileSync(configFile, "utf8")) as AgentSystemConfig;
   validateAgentSystemConfig(config);
   return config;
+}
+
+const TASK_OUTPUT_FORMAT_DIRECTIVE = [
+  "",
+  "Output requirement:",
+  "Your final assistant message MUST be a single valid JSON object (no surrounding prose, no markdown fences) with this shape:",
+  "{",
+  '  "summary": "<one-paragraph plain-text summary of what you produced>",',
+  '  "payloads": [<task-specific outputs; can be empty array>],',
+  '  "searchResults": [{"url":"...","title":"...","snippet":"...","searchKeyword":"..."}],',
+  '  "sources": [{"url":"...","title":"...","snippet":"..."}]',
+  "}",
+  "If you did not perform web research, return empty arrays for searchResults and sources.",
+].join("\n");
+
+export function getRoleSystemPrompt(roleName: string, config: AgentSystemConfig): string | undefined {
+  const spec = findRoleSpec(roleName, config);
+  if (!spec || !spec.systemPrompt || !spec.systemPrompt.trim()) {
+    return undefined;
+  }
+  return `${spec.systemPrompt.trim()}${TASK_OUTPUT_FORMAT_DIRECTIVE}`;
+}
+
+function findRoleSpec(roleName: string, config: AgentSystemConfig): ConfigAgentSpec | undefined {
+  const buckets: ConfigAgentSpec[] = [
+    ...config.teamPlanner.baseAgents,
+    ...config.teamPlanner.rules.map((rule) => rule.agent),
+    config.teamPlanner.fallbackAgent,
+    config.teamPlanner.reviewAgent,
+  ];
+  return buckets.find((agent) => agent.role === roleName);
 }
 
 function validateAgentSystemConfig(config: AgentSystemConfig): void {
