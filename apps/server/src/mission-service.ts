@@ -9,6 +9,8 @@ import {
   validateScheduleRule,
   completeMission,
   cancelMission,
+  pauseMission,
+  resumeMission,
   type Artifact,
   type Mission,
   type MissionBrief,
@@ -1638,6 +1640,61 @@ export class InMemoryMissionService {
     return updated;
   }
 
+  pauseMissionLifecycle(input: { missionId: string; reason?: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (mission.status === "paused") return mission;
+    const updated = pauseMission(mission);
+
+    const scheduler = this.schedulers.get(input.missionId);
+    if (scheduler) {
+      scheduler.stop();
+      this.schedulers.delete(input.missionId);
+    }
+    this.autonomyService?.stopLoop(input.missionId);
+
+    this.missions.set(updated.id, updated);
+    const owner = [...this.agents.values()].find(
+      (a) => a.missionId === input.missionId && a.role === "owner",
+    );
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      ...(owner ? { toAgentId: owner.id } : {}),
+      type: "agent_notify",
+      content: `Mission paused: ${input.reason ?? "manual pause"}`,
+    });
+    this.persist();
+    return updated;
+  }
+
+  resumeMissionLifecycle(input: { missionId: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (mission.status === "active") return mission;
+    const updated = resumeMission(mission);
+    this.missions.set(updated.id, updated);
+
+    // Restart scheduler with current rules + autonomy loop
+    if (updated.scheduleRules.length > 0) {
+      this.getOrCreateScheduler(updated.id).start(updated.scheduleRules);
+    }
+    this.autonomyService?.startLoop(updated.id);
+
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      type: "agent_notify",
+      content: "Mission resumed",
+    });
+    this.persist();
+    return updated;
+  }
+
   addScheduleRule(missionId: string, rule: ScheduleRule): void {
     const mission = this.missions.get(missionId);
     if (!mission) {
@@ -2798,13 +2855,17 @@ export class InMemoryMissionService {
     | { created: true; taskId: string }
     | {
         created: false;
-        reason: "per_event_limit" | "mission_cap" | "no_assignee";
+        reason: "per_event_limit" | "mission_cap" | "no_assignee" | "mission_paused" | "budget_exceeded";
         escalateMessageSent: boolean;
       }
   > {
     const mission = this.missions.get(input.missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
+    }
+
+    if (mission.status !== "active") {
+      return { created: false, reason: "mission_paused", escalateMessageSent: false };
     }
 
     const totalTasksInMission = [...this.tasks.values()].filter(

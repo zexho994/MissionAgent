@@ -2765,6 +2765,86 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("pauseMissionLifecycle / resumeMissionLifecycle", () => {
+    it("pauseMissionLifecycle sets mission status to paused and notifies owner", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+
+      const paused = service.pauseMissionLifecycle({ missionId: mission.id, reason: "test pause" });
+      expect(paused.status).toBe("paused");
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      expect(
+        messages.some((m) => m.type === "agent_notify" && m.content.includes("Mission paused")),
+      ).toBe(true);
+    });
+
+    it("pauseMissionLifecycle is idempotent on already-paused mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      service.pauseMissionLifecycle({ missionId: mission.id });
+      const second = service.pauseMissionLifecycle({ missionId: mission.id });
+      expect(second.status).toBe("paused");
+    });
+
+    it("createFollowupTask returns mission_paused when mission is paused", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      service.pauseMissionLifecycle({ missionId: mission.id });
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-1",
+        payload: {
+          title: "Should be blocked",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "test",
+        },
+      });
+      expect(result.created).toBe(false);
+      if (!result.created) {
+        expect(result.reason).toBe("mission_paused");
+      }
+    });
+
+    it("resumeMissionLifecycle restores active status and re-enables followups", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "research GitHub growth metrics" });
+      service.activateMission({ missionId: mission.id });
+      service.pauseMissionLifecycle({ missionId: mission.id });
+
+      const resumed = service.resumeMissionLifecycle({ missionId: mission.id });
+      expect(resumed.status).toBe("active");
+
+      // Followup should now succeed
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-resume",
+        payload: {
+          title: "Followup",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "after resume",
+        },
+      });
+      if (!result.created) {
+        throw new Error(`Expected created=true but got reason=${result.reason}`);
+      }
+      expect(result.created).toBe(true);
+    });
+
+    it("resumeMissionLifecycle is idempotent on active mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      const result = service.resumeMissionLifecycle({ missionId: mission.id });
+      expect(result.status).toBe("active");
+    });
+  });
+
   describe("createFollowupTask", () => {
     function makeRuntime(): { runtime: MissionExecutionRuntime; calls: { message: string }[] } {
       const calls: { message: string }[] = [];
