@@ -97,26 +97,46 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 **是什么**：用户在 Mission 配置里声明"要观察哪些数据源"，系统定期拉回来给 AI 团队查。
 
 **包含**：
-- **数据源适配器接口**（统一抽象）
-- **HTTP 接口适配器**（用户开放接口、Google Search Console 这种 API）→ **Plan 2**
-- **浏览器自动化适配器**（无开放接口的平台，复用同一引擎）→ **Plan 4**
-- **数据落到 Mission 知识库**（KnowledgeEntry 已建好，复用）
-- **失败重试 + 数据保鲜度标记**
+- **数据源适配器接口**（统一抽象） ✅ Plan 2 已完成
+- **HTTP 接口适配器**（用户开放接口、Google Search Console 这种 API）→ **Plan 2** ✅ 已完成
+- **浏览器自动化适配器**（无开放接口的平台，复用同一引擎）→ **Plan 4**（待写）
+- **数据落到 Mission 知识库**（KnowledgeEntry 已建好，复用） ✅ Plan 2 已完成（fetch 成功后自动写入 `dataSource:{name}:{timestamp}` key）
+- **失败重试 + 数据保鲜度标记** ⚠️ v1 单次 attempt + owner notify；多次重试与 cadence 调度推迟到 Plan 3
+
+**v1 完成（2026-05-10）**：
+- `MissionDataSource` 域类型 + 工厂
+- `DataSourceAdapter` 接口 + `HttpDataSourceAdapter` 实现（依赖注入 fetch 便于测试）
+- `MissionService.addDataSource / removeDataSource / listDataSources / triggerDataSourceFetch` 方法
+- 拉取成功 → KnowledgeEntry；失败 → owner agent_notify
+- REST endpoints: `POST/GET /api/missions/:id/data-sources`，`DELETE /:sourceId`，`POST /:sourceId/fetch`
+- fetchHistory 上限 50 条
+- 374 个测试全部通过，typecheck 通过
 
 **验收**：speakin.cc Mission 跑起来后，AI 团队能在协作对话里引用真实的 GSC / 知乎 / 掘金 数据。
+✅ HTTP 部分已具备（GSC 等开放 API）；知乎/掘金 需要 Plan 4 浏览器适配器。
 
 ### A.2 让 Mission 能"做"——外部产出发布框架
 
 **是什么**：用户在 Mission 配置里声明"产出物发到哪些目标"，AI 写完自动发出去。
 
 **包含**：
-- **发布目标适配器接口**（与 A.1 同结构，对偶设计）
-- **HTTP 接口适配器**（用户自家发文接口、邮件平台等）→ **Plan 2**
-- **浏览器自动化适配器**（复用 A.1 的引擎，给"发"用）→ **Plan 4**
-- **发布失败重试 + 限流处理 + 人工 fallback**
-- **发布状态追踪**（已发 / 待发 / 失败 / 待人工）
+- **发布目标适配器接口**（与 A.1 同结构，对偶设计） ✅ Plan 2 已完成
+- **HTTP 接口适配器**（用户自家发文接口、邮件平台等）→ **Plan 2** ✅ 已完成
+- **浏览器自动化适配器**（复用 A.1 的引擎，给"发"用）→ **Plan 4**（待写）
+- **发布失败重试 + 限流处理 + 人工 fallback** ⚠️ v1 单次 attempt + owner notify；多次重试与限流推迟到 Plan 3
+- **发布状态追踪**（已发 / 待发 / 失败 / 待人工） ✅ Plan 2 已完成（每个 target 有 `attempts` 数组，含 status、attemptedAt）
+
+**v1 完成（2026-05-10）**：
+- `MissionPublishTarget` 域类型 + 工厂
+- `PublishTargetAdapter` 接口 + `HttpPublishTargetAdapter` 实现
+- `MissionService.addPublishTarget / removePublishTarget / listPublishTargets / triggerPublish` 方法
+- **自动发布钩子**：artifact 审核通过后，按 `contentTypes` 匹配自动 publish（不阻塞 approval flow）
+- 发布失败 → owner agent_notify
+- REST endpoints: `POST/GET /api/missions/:id/publish-targets`，`DELETE /:targetId`，`POST /:targetId/publish`
+- attempts 上限 50 条
 
 **验收**：speakin.cc Mission 的累计产出物全部挂到 3 个真实渠道。
+✅ HTTP 渠道（speakin 自家接口、邮件平台等）已具备；知乎/掘金 需要 Plan 4。
 
 ### A.4 让 Mission 不会失控——熔断和监控框架【**Plan 3**】
 
@@ -137,10 +157,10 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 | # | 名称 | 包含的能力 | 依赖 | 状态 | 工作量 |
 |---|---|---|---|---|---|
 | **1** | **派活机器 v1**（Owner 派活） | A.3 v1 | 无 | ✅ 已完成（2026-05-10） | 3-4 天 |
-| **2** | HTTP 接入与发布基础 | A.1 + A.2（HTTP 部分） | Plan 1 | 待写 | 3-4 天 |
-| **3** | 安全和监控 | A.4 完整 | Plan 1 | 待写 | 3-4 天 |
+| **2** | HTTP 接入与发布基础 | A.1 + A.2（HTTP 部分） | Plan 1 | ✅ 已完成（2026-05-10） | 3-4 天 |
+| **3** | 安全和监控 | A.4 完整 + 多次重试 + cadence 调度 | Plan 1 + Plan 2 | 待写 | 3-4 天 |
 | **4** | 浏览器自动化引擎 + 知乎/掘金适配 | A.1 + A.2（浏览器部分） | Plan 1 + Plan 2 | 待写 | 5-6 天 |
-| **5** | speakin.cc Mission 第 1 跑 | Phase B 配置 + 4 周观察 | Plan 1 起步即可，2/3/4 完成会增强 | 待写 | 4 周观察 |
+| **5** | speakin.cc Mission 第 1 跑 | Phase B 配置 + 4 周观察 | Plan 1+2 起步即可，3/4 完成会增强 | 待写 | 4 周观察 |
 
 **节奏建议**：写 1 个 → 执行 1 个 → 用执行中学到的修正下一个 → 写下一个。**不要一次性写 5 个 plan**——执行中会暴露 ROADMAP 没考虑到的细节，后面 plan 都得改。
 
