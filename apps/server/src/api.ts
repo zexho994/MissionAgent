@@ -1,5 +1,5 @@
 import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
-import type { OpenClawCliAdapter } from "@digitalagent/runtime";
+import type { PiCliAdapter } from "@digitalagent/runtime";
 import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
 import { listMissionTemplates } from "./mission-templates.js";
 
@@ -16,7 +16,11 @@ export interface ApiResponse {
 
 export interface ApiDependencies {
   missions: InMemoryMissionService;
-  openclaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask">;
+  // Field name kept neutral as runtime to allow swapping execution adapters.
+  // The /api/health JSON response still surfaces the runtime status under the
+  // legacy key `openclaw` to preserve the public response shape; that key is
+  // renamed in Plan 6 v2.
+  runtime: Pick<PiCliAdapter, "health" | "runAgentTask">;
 }
 
 export async function handleApiRequest(
@@ -28,7 +32,7 @@ export async function handleApiRequest(
       const snapshot = deps.missions.snapshot();
       return json(200, {
         ok: true,
-        openclaw: await deps.openclaw.health(),
+        openclaw: await deps.runtime.health(),
         counts: {
           missions: snapshot.missions.length,
           tasks: snapshot.tasks.length,
@@ -290,9 +294,9 @@ export async function handleApiRequest(
         return json(400, { error: "Mission ID required" });
       }
       if (request.method === "GET") {
-        const openclawHealth = await deps.openclaw.health();
+        const runtimeHealth = await deps.runtime.health();
         const diagnosis = deps.missions.getAutopilotDiagnosis(missionId, {
-          hasExecutionRunner: openclawHealth.available,
+          hasExecutionRunner: runtimeHealth.available,
         });
         return json(200, { diagnosis });
       }

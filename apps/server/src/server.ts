@@ -3,7 +3,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OpenClawCliAdapter, createLlmServiceFromEnv, type OpenClawCliAdapterOptions } from "@digitalagent/runtime";
+import { PiCliAdapter, createLlmServiceFromEnv, type PiCliAdapterOptions } from "@digitalagent/runtime";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
@@ -15,19 +15,19 @@ const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data",
 
 const llm = createLlmServiceFromEnv(process.env);
 
-const openclawOptions: OpenClawCliAdapterOptions = {
-  command: "openclaw",
+// Pi runtime configuration. Set PI_COMMAND to override the binary path.
+// Set PI_EXTENSION_WEB_SEARCH to the absolute path of the built web-search
+// extension JS to enable the web_search tool.
+const piOptions: PiCliAdapterOptions = {
+  command: process.env.PI_COMMAND ?? "pi",
 };
-if (process.env.OPENCLAW_AGENT_ID) {
-  openclawOptions.defaultAgentId = process.env.OPENCLAW_AGENT_ID;
+if (process.env.PI_EXTENSION_WEB_SEARCH) {
+  piOptions.defaultExtensions = [process.env.PI_EXTENSION_WEB_SEARCH];
 }
-const openclaw = new OpenClawCliAdapter(openclawOptions);
+const pi = new PiCliAdapter(piOptions);
 
 const runtime: MissionExecutionRuntime = {
-  runAgentTask: (input) => openclaw.runAgentTask({
-    message: input.message,
-    timeoutSeconds: input.timeoutSeconds,
-  }),
+  runAgentTask: (input) => pi.runAgentTask(input),
 };
 
 const missions = new InMemoryMissionService({ storageFile: dataFile, llm, runtime });
@@ -111,7 +111,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
       path,
       ...(body === undefined ? {} : { body }),
     },
-    { missions, openclaw },
+    { missions, runtime: pi },
   );
   writeJson(res, response.status, response.body);
 }
