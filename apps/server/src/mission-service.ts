@@ -67,6 +67,24 @@ import {
   DEFAULT_FOLLOWUP_SAFETY,
   type FollowupSafetyConfig,
 } from "./followup-task-safety.js";
+import {
+  DataSourceAdapterRegistry,
+  HttpDataSourceAdapter,
+} from "./data-source-adapter.js";
+import {
+  HttpPublishTargetAdapter,
+  PublishTargetAdapterRegistry,
+} from "./publish-target-adapter.js";
+import {
+  createMissionDataSource,
+  createMissionPublishTarget,
+  type CreateMissionDataSourceInput,
+  type CreateMissionPublishTargetInput,
+  type DataSourceFetchRecord,
+  type MissionDataSource,
+  type MissionPublishTarget,
+  type PublishAttempt,
+} from "@digitalagent/core";
 
 export interface CreateMissionRequest {
   goal: string;
@@ -521,6 +539,7 @@ export interface MissionServiceOptions {
   llm?: LlmService | undefined;
   runtime?: MissionExecutionRuntime | undefined;
   followupSafety?: FollowupSafetyConfig | undefined;
+  fetch?: ((url: string, init?: RequestInit) => Promise<Response>) | undefined;
 }
 
 export type StreamEventListener = (event: {
@@ -568,6 +587,8 @@ export class InMemoryMissionService {
   private readonly runtime: MissionExecutionRuntime | undefined;
   private readonly followupSafetyConfig: FollowupSafetyConfig;
   private readonly followupCountByEvent = new Map<string, number>();
+  private readonly dataSourceAdapters: DataSourceAdapterRegistry;
+  private readonly publishTargetAdapters: PublishTargetAdapterRegistry;
 
   private static readonly realClock: SchedulerClock = {
     now: () => new Date(),
@@ -581,6 +602,16 @@ export class InMemoryMissionService {
     this.llm = options.llm;
     this.runtime = options.runtime;
     this.followupSafetyConfig = options.followupSafety ?? DEFAULT_FOLLOWUP_SAFETY;
+    this.dataSourceAdapters = new DataSourceAdapterRegistry();
+    this.dataSourceAdapters.register(
+      "http",
+      new HttpDataSourceAdapter(options.fetch ? { fetch: options.fetch } : {}),
+    );
+    this.publishTargetAdapters = new PublishTargetAdapterRegistry();
+    this.publishTargetAdapters.register(
+      "http",
+      new HttpPublishTargetAdapter(options.fetch ? { fetch: options.fetch } : {}),
+    );
     this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
     this.contextRetriever = new ContextRetriever(() => this.snapshot());
     this.loadFromFile();
@@ -2092,6 +2123,113 @@ export class InMemoryMissionService {
     return [...this.knowledgeEntries.values()]
       .filter((entry) => entry.missionId === input.missionId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  addDataSource(
+    missionId: string,
+    input: Omit<CreateMissionDataSourceInput, "missionId">,
+  ): MissionDataSource {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const source = createMissionDataSource({ ...input, missionId });
+    const updated: Mission = {
+      ...mission,
+      dataSources: [...(mission.dataSources ?? []), source],
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+    return source;
+  }
+
+  removeDataSource(missionId: string, sourceId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updated: Mission = {
+      ...mission,
+      dataSources: (mission.dataSources ?? []).filter((s) => s.id !== sourceId),
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+  }
+
+  listDataSources(missionId: string): MissionDataSource[] {
+    const mission = this.missions.get(missionId);
+    return mission?.dataSources ? [...mission.dataSources] : [];
+  }
+
+  async triggerDataSourceFetch(
+    missionId: string,
+    sourceId: string,
+  ): Promise<DataSourceFetchRecord> {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const source = mission.dataSources?.find((s) => s.id === sourceId);
+    if (!source) {
+      throw new Error(`Data source not found: ${sourceId}`);
+    }
+    const adapter = this.dataSourceAdapters.get(source.adapter);
+    const fetchedAt = new Date().toISOString();
+    const recordId = createId("fetchrecord");
+    const fetchResult = await adapter.fetch(source.config);
+
+    let record: DataSourceFetchRecord;
+    if (fetchResult.ok) {
+      const truncated = JSON.stringify(fetchResult.data, null, 2).slice(0, 8000);
+      const knowledge = this.setKnowledge({
+        missionId,
+        key: `dataSource:${source.name}:${fetchedAt}`,
+        value: truncated,
+        agentId: "system",
+      });
+      record = {
+        id: recordId,
+        fetchedAt,
+        status: "ok",
+        knowledgeEntryId: knowledge.id,
+      };
+    } else {
+      record = {
+        id: recordId,
+        fetchedAt,
+        status: "failed",
+        errorMessage: fetchResult.error,
+      };
+      const owner = [...this.agents.values()].find(
+        (a) => a.missionId === missionId && a.role === "owner",
+      );
+      if (owner) {
+        this.appendMessage({
+          missionId,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: `Data source "${source.name}" fetch failed: ${fetchResult.error}`,
+        });
+      }
+    }
+
+    const trimmedHistory = [record, ...source.fetchHistory].slice(0, 50);
+    const updatedSource: MissionDataSource = {
+      ...source,
+      status: fetchResult.ok ? "ok" : "failed",
+      fetchHistory: trimmedHistory,
+      lastFetchedAt: fetchedAt,
+    };
+    const updatedMission: Mission = {
+      ...mission,
+      dataSources: (mission.dataSources ?? []).map((s) =>
+        s.id === sourceId ? updatedSource : s,
+      ),
+    };
+    this.missions.set(missionId, updatedMission);
+    this.persist();
+    return record;
   }
 
   async triggerAgentConversation(input: {

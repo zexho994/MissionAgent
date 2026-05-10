@@ -30,7 +30,7 @@ describe("DataSourceAdapterRegistry", () => {
 
 describe("HttpDataSourceAdapter", () => {
   it("fetches via injected fetch and returns parsed JSON", async () => {
-    let called: { url: string; init?: RequestInit } | undefined;
+    let called: { url: string; init?: RequestInit | undefined } | undefined;
     const fakeFetch = async (url: string, init?: RequestInit) => {
       called = { url, init };
       return new Response(JSON.stringify({ rows: [1, 2, 3] }), {
@@ -72,7 +72,7 @@ describe("HttpDataSourceAdapter", () => {
   });
 
   it("forwards headers and body for POST", async () => {
-    let captured: { init?: RequestInit } | undefined;
+    let captured: { init?: RequestInit | undefined } | undefined;
     const fakeFetch = async (_url: string, init?: RequestInit) => {
       captured = { init };
       return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });

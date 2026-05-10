@@ -31,7 +31,7 @@ describe("PublishTargetAdapterRegistry", () => {
 
 describe("HttpPublishTargetAdapter", () => {
   it("POSTs payload as JSON and returns parsed response", async () => {
-    let captured: { url: string; init?: RequestInit } | undefined;
+    let captured: { url: string; init?: RequestInit | undefined } | undefined;
     const fakeFetch = async (url: string, init?: RequestInit) => {
       captured = { url, init };
       return new Response(JSON.stringify({ id: "post-42" }), {

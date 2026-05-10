@@ -2513,6 +2513,91 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("data sources (HTTP)", () => {
+    it("addDataSource persists a new source on the mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      expect(ds.id).toMatch(/^datasource_/);
+      const list = service.listDataSources(mission.id);
+      expect(list).toHaveLength(1);
+      expect(list[0]?.name).toBe("GSC");
+    });
+
+    it("removeDataSource removes by id", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      service.removeDataSource(mission.id, ds.id);
+      expect(service.listDataSources(mission.id)).toHaveLength(0);
+    });
+
+    it("triggerDataSourceFetch on success creates a KnowledgeEntry and records ok", async () => {
+      const fakeFetch = async () =>
+        new Response(JSON.stringify({ rows: [1, 2] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      const record = await service.triggerDataSourceFetch(mission.id, ds.id);
+      expect(record.status).toBe("ok");
+      expect(record.knowledgeEntryId).toBeDefined();
+      const entries = service.listKnowledge({ missionId: mission.id });
+      expect(entries.some((e) => e.key.startsWith("dataSource:GSC:"))).toBe(true);
+    });
+
+    it("triggerDataSourceFetch on failure records error and notifies owner", async () => {
+      const fakeFetch = async () => new Response("nope", { status: 503 });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      const record = await service.triggerDataSourceFetch(mission.id, ds.id);
+      expect(record.status).toBe("failed");
+      expect(record.errorMessage).toMatch(/503/);
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const ownerNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.includes("GSC"),
+      );
+      expect(ownerNotify).toBeDefined();
+    });
+
+    it("fetchHistory caps at 50 entries", async () => {
+      const fakeFetch = async () =>
+        new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      for (let i = 0; i < 55; i += 1) {
+        await service.triggerDataSourceFetch(mission.id, ds.id);
+      }
+      const list = service.listDataSources(mission.id);
+      expect(list[0]?.fetchHistory.length).toBe(50);
+    });
+  });
+
   describe("createFollowupTask", () => {
     function makeRuntime(): { runtime: MissionExecutionRuntime; calls: { message: string }[] } {
       const calls: { message: string }[] = [];
