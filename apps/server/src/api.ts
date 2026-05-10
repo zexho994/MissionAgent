@@ -504,6 +504,107 @@ export async function handleApiRequest(
       }
     }
 
+    const dataSourceMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/data-sources(?:\/([^/]+)(?:\/(fetch))?)?$/,
+    );
+    if (dataSourceMatch) {
+      const missionId = decodeURIComponent(dataSourceMatch[1] ?? "");
+      const sourceId = dataSourceMatch[2] ? decodeURIComponent(dataSourceMatch[2]) : undefined;
+      const action = dataSourceMatch[3];
+
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !sourceId) {
+        return json(200, { dataSources: deps.missions.listDataSources(missionId) });
+      }
+
+      if (request.method === "POST" && !sourceId) {
+        const body = expectObject(request.body);
+        const config = expectObject(body.config);
+        const method = expectString(config.method, "config.method");
+        if (method !== "GET" && method !== "POST") {
+          return json(400, { error: "config.method must be GET or POST" });
+        }
+        const ds = deps.missions.addDataSource(missionId, {
+          name: expectString(body.name, "name"),
+          adapter: "http",
+          config: {
+            url: expectString(config.url, "config.url"),
+            method,
+            ...(config.headers ? { headers: expectRecord(config.headers, "config.headers") as Record<string, string> } : {}),
+            ...(typeof config.body === "string" ? { body: config.body } : {}),
+          },
+        });
+        return json(201, { dataSource: ds, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "DELETE" && sourceId && !action) {
+        deps.missions.removeDataSource(missionId, sourceId);
+        return json(200, { snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && sourceId && action === "fetch") {
+        const record = await deps.missions.triggerDataSourceFetch(missionId, sourceId);
+        return json(200, { record, snapshot: deps.missions.snapshot() });
+      }
+    }
+
+    const publishTargetMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/publish-targets(?:\/([^/]+)(?:\/(publish))?)?$/,
+    );
+    if (publishTargetMatch) {
+      const missionId = decodeURIComponent(publishTargetMatch[1] ?? "");
+      const targetId = publishTargetMatch[2] ? decodeURIComponent(publishTargetMatch[2]) : undefined;
+      const action = publishTargetMatch[3];
+
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !targetId) {
+        return json(200, { publishTargets: deps.missions.listPublishTargets(missionId) });
+      }
+
+      if (request.method === "POST" && !targetId) {
+        const body = expectObject(request.body);
+        const config = expectObject(body.config);
+        const method = expectString(config.method, "config.method");
+        if (method !== "POST" && method !== "PUT") {
+          return json(400, { error: "config.method must be POST or PUT" });
+        }
+        const target = deps.missions.addPublishTarget(missionId, {
+          name: expectString(body.name, "name"),
+          adapter: "http",
+          config: {
+            url: expectString(config.url, "config.url"),
+            method,
+            ...(config.headers ? { headers: expectRecord(config.headers, "config.headers") as Record<string, string> } : {}),
+          },
+          contentTypes: Array.isArray(body.contentTypes)
+            ? expectStringArray(body.contentTypes, "contentTypes")
+            : ["*"],
+        });
+        return json(201, { publishTarget: target, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "DELETE" && targetId && !action) {
+        deps.missions.removePublishTarget(missionId, targetId);
+        return json(200, { snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && targetId && action === "publish") {
+        const body = expectObject(request.body);
+        const attempt = await deps.missions.triggerPublish(
+          missionId,
+          targetId,
+          expectString(body.artifactId, "artifactId"),
+        );
+        return json(200, { attempt, snapshot: deps.missions.snapshot() });
+      }
+    }
+
     return json(404, { error: "Not found" });
   } catch (error) {
     return json(400, {
