@@ -129,6 +129,15 @@ export interface TaskContract {
   successCriteria: string[];
 }
 
+export type TaskOriginType = "initial" | "scheduled" | "followup";
+
+export interface TaskOrigin {
+  type: TaskOriginType;
+  reason?: string;
+  sourceTaskId?: string;
+  triggeredByEventId?: string;
+}
+
 export interface Task {
   id: string;
   missionId: string;
@@ -142,6 +151,7 @@ export interface Task {
   reviewId?: string;
   failureReason?: string;
   scheduleRuleId?: string;
+  origin?: TaskOrigin;
 }
 
 export type ArtifactType = "research_report" | "content_draft" | "metric_snapshot" | "execution_log";
