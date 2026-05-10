@@ -1168,4 +1168,35 @@ describe("schedule API endpoints", () => {
       expect(resp.status).toBe(400);
     });
   });
+
+  describe("mission pause/resume endpoints", () => {
+    it("POST /missions/:id/pause sets status to paused", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      missions.activateMission({ missionId });
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/pause`,
+          body: { reason: "manual test" },
+        },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect((resp.body as { mission: { status: string } }).mission.status).toBe("paused");
+    });
+
+    it("POST /missions/:id/resume restores active status", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      missions.activateMission({ missionId });
+      missions.pauseMissionLifecycle({ missionId });
+      const resp = await handleApiRequest(
+        { method: "POST", path: `/api/missions/${missionId}/resume`, body: {} },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect((resp.body as { mission: { status: string } }).mission.status).toBe("active");
+    });
+  });
 });

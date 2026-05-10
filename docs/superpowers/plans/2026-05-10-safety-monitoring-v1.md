@@ -89,28 +89,15 @@ Commit: `feat(adapters): add retry with exponential backoff to HTTP adapters`
 
 ---
 
-### Task 4: Data source cadence scheduling
+### Task 4: Data source cadence scheduling — DEFERRED
 
-**Files:** `packages/core/src/types.ts` (extend `MissionDataSource`), `apps/server/src/mission-service.ts`, `mission-scheduler.ts`, tests
+**Decision (2026-05-10 during execution):** Cadence scheduling requires non-trivial refactor of `MissionScheduler` (which is currently task-rule centric). Manual fetch via REST already enables the speakin Mission scenarios (operator triggers fetch on demand or external cron pings the endpoint). The 3 critical safety primitives (pause/resume, budget enforcement, retry) deliver the user-facing "不失控" value first.
 
-`MissionDataSource` 添加 `cadenceCron?: string`（如 `"0 */1 * * *"` 每小时）。
+Move to a follow-up plan when:
+- `MissionScheduler` is refactored to host arbitrary cron-triggered callbacks (not just task rules), OR
+- Phase B observation reveals cadence is the bottleneck for Mission self-running
 
-`MissionScheduler` 已有 cron 触发能力，复用：
-- 注册数据源 cadence 时，scheduler 内部维护一份 `dataSourceCronJobs` map
-- 触发时调用 `service.triggerDataSourceFetch(missionId, sourceId)`
-
-`addDataSource` / `removeDataSource` 时同步 register/unregister scheduler 的 cadence。
-
-`pauseMission` 时停止 cadence；`resumeMission` 时重启（已在 Task 1 的 scheduler stop/restart 内自然实现）。
-
-测试（用 fake clock）：
-- 添加带 cadence 的数据源 → cron 触发后 fetch 被调用并写 KnowledgeEntry
-- removeDataSource 后 cron 不再触发
-- mission paused 时 cron 不触发
-
-Commit: `feat(mission-service): schedule data source fetches via cron cadence`
-
----
+For now: data source fetching is manual / external-trigger only.
 
 ### Task 5: API + ROADMAP + merge
 

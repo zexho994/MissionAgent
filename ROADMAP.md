@@ -143,12 +143,29 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 **是什么**：Mission 级安全机制，让用户敢真的"按一次启动就不管"。
 
 **包含**：
-- **任务上限护栏**（每次反馈最多派 N 个任务、Mission 总产出/总 token 上限、超限自动暂停叫人）
-- **Mission 级熔断按钮**（用户随时一键叫停 Mission，scheduler + autonomy + runtime 全停）
-- **异常事件主动通知**（账号被限/封、外部接口失败、超预算、循环异常等触发 push 给用户）
-- **分层托管开关**（Mission 配置里能选"哪些动作 AI 自己做 / 哪些 AI 建议你拍板 / 哪些 AI 必须叫你"）
+- **任务上限护栏**（每次反馈最多派 N 个任务、Mission 总产出/总 token 上限、超限自动暂停叫人） ✅ Plan 1 (per-event) + ✅ Plan 3 (Mission 总产出 maxFollowupTasks 自动暂停)
+- **Mission 级熔断按钮**（用户随时一键叫停 Mission，scheduler + autonomy + runtime 全停） ✅ Plan 3 已完成（pause/resume）
+- **异常事件主动通知**（账号被限/封、外部接口失败、超预算、循环异常等触发 push 给用户） ✅ Plan 3（外部接口失败 → owner notify；超预算 → 自动暂停 + notify）；账号被限/封 推迟（需适配器层 4xx 模式识别）
+- **HTTP 重试** ✅ Plan 3（指数退避，maxAttempts=3 默认）
+- **分层托管开关**（Mission 配置里能选"哪些动作 AI 自己做 / 哪些 AI 建议你拍板 / 哪些 AI 必须叫你"） ⚠️ 推迟到 v2 Plan
+- **Token 上限** ⚠️ 推迟（需 LLM usage 追踪基础设施，独立工作）
+
+**v1 完成（2026-05-10）**：
+- `pauseMission` / `resumeMission` core helpers + `pauseMissionLifecycle` / `resumeMissionLifecycle` mission-service 方法（停 scheduler + autonomy + 拒绝 followup）
+- `MissionBudget.maxFollowupTasks`：当总任务数达到上限时自动 pause + owner agent_notify
+- `createFollowupTask` 在 paused 状态返回 `mission_paused`；budget 超限返回 `budget_exceeded`
+- HTTP 适配器加可注入 retry 配置（`maxAttempts`、`initialDelayMs` 指数退避，sleep 可注入便于测试）
+- REST endpoints: `POST /api/missions/:id/pause`、`POST /api/missions/:id/resume`
+- 387 个测试全部通过，typecheck 通过
+
+**Deferred（独立 Plan / v2 处理）**：
+- 数据源 cadence cron 调度（需要 MissionScheduler 重构以支持任意 cron-triggered callbacks）
+- 分层托管开关（需要 v3 派活权下放后才有意义）
+- Token 上限追踪
+- 账号被限/封 4xx 模式识别
 
 **验收**：speakin.cc Mission 跑通中至少触发 1 次"AI 主动叫人"且用户能在 War Room 直接看到原因 + 一键继续/中止。
+✅ 触发场景已具备（外部接口失败 + 超预算 + 手动 pause）；UI 一键继续/中止 = REST endpoint 已可用，War Room 前端按钮属于 Phase B 配置。
 
 ---
 
@@ -158,7 +175,7 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 |---|---|---|---|---|---|
 | **1** | **派活机器 v1**（Owner 派活） | A.3 v1 | 无 | ✅ 已完成（2026-05-10） | 3-4 天 |
 | **2** | HTTP 接入与发布基础 | A.1 + A.2（HTTP 部分） | Plan 1 | ✅ 已完成（2026-05-10） | 3-4 天 |
-| **3** | 安全和监控 | A.4 完整 + 多次重试 + cadence 调度 | Plan 1 + Plan 2 | 待写 | 3-4 天 |
+| **3** | 安全和监控 | A.4 完整 + 多次重试 + cadence 调度 | Plan 1 + Plan 2 | ✅ 已完成（2026-05-10，cadence 调度推迟到独立 plan） | 3-4 天 |
 | **4** | 浏览器自动化引擎 + 知乎/掘金适配 | A.1 + A.2（浏览器部分） | Plan 1 + Plan 2 | 待写 | 5-6 天 |
 | **5** | speakin.cc Mission 第 1 跑 | Phase B 配置 + 4 周观察 | Plan 1+2 起步即可，3/4 完成会增强 | 待写 | 4 周观察 |
 

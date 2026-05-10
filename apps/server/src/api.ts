@@ -504,6 +504,29 @@ export async function handleApiRequest(
       }
     }
 
+    const lifecycleMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/(pause|resume)$/,
+    );
+    if (lifecycleMatch && request.method === "POST") {
+      const missionId = decodeURIComponent(lifecycleMatch[1] ?? "");
+      const action = lifecycleMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (action === "pause") {
+        const body = request.body ? expectObject(request.body) : {};
+        const reason = typeof body.reason === "string" ? body.reason : undefined;
+        const mission = deps.missions.pauseMissionLifecycle(
+          reason ? { missionId, reason } : { missionId },
+        );
+        return json(200, { mission, snapshot: deps.missions.snapshot() });
+      }
+      if (action === "resume") {
+        const mission = deps.missions.resumeMissionLifecycle({ missionId });
+        return json(200, { mission, snapshot: deps.missions.snapshot() });
+      }
+    }
+
     const dataSourceMatch = request.path.match(
       /^\/api\/missions\/([^/]+)\/data-sources(?:\/([^/]+)(?:\/(fetch))?)?$/,
     );
