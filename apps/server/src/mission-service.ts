@@ -612,12 +612,20 @@ export class InMemoryMissionService {
     this.dataSourceAdapters = new DataSourceAdapterRegistry();
     this.dataSourceAdapters.register(
       "http",
-      new HttpDataSourceAdapter(options.fetch ? { fetch: options.fetch } : {}),
+      new HttpDataSourceAdapter(
+        options.fetch
+          ? { fetch: options.fetch, sleep: async () => undefined, retry: { maxAttempts: 1, initialDelayMs: 0 } }
+          : {},
+      ),
     );
     this.publishTargetAdapters = new PublishTargetAdapterRegistry();
     this.publishTargetAdapters.register(
       "http",
-      new HttpPublishTargetAdapter(options.fetch ? { fetch: options.fetch } : {}),
+      new HttpPublishTargetAdapter(
+        options.fetch
+          ? { fetch: options.fetch, sleep: async () => undefined, retry: { maxAttempts: 1, initialDelayMs: 0 } }
+          : {},
+      ),
     );
     this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
     this.contextRetriever = new ContextRetriever(() => this.snapshot());
