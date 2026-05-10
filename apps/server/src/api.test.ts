@@ -1199,4 +1199,46 @@ describe("schedule API endpoints", () => {
       expect((resp.body as { mission: { status: string } }).mission.status).toBe("active");
     });
   });
+
+  describe("mission template endpoints", () => {
+    it("GET /mission-templates lists registered templates", async () => {
+      const missions = new InMemoryMissionService();
+      const resp = await handleApiRequest(
+        { method: "GET", path: "/api/mission-templates" },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      const templates = (resp.body as { templates: { id: string }[] }).templates;
+      expect(templates.some((t) => t.id === "speakin-content")).toBe(true);
+    });
+
+    it("POST /missions/from-template creates a mission with template config", async () => {
+      const missions = new InMemoryMissionService();
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: "/api/missions/from-template",
+          body: { templateId: "speakin-content" },
+        },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(201);
+      const missionId = (resp.body as { mission: { id: string } }).mission.id;
+      expect(missions.listDataSources(missionId).length).toBeGreaterThanOrEqual(1);
+      expect(missions.listPublishTargets(missionId).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("rejects unknown template id with 400", async () => {
+      const missions = new InMemoryMissionService();
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: "/api/missions/from-template",
+          body: { templateId: "no-such" },
+        },
+        { missions, openclaw: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(400);
+    });
+  });
 });
