@@ -4,11 +4,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  PI_EXTENSION_PATHS,
-  PiCliAdapter,
+  PiSdkAdapter,
   createLlmServiceFromEnv,
-  resolvePiBinaryPath,
-  type PiCliAdapterOptions,
+  createWebSearchTool,
 } from "@digitalagent/runtime";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
@@ -21,16 +19,17 @@ const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data",
 
 const llm = createLlmServiceFromEnv(process.env);
 
-// Pi runtime configuration.
-// - PI_COMMAND overrides the binary path. Otherwise resolve from the bundled
-//   @earendil-works/pi-coding-agent dependency; fall back to PATH lookup.
-// - PI_EXTENSION_WEB_SEARCH overrides the web-search extension path. Otherwise
-//   use the extension shipped in @digitalagent/runtime.
-const piOptions: PiCliAdapterOptions = {
-  command: process.env.PI_COMMAND ?? resolvePiBinaryPath() ?? "pi",
-  defaultExtensions: [process.env.PI_EXTENSION_WEB_SEARCH ?? PI_EXTENSION_PATHS.webSearch],
-};
-const pi = new PiCliAdapter(piOptions);
+const apiKey =
+  process.env.LLM_API_KEY ??
+  process.env.MINIMAX_API_KEY ??
+  process.env.ANTHROPIC_API_KEY ??
+  "";
+const pi = new PiSdkAdapter({
+  apiKey,
+  modelProvider: process.env.LLM_PROVIDER ?? "minimax",
+  modelId: process.env.LLM_MODEL ?? "MiniMax-M2.7-highspeed",
+  tools: [createWebSearchTool({})],
+});
 
 const runtime: MissionExecutionRuntime = {
   runAgentTask: (input) => pi.runAgentTask(input),

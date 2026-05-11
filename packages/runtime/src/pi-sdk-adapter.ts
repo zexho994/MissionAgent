@@ -44,6 +44,12 @@ export interface RunAgentTaskResult {
   error?: string;
 }
 
+export interface PiHealth {
+  available: boolean;
+  version?: string;
+  error?: string;
+}
+
 export class PiSdkAdapter {
   private readonly apiKey: string;
   private readonly modelProvider: string;
@@ -59,6 +65,13 @@ export class PiSdkAdapter {
     this.agentFactory =
       options.agentFactory ??
       ((config) => new Agent(config as never) as unknown as AgentLike);
+  }
+
+  async health(): Promise<PiHealth> {
+    return {
+      available: true,
+      version: "pi-agent-core-sdk-0.74.0",
+    };
   }
 
   async runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTaskResult> {

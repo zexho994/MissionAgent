@@ -3,10 +3,10 @@ import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
-import type { PiCliAdapter } from "@digitalagent/runtime";
+import type { PiSdkAdapter } from "@digitalagent/runtime";
 import type { MissionSnapshot } from "./mission-service.js";
 
-function fakeOpenClaw(): Pick<PiCliAdapter, "health" | "runAgentTask"> {
+function fakeOpenClaw(): Pick<PiSdkAdapter, "health" | "runAgentTask"> {
   return {
     async health() {
       return { available: true, version: "test-pi" };
@@ -16,6 +16,7 @@ function fakeOpenClaw(): Pick<PiCliAdapter, "health" | "runAgentTask"> {
         status: "completed",
         output: { text: "team plan generated" },
         stderr: "",
+        sources: [],
       };
     },
   };
@@ -413,7 +414,7 @@ describe("handleApiRequest", () => {
   it("GET /api/missions/:id/autopilot-diagnosis reports unavailable OpenClaw runner", async () => {
     const missions = new InMemoryMissionService();
     const mission = await missions.createMission({ goal: "Grow GitHub repositories" });
-    const unavailableOpenClaw: Pick<PiCliAdapter, "health" | "runAgentTask"> = {
+    const unavailableOpenClaw: Pick<PiSdkAdapter, "health" | "runAgentTask"> = {
       async health() {
         return { available: false };
       },

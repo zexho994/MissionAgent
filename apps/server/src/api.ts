@@ -1,5 +1,5 @@
 import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
-import type { PiCliAdapter } from "@digitalagent/runtime";
+import type { PiSdkAdapter } from "@digitalagent/runtime";
 import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
 import { listMissionTemplates } from "./mission-templates.js";
 
@@ -17,7 +17,7 @@ export interface ApiResponse {
 export interface ApiDependencies {
   missions: InMemoryMissionService;
   // Field name kept neutral as runtime to allow swapping execution adapters.
-  runtime: Pick<PiCliAdapter, "health" | "runAgentTask">;
+  runtime: Pick<PiSdkAdapter, "health" | "runAgentTask">;
 }
 
 export async function handleApiRequest(
