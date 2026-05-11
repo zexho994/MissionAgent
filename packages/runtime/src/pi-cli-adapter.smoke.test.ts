@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PiCliAdapter } from "./pi-cli-adapter.js";
+import { resolvePiBinaryPath } from "./pi-resolver.js";
 
 const SMOKE = process.env.PI_SMOKE === "1";
 
@@ -11,26 +12,28 @@ const SMOKE = process.env.PI_SMOKE === "1";
  *   pnpm test:smoke
  *
  * Requirements:
- * - `pi` is on PATH (or PI_COMMAND points at the binary).
+ * - pi is auto-resolved from the bundled @earendil-works/pi-coding-agent
+ *   dependency (overridable via PI_COMMAND).
  * - At least one provider is configured for pi (e.g. ANTHROPIC_API_KEY env or
  *   credentials in ~/.pi/agent/settings.json).
  *
  * Cost target: under USD 0.01 per run on the cheapest tool-capable model.
  */
+function makeAdapter(): PiCliAdapter {
+  const command = process.env.PI_COMMAND ?? resolvePiBinaryPath() ?? "pi";
+  return new PiCliAdapter({ command });
+}
+
 describe.skipIf(!SMOKE)("PiCliAdapter smoke (PI_SMOKE=1)", () => {
   it("calls real pi binary --version successfully", async () => {
-    const adapter = new PiCliAdapter({
-      command: process.env.PI_COMMAND ?? "pi",
-    });
+    const adapter = makeAdapter();
     const health = await adapter.health();
     expect(health.available).toBe(true);
     expect(health.version).toBeTruthy();
   }, 30_000);
 
   it("runs a trivial JSON round-trip against pi", async () => {
-    const adapter = new PiCliAdapter({
-      command: process.env.PI_COMMAND ?? "pi",
-    });
+    const adapter = makeAdapter();
 
     const result = await adapter.runAgentTask({
       message:
