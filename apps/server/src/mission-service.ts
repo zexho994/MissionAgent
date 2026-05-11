@@ -58,6 +58,7 @@ import {
   extractSourcesFromPiOutput,
   type MissionExecutionRuntime,
 } from "./runtime-bridge.js";
+import { migrateOpenClawToPi } from "./store-migration.js";
 import {
   buildExecutionFailureFeedback,
   buildExecutionResultFeedback,
@@ -3445,7 +3446,13 @@ export class InMemoryMissionService {
     if (!raw.trim()) {
       return;
     }
-    const stored = JSON.parse(raw) as StoredMissionSnapshot;
+    const migration = migrateOpenClawToPi(raw);
+    if (migration.migrated) {
+      writeFileSync(this.storageFile, migration.json, "utf8");
+      console.log("[store-migration] rewrote openclaw -> pi keys in", this.storageFile);
+    }
+    const json = migration.migrated ? migration.json : raw;
+    const stored = JSON.parse(json) as StoredMissionSnapshot;
     if (stored.schemaVersion !== 1) {
       throw new Error(`Unsupported mission store schema version: ${String(stored.schemaVersion)}`);
     }
