@@ -55,7 +55,7 @@ import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
 import {
   buildAgentMessage,
-  extractSourcesFromOpenClawOutput,
+  extractSourcesFromPiOutput,
   type MissionExecutionRuntime,
 } from "./runtime-bridge.js";
 import {
@@ -1122,7 +1122,7 @@ export class InMemoryMissionService {
         ...(systemPrompt ? { systemPrompt } : {}),
       })
       .then((result) => {
-        const sources = extractSourcesFromOpenClawOutput(result.output);
+        const sources = extractSourcesFromPiOutput(result.output, result.sources ?? []);
         this.submitExecutionResult({
           executionId: execution.id,
           missionId: input.missionId,
