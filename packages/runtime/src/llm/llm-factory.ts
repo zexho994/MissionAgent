@@ -1,8 +1,15 @@
-import { AnthropicLlmAdapter } from "./anthropic-adapter.js";
+import { complete, getModel, type Context, type Model } from "@earendil-works/pi-ai";
 import type { LlmService } from "./llm-service.js";
-import { OpenAiLlmAdapter } from "./openai-adapter.js";
+import type {
+  LlmCallOptions,
+  LlmCallStats,
+  LlmMessage,
+  LlmResponse,
+} from "./types.js";
 
 export type LlmProvider = "openai" | "glm" | "claude" | "anthropic" | "minimax";
+
+export type CompleteFn = typeof complete;
 
 export interface CreateLlmServiceOptions {
   provider: LlmProvider;
@@ -11,35 +18,34 @@ export interface CreateLlmServiceOptions {
   model?: string | undefined;
   maxRetries?: number;
   timeoutMs?: number;
-  fetch?: typeof fetch;
+  completeFn?: CompleteFn;
 }
 
 export type LlmEnv = Record<string, string | undefined>;
 
 export interface CreateLlmServiceFromEnvOptions {
-  fetch?: typeof fetch;
+  completeFn?: CompleteFn;
 }
 
-const providerDefaults: Record<
-  Exclude<LlmProvider, "claude">,
-  { baseUrl: string; model: string; extraBody?: Record<string, unknown> }
-> = {
-  openai: {
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
-  },
+interface ProviderResolution {
+  piProvider: string;
+  defaultModel: string;
+  baseUrlOverride?: string;
+}
+
+const providerMap: Record<LlmProvider, ProviderResolution> = {
+  openai: { piProvider: "openai", defaultModel: "gpt-4o-mini" },
   glm: {
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-4-flash",
+    piProvider: "openai",
+    defaultModel: "glm-4-flash",
+    baseUrlOverride: "https://open.bigmodel.cn/api/paas/v4",
   },
-  anthropic: {
-    baseUrl: "https://api.anthropic.com/v1",
-    model: "claude-3-5-haiku-latest",
-  },
+  anthropic: { piProvider: "anthropic", defaultModel: "claude-3-5-haiku-latest" },
+  claude: { piProvider: "anthropic", defaultModel: "claude-3-5-haiku-latest" },
   minimax: {
-    baseUrl: "https://api.minimax.io/v1",
-    model: "MiniMax-M2.7-highspeed",
-    extraBody: { reasoning_split: true },
+    piProvider: "openai",
+    defaultModel: "MiniMax-M2.7-highspeed",
+    baseUrlOverride: "https://api.minimax.io/v1",
   },
 };
 
@@ -47,77 +53,134 @@ export function createLlmService(options: CreateLlmServiceOptions): LlmService {
   if (!options.apiKey) {
     throw new Error("LLM API key is required");
   }
+  const resolution = providerMap[options.provider];
+  const modelId = options.model ?? resolution.defaultModel;
+  const completeFn = options.completeFn ?? complete;
 
-  switch (options.provider) {
-    case "openai":
-      return createOpenAiCompatibleService(options, providerDefaults.openai);
-    case "glm":
-      return createOpenAiCompatibleService(options, providerDefaults.glm);
-    case "minimax":
-      return createOpenAiCompatibleService(options, providerDefaults.minimax);
-    case "claude":
-    case "anthropic":
-      return new AnthropicLlmAdapter({
+  const model = resolveModel({
+    piProvider: resolution.piProvider,
+    modelId,
+    baseUrl: options.baseUrl ?? resolution.baseUrlOverride,
+  });
+
+  let stats: LlmCallStats = {
+    totalCalls: 0,
+    totalPromptTokens: 0,
+    totalCompletionTokens: 0,
+  };
+
+  return {
+    async call(messages: LlmMessage[], callOptions?: LlmCallOptions): Promise<LlmResponse> {
+      const context = toContext(messages);
+      const piResponse = await completeFn(model, context, {
         apiKey: options.apiKey,
-        baseUrl: options.baseUrl ?? providerDefaults.anthropic.baseUrl,
-        defaultModel: options.model ?? providerDefaults.anthropic.model,
-        ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
-        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        ...(callOptions?.maxTokens !== undefined
+          ? { maxTokens: callOptions.maxTokens }
+          : {}),
+        ...(callOptions?.temperature !== undefined
+          ? { temperature: callOptions.temperature }
+          : {}),
       });
-    default:
-      throw new Error(`Unsupported LLM provider: ${String(options.provider)}`);
+
+      const content = extractTextContent(piResponse);
+      const promptTokens = piResponse.usage?.input ?? 0;
+      const completionTokens = piResponse.usage?.output ?? 0;
+
+      stats = {
+        totalCalls: stats.totalCalls + 1,
+        totalPromptTokens: stats.totalPromptTokens + promptTokens,
+        totalCompletionTokens: stats.totalCompletionTokens + completionTokens,
+        lastCallAt: new Date().toISOString(),
+      };
+
+      return {
+        content,
+        model: piResponse.model?.id ?? modelId,
+        usage: {
+          promptTokens,
+          completionTokens,
+          totalTokens: promptTokens + completionTokens,
+        },
+        finishReason: piResponse.stopReason ?? "stop",
+      };
+    },
+    stats() {
+      return stats;
+    },
+  };
+}
+
+function resolveModel(input: {
+  piProvider: string;
+  modelId: string;
+  baseUrl?: string;
+}): Model<any> {
+  try {
+    const m = getModel(input.piProvider as any, input.modelId as any);
+    if (input.baseUrl) {
+      return { ...m, baseUrl: input.baseUrl };
+    }
+    return m;
+  } catch {
+    return {
+      id: input.modelId,
+      name: input.modelId,
+      api: "openai-completions",
+      provider: input.piProvider,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    } as Model<any>;
   }
+}
+
+function toContext(messages: LlmMessage[]): Context {
+  const systemParts: string[] = [];
+  const conversational: Array<{ role: "user" | "assistant"; content: string }> = [];
+  for (const m of messages) {
+    if (m.role === "system") {
+      systemParts.push(m.content);
+    } else {
+      conversational.push({ role: m.role, content: m.content });
+    }
+  }
+  return {
+    systemPrompt: systemParts.join("\n\n"),
+    messages: conversational,
+    tools: [],
+  };
+}
+
+function extractTextContent(response: any): string {
+  const content = response?.content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c: any) => c.type === "text")
+      .map((c: any) => c.text)
+      .join("");
+  }
+  if (typeof content === "string") return content;
+  return "";
 }
 
 export function createLlmServiceFromEnv(
-  env: LlmEnv = process.env,
-  options: CreateLlmServiceFromEnvOptions = {},
-): LlmService | undefined {
-  const provider = env.LLM_PROVIDER;
-  const apiKey = env.LLM_API_KEY;
-
-  if (!provider && !apiKey) {
-    return undefined;
-  }
-  if (!apiKey) {
-    throw new Error("LLM_API_KEY is required when LLM provider is configured");
-  }
-
-  return createLlmService({
-    provider: normalizeProvider(provider ?? "openai"),
-    apiKey,
-    baseUrl: env.LLM_BASE_URL,
-    model: env.LLM_MODEL,
-    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-  });
-}
-
-function createOpenAiCompatibleService(
-  options: CreateLlmServiceOptions,
-  defaults: { baseUrl: string; model: string; extraBody?: Record<string, unknown> },
+  env: LlmEnv,
+  options?: CreateLlmServiceFromEnvOptions,
 ): LlmService {
-  return new OpenAiLlmAdapter({
-    apiKey: options.apiKey,
-    baseUrl: options.baseUrl ?? defaults.baseUrl,
-    defaultModel: options.model ?? defaults.model,
-    defaultExtraBody: defaults.extraBody ?? {},
-    ...(options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries }),
-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+  const provider = (env.LLM_PROVIDER ?? "anthropic") as LlmProvider;
+  const apiKey =
+    env.LLM_API_KEY ??
+    env.ANTHROPIC_API_KEY ??
+    env.OPENAI_API_KEY ??
+    "";
+  return createLlmService({
+    provider,
+    apiKey,
+    ...(env.LLM_MODEL !== undefined ? { model: env.LLM_MODEL } : {}),
+    ...(env.LLM_BASE_URL !== undefined ? { baseUrl: env.LLM_BASE_URL } : {}),
+    ...(options?.completeFn !== undefined ? { completeFn: options.completeFn } : {}),
   });
-}
-
-function normalizeProvider(provider: string): LlmProvider {
-  const normalized = provider.trim().toLowerCase();
-  switch (normalized) {
-    case "openai":
-    case "glm":
-    case "claude":
-    case "anthropic":
-    case "minimax":
-      return normalized;
-    default:
-      throw new Error(`Unsupported LLM provider: ${provider}`);
-  }
 }

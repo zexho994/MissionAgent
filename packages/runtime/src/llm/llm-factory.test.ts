@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createLlmService, createLlmServiceFromEnv } from "./index.js";
 
 function successResponse(content: string) {
@@ -143,5 +143,51 @@ describe("createLlmServiceFromEnv", () => {
 
     expect(String(capturedUrl)).toBe("https://compatible.example/v1/chat/completions");
     expect(JSON.parse(String(capturedInit?.body))).toMatchObject({ model: "custom-model" });
+  });
+});
+
+describe("createLlmService (pi-ai backed)", () => {
+  it("converts LlmMessage[] to pi-ai Context, calls complete(), maps response", async () => {
+    const completeMock = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "Hello back" }],
+      usage: {
+        input: 12,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+      },
+      stopReason: "end_turn",
+      model: { id: "claude-3-5-haiku-latest", name: "Claude Haiku" },
+    });
+
+    const service = createLlmService({
+      provider: "anthropic",
+      apiKey: "sk-test",
+      model: "claude-3-5-haiku-latest",
+      completeFn: completeMock,
+    });
+
+    const response = await service.call(
+      [
+        { role: "system", content: "You are helpful." },
+        { role: "user", content: "Say hi" },
+      ],
+      { maxTokens: 64 },
+    );
+
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    const [model, context, options] = completeMock.mock.calls[0]!;
+    expect(model.id).toBe("claude-3-5-haiku-latest");
+    expect(context.systemPrompt).toBe("You are helpful.");
+    expect(context.messages).toEqual([{ role: "user", content: "Say hi" }]);
+    expect(options).toMatchObject({ apiKey: "sk-test", maxTokens: 64 });
+
+    expect(response).toMatchObject({
+      content: "Hello back",
+      model: "claude-3-5-haiku-latest",
+      usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
+      finishReason: "end_turn",
+    });
   });
 });
