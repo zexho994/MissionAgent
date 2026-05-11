@@ -56,11 +56,12 @@ export function createLlmService(options: CreateLlmServiceOptions): LlmService {
   const resolution = providerMap[options.provider];
   const modelId = options.model ?? resolution.defaultModel;
   const completeFn = options.completeFn ?? complete;
+  const baseUrl = options.baseUrl ?? resolution.baseUrlOverride;
 
   const model = resolveModel({
     piProvider: resolution.piProvider,
     modelId,
-    baseUrl: options.baseUrl ?? resolution.baseUrlOverride,
+    ...(baseUrl !== undefined ? { baseUrl } : {}),
   });
 
   let stats: LlmCallStats = {
@@ -85,6 +86,7 @@ export function createLlmService(options: CreateLlmServiceOptions): LlmService {
       const content = extractTextContent(piResponse);
       const promptTokens = piResponse.usage?.input ?? 0;
       const completionTokens = piResponse.usage?.output ?? 0;
+      const responseModelId = extractModelId(piResponse, modelId);
 
       stats = {
         totalCalls: stats.totalCalls + 1,
@@ -95,7 +97,7 @@ export function createLlmService(options: CreateLlmServiceOptions): LlmService {
 
       return {
         content,
-        model: piResponse.model?.id ?? modelId,
+        model: responseModelId,
         usage: {
           promptTokens,
           completionTokens,
@@ -154,7 +156,7 @@ function toContext(messages: LlmMessage[]): Context {
     systemPrompt: systemParts.join("\n\n"),
     messages: conversational,
     tools: [],
-  };
+  } as unknown as Context;
 }
 
 function extractTextContent(response: any): string {
@@ -167,6 +169,15 @@ function extractTextContent(response: any): string {
   }
   if (typeof content === "string") return content;
   return "";
+}
+
+function extractModelId(response: any, fallback: string): string {
+  const model = response?.model;
+  if (typeof model === "string") return model;
+  if (model && typeof model === "object" && typeof model.id === "string") {
+    return model.id;
+  }
+  return fallback;
 }
 
 export function createLlmServiceFromEnv(
