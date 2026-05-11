@@ -6,12 +6,17 @@ const SMOKE = process.env.PI_SMOKE === "1";
 describe.skipIf(!SMOKE)("llm-factory smoke (real pi-ai call)", () => {
   it("returns a non-empty response from a real provider", async () => {
     const env = {
-      LLM_PROVIDER: process.env.LLM_PROVIDER ?? "anthropic",
-      LLM_API_KEY: process.env.LLM_API_KEY ?? process.env.ANTHROPIC_API_KEY,
-      LLM_MODEL: process.env.LLM_MODEL ?? "claude-3-5-haiku-latest",
+      LLM_PROVIDER: process.env.LLM_PROVIDER ?? "minimax",
+      LLM_API_KEY:
+        process.env.LLM_API_KEY ??
+        process.env.MINIMAX_API_KEY ??
+        process.env.ANTHROPIC_API_KEY,
+      LLM_MODEL: process.env.LLM_MODEL ?? "MiniMax-M2.7-highspeed",
     };
     if (!env.LLM_API_KEY) {
-      throw new Error("PI_SMOKE=1 set but LLM_API_KEY/ANTHROPIC_API_KEY not provided");
+      throw new Error(
+        "PI_SMOKE=1 set but LLM_API_KEY/MINIMAX_API_KEY/ANTHROPIC_API_KEY not provided",
+      );
     }
     const svc = createLlmServiceFromEnv(env);
     const response = await svc.call(
