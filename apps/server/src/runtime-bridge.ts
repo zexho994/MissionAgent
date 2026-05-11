@@ -5,10 +5,12 @@ export interface MissionExecutionRuntime {
     message: string;
     timeoutSeconds: number;
     systemPrompt?: string;
+    sessionId?: string;
   }): Promise<{
     status: string;
     output: unknown;
     stderr: string;
+    sources?: Source[];
   }>;
 }
 
