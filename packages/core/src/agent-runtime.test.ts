@@ -7,7 +7,7 @@ describe("agent runtime", () => {
       name: "CompetitorResearchAgent",
       purpose: "Analyze competing Xiaohongshu accounts",
       responsibilities: ["collect notes", "summarize content patterns"],
-      allowedTools: ["openclaw.browser", "xhs.collect_notes"],
+      allowedTools: ["browser.fetch", "xhs.collect_notes"],
       inputContract: { keywords: "string[]" },
       outputContract: { patterns: "array" },
       successCriteria: ["sources included"],
@@ -25,7 +25,7 @@ describe("agent runtime", () => {
 
     expect(agent.status).toBe("idle");
     expect(agent.roleSpec.name).toBe("CompetitorResearchAgent");
-    expect(agent.toolPermissions).toEqual(["openclaw.browser", "xhs.collect_notes"]);
+    expect(agent.toolPermissions).toEqual(["browser.fetch", "xhs.collect_notes"]);
     expect(agent.budget.maxTasks).toBe(3);
   });
 

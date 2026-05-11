@@ -77,7 +77,7 @@
       },
       {
         "id": "product",
-        "keywords": ["系统", "产品", "开发", "代码", "页面", "app", "agent", "openclaw", "cli"],
+        "keywords": ["系统", "产品", "开发", "代码", "页面", "app", "agent", "cli"],
         "agent": {
           "role": "system_architect",
           "name": "System Architect Agent",
