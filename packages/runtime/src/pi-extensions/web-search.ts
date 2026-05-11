@@ -107,9 +107,9 @@ export function createWebSearchTool(
     description:
       "Search the public web. Returns a JSON list of {url, title, snippet}. Sources are also exposed via tool result details.",
     parameters: WebSearchParameters,
-    async execute({ args }) {
-      const opts: SearchOptions = { query: args.query };
-      if (args.count !== undefined) opts.count = args.count;
+    async execute(_toolCallId, params) {
+      const opts: SearchOptions = { query: params.query };
+      if (params.count !== undefined) opts.count = params.count;
       if (toolOptions.apiKey !== undefined) opts.apiKey = toolOptions.apiKey;
       if (toolOptions.endpoint !== undefined) opts.endpoint = toolOptions.endpoint;
       if (toolOptions.fetch !== undefined) opts.fetch = toolOptions.fetch;
@@ -123,7 +123,7 @@ export function createWebSearchTool(
         details: {
           searchResults: search.results,
           sources: search.results,
-          searchKeyword: args.query,
+          searchKeyword: params.query,
         },
       };
     },

@@ -152,9 +152,7 @@ describe("createWebSearchTool", () => {
       fetch: fetchMock,
     });
 
-    const result = await tool.execute({
-      args: { query: "hello" },
-    } as Parameters<typeof tool.execute>[0]);
+    const result = await tool.execute("call-id-1", { query: "hello" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
