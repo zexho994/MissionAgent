@@ -39,4 +39,47 @@ describe("PiSdkAdapter", () => {
     );
     expect(result.sources).toEqual([]);
   });
+
+  it("collects sources from tool_execution_end events for web_search", async () => {
+    let captured: ((event: any) => void) | null = null;
+    const fakeAgent = {
+      prompt: vi.fn().mockImplementation(async () => {
+        if (captured) {
+          captured({
+            type: "tool_execution_end",
+            toolName: "web_search",
+            result: {
+              ok: true,
+              details: {
+                results: [
+                  { url: "https://a.example", title: "A", snippet: "snip-a" },
+                  { url: "https://b.example", title: "B" },
+                ],
+                searchKeyword: "hello",
+              },
+            },
+          });
+        }
+      }),
+      subscribe: vi.fn().mockImplementation((handler: any) => {
+        captured = handler;
+      }),
+      state: { messages: [] },
+    };
+
+    const adapter = new PiSdkAdapter({
+      apiKey: "k",
+      agentFactory: (() => fakeAgent) as never,
+    });
+
+    const result = await adapter.runAgentTask({
+      message: "search hello",
+      timeoutSeconds: 5,
+    });
+
+    expect(result.sources).toEqual([
+      { url: "https://a.example", title: "A", snippet: "snip-a", searchKeyword: "hello" },
+      { url: "https://b.example", title: "B", searchKeyword: "hello" },
+    ]);
+  });
 });
