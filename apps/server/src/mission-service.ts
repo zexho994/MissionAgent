@@ -9,6 +9,8 @@ import {
   validateScheduleRule,
   completeMission,
   cancelMission,
+  pauseMission,
+  resumeMission,
   type Artifact,
   type Mission,
   type MissionBrief,
@@ -29,7 +31,7 @@ import {
 import type { LlmService } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { loadAgentSystemConfig, type AgentSystemConfig } from "./system-config.js";
+import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
 import {
   buildMissionPlanMessages,
   buildOwnerSystemPrompt,
@@ -47,12 +49,12 @@ import { runOwnerLlmStreaming } from "./owner-streaming.js";
 import { AgentConversationBus } from "./agent-conversation-bus.js";
 import { AgentPersonaRegistry } from "./agent-personas.js";
 import { ContextRetriever } from "./context-retriever.js";
-import type { BusEvent, ConversationThread } from "./agent-conversation-types.js";
+import type { BusEvent, ConversationThread, CreateFollowupTaskPayload } from "./agent-conversation-types.js";
 import { createKnowledgeEntry, type KnowledgeEntry } from "./knowledge-base.js";
 import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
 import {
-  buildOpenClawMessage,
+  buildAgentMessage,
   extractSourcesFromOpenClawOutput,
   type MissionExecutionRuntime,
 } from "./runtime-bridge.js";
@@ -62,11 +64,40 @@ import {
   type ExecutionFailureFeedback,
   type ExecutionResultFeedback,
 } from "./feedback-generation.js";
+import {
+  checkFollowupSafety,
+  DEFAULT_FOLLOWUP_SAFETY,
+  type FollowupSafetyConfig,
+} from "./followup-task-safety.js";
+import { getMissionTemplate } from "./mission-templates.js";
+import {
+  DataSourceAdapterRegistry,
+  HttpDataSourceAdapter,
+} from "./data-source-adapter.js";
+import {
+  HttpPublishTargetAdapter,
+  PublishTargetAdapterRegistry,
+} from "./publish-target-adapter.js";
+import {
+  createMissionDataSource,
+  createMissionPublishTarget,
+  type CreateMissionDataSourceInput,
+  type CreateMissionPublishTargetInput,
+  type DataSourceFetchRecord,
+  type MissionDataSource,
+  type MissionPublishTarget,
+  type PublishAttempt,
+} from "@digitalagent/core";
 
 export interface CreateMissionRequest {
   goal: string;
   successMetrics?: string[];
   constraints?: string[];
+  budget?: {
+    maxRuntimeMinutes?: number;
+    maxTokenSpendUsd?: number;
+    maxFollowupTasks?: number;
+  };
 }
 
 export interface SubmitExecutionResultRequest {
@@ -338,6 +369,14 @@ export interface DecisionRecord {
   createdAt: string;
 }
 
+export interface MissionTokenUsage {
+  totalCalls: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  lastCallAt?: string;
+}
+
 export interface MissionSnapshot {
   missions: Mission[];
   plans: MissionPlan[];
@@ -357,6 +396,7 @@ export interface MissionSnapshot {
   missionOutcomeEvaluations: MissionOutcomeEvaluation[];
   taskFailureAnalyses: TaskFailureAnalysis[];
   strategyAdjustments: StrategyAdjustment[];
+  tokenUsageByMission: Record<string, MissionTokenUsage>;
 }
 
 interface StoredMissionSnapshot extends MissionSnapshot {
@@ -515,6 +555,8 @@ export interface MissionServiceOptions {
   configFile?: string | undefined;
   llm?: LlmService | undefined;
   runtime?: MissionExecutionRuntime | undefined;
+  followupSafety?: FollowupSafetyConfig | undefined;
+  fetch?: ((url: string, init?: RequestInit) => Promise<Response>) | undefined;
 }
 
 export type StreamEventListener = (event: {
@@ -560,6 +602,11 @@ export class InMemoryMissionService {
   private readonly personas: AgentPersonaRegistry;
   private readonly contextRetriever: ContextRetriever;
   private readonly runtime: MissionExecutionRuntime | undefined;
+  private readonly followupSafetyConfig: FollowupSafetyConfig;
+  private readonly followupCountByEvent = new Map<string, number>();
+  private readonly tokenUsageByMission = new Map<string, MissionTokenUsage>();
+  private readonly dataSourceAdapters: DataSourceAdapterRegistry;
+  private readonly publishTargetAdapters: PublishTargetAdapterRegistry;
 
   private static readonly realClock: SchedulerClock = {
     now: () => new Date(),
@@ -572,6 +619,25 @@ export class InMemoryMissionService {
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
     this.runtime = options.runtime;
+    this.followupSafetyConfig = options.followupSafety ?? DEFAULT_FOLLOWUP_SAFETY;
+    this.dataSourceAdapters = new DataSourceAdapterRegistry();
+    this.dataSourceAdapters.register(
+      "http",
+      new HttpDataSourceAdapter(
+        options.fetch
+          ? { fetch: options.fetch, sleep: async () => undefined, retry: { maxAttempts: 1, initialDelayMs: 0 } }
+          : {},
+      ),
+    );
+    this.publishTargetAdapters = new PublishTargetAdapterRegistry();
+    this.publishTargetAdapters.register(
+      "http",
+      new HttpPublishTargetAdapter(
+        options.fetch
+          ? { fetch: options.fetch, sleep: async () => undefined, retry: { maxAttempts: 1, initialDelayMs: 0 } }
+          : {},
+      ),
+    );
     this.personas = new AgentPersonaRegistry(this.config.agentCollaboration?.personas);
     this.contextRetriever = new ContextRetriever(() => this.snapshot());
     this.loadFromFile();
@@ -603,8 +669,11 @@ export class InMemoryMissionService {
       successMetrics: input.successMetrics?.length ? input.successMetrics : ownerBrief.successMetrics,
       constraints: input.constraints?.length ? input.constraints : ownerBrief.constraints,
       budget: {
-        maxRuntimeMinutes: 180,
-        maxTokenSpendUsd: 20,
+        maxRuntimeMinutes: input.budget?.maxRuntimeMinutes ?? 180,
+        maxTokenSpendUsd: input.budget?.maxTokenSpendUsd ?? 20,
+        ...(input.budget?.maxFollowupTasks === undefined
+          ? {}
+          : { maxFollowupTasks: input.budget.maxFollowupTasks }),
       },
     });
 
@@ -632,6 +701,24 @@ export class InMemoryMissionService {
     }
 
     return mission;
+  }
+
+  async createMissionFromTemplate(input: { templateId: string }): Promise<Mission> {
+    const template = getMissionTemplate(input.templateId);
+    const createInput: CreateMissionRequest = {
+      goal: template.goal,
+      successMetrics: template.successMetrics,
+      constraints: template.constraints,
+      ...(template.budget ? { budget: template.budget } : {}),
+    };
+    const mission = await this.createMission(createInput);
+    for (const ds of template.dataSources ?? []) {
+      this.addDataSource(mission.id, ds);
+    }
+    for (const target of template.publishTargets ?? []) {
+      this.addPublishTarget(mission.id, target);
+    }
+    return this.missions.get(mission.id) ?? mission;
   }
 
   activateMission(input: ActivateMissionRequest): Mission {
@@ -1025,11 +1112,14 @@ export class InMemoryMissionService {
       taskId: input.taskId,
     });
     const runtime = this.runtime;
+    const executor = this.executionAgent(mission.id);
+    const systemPrompt = getRoleSystemPrompt(executor.role, this.config);
 
     void runtime
       .runAgentTask({
-        message: buildOpenClawMessage({ message: input.message, mission, task }),
+        message: buildAgentMessage({ message: input.message, mission, task }),
         timeoutSeconds: 300,
+        ...(systemPrompt ? { systemPrompt } : {}),
       })
       .then((result) => {
         const sources = extractSourcesFromOpenClawOutput(result.output);
@@ -1184,6 +1274,7 @@ export class InMemoryMissionService {
         taskId: task.id,
         decision: review.decision,
       }, mission.id);
+      this.autoPublishApprovedArtifact(mission.id, artifact.id, artifact.type);
     } else if (review.decision === "revise") {
       void this.dispatchToBus({
         type: "review_revision_needed",
@@ -1429,6 +1520,7 @@ export class InMemoryMissionService {
       missionOutcomeEvaluations: [...this.missionOutcomeEvaluations.values()],
       taskFailureAnalyses: [...this.taskFailureAnalyses.values()],
       strategyAdjustments: [...this.strategyAdjustments.values()],
+      tokenUsageByMission: Object.fromEntries(this.tokenUsageByMission.entries()),
     };
   }
 
@@ -1595,6 +1687,88 @@ export class InMemoryMissionService {
     });
     this.persist();
     return updated;
+  }
+
+  pauseMissionLifecycle(input: { missionId: string; reason?: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (mission.status === "paused") return mission;
+    const updated = pauseMission(mission);
+
+    const scheduler = this.schedulers.get(input.missionId);
+    if (scheduler) {
+      scheduler.stop();
+      this.schedulers.delete(input.missionId);
+    }
+    this.autonomyService?.stopLoop(input.missionId);
+
+    this.missions.set(updated.id, updated);
+    const owner = [...this.agents.values()].find(
+      (a) => a.missionId === input.missionId && a.role === "owner",
+    );
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      ...(owner ? { toAgentId: owner.id } : {}),
+      type: "agent_notify",
+      content: `Mission paused: ${input.reason ?? "manual pause"}`,
+    });
+    this.persist();
+    return updated;
+  }
+
+  resumeMissionLifecycle(input: { missionId: string }): Mission {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+    if (mission.status === "active") return mission;
+    const updated = resumeMission(mission);
+    this.missions.set(updated.id, updated);
+
+    // Restart scheduler with current rules + autonomy loop
+    if (updated.scheduleRules.length > 0) {
+      this.getOrCreateScheduler(updated.id).start(updated.scheduleRules);
+    }
+    this.autonomyService?.startLoop(updated.id);
+
+    this.appendMessage({
+      missionId: updated.id,
+      fromAgentId: "system",
+      type: "agent_notify",
+      content: "Mission resumed",
+    });
+    this.persist();
+    return updated;
+  }
+
+  recordLlmCall(input: {
+    missionId: string;
+    promptTokens: number;
+    completionTokens: number;
+  }): MissionTokenUsage {
+    const previous = this.tokenUsageByMission.get(input.missionId) ?? {
+      totalCalls: 0,
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      totalTokens: 0,
+    };
+    const updated: MissionTokenUsage = {
+      totalCalls: previous.totalCalls + 1,
+      totalPromptTokens: previous.totalPromptTokens + input.promptTokens,
+      totalCompletionTokens: previous.totalCompletionTokens + input.completionTokens,
+      totalTokens:
+        previous.totalTokens + input.promptTokens + input.completionTokens,
+      lastCallAt: new Date().toISOString(),
+    };
+    this.tokenUsageByMission.set(input.missionId, updated);
+    return updated;
+  }
+
+  getTokenUsage(missionId: string): MissionTokenUsage | undefined {
+    return this.tokenUsageByMission.get(missionId);
   }
 
   addScheduleRule(missionId: string, rule: ScheduleRule): void {
@@ -2085,6 +2259,246 @@ export class InMemoryMissionService {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  addDataSource(
+    missionId: string,
+    input: Omit<CreateMissionDataSourceInput, "missionId">,
+  ): MissionDataSource {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const source = createMissionDataSource({ ...input, missionId });
+    const updated: Mission = {
+      ...mission,
+      dataSources: [...(mission.dataSources ?? []), source],
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+    return source;
+  }
+
+  removeDataSource(missionId: string, sourceId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updated: Mission = {
+      ...mission,
+      dataSources: (mission.dataSources ?? []).filter((s) => s.id !== sourceId),
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+  }
+
+  listDataSources(missionId: string): MissionDataSource[] {
+    const mission = this.missions.get(missionId);
+    return mission?.dataSources ? [...mission.dataSources] : [];
+  }
+
+  async triggerDataSourceFetch(
+    missionId: string,
+    sourceId: string,
+  ): Promise<DataSourceFetchRecord> {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const source = mission.dataSources?.find((s) => s.id === sourceId);
+    if (!source) {
+      throw new Error(`Data source not found: ${sourceId}`);
+    }
+    const adapter = this.dataSourceAdapters.get(source.adapter);
+    const fetchedAt = new Date().toISOString();
+    const recordId = createId("fetchrecord");
+    const fetchResult = await adapter.fetch(source.config);
+
+    let record: DataSourceFetchRecord;
+    if (fetchResult.ok) {
+      const truncated = JSON.stringify(fetchResult.data, null, 2).slice(0, 8000);
+      const knowledge = this.setKnowledge({
+        missionId,
+        key: `dataSource:${source.name}:${fetchedAt}`,
+        value: truncated,
+        agentId: "system",
+      });
+      record = {
+        id: recordId,
+        fetchedAt,
+        status: "ok",
+        knowledgeEntryId: knowledge.id,
+      };
+    } else {
+      record = {
+        id: recordId,
+        fetchedAt,
+        status: "failed",
+        errorMessage: fetchResult.error,
+      };
+      const owner = [...this.agents.values()].find(
+        (a) => a.missionId === missionId && a.role === "owner",
+      );
+      if (owner) {
+        this.appendMessage({
+          missionId,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: `Data source "${source.name}" fetch failed: ${fetchResult.error}`,
+        });
+      }
+    }
+
+    const trimmedHistory = [record, ...source.fetchHistory].slice(0, 50);
+    const updatedSource: MissionDataSource = {
+      ...source,
+      status: fetchResult.ok ? "ok" : "failed",
+      fetchHistory: trimmedHistory,
+      lastFetchedAt: fetchedAt,
+    };
+    const updatedMission: Mission = {
+      ...mission,
+      dataSources: (mission.dataSources ?? []).map((s) =>
+        s.id === sourceId ? updatedSource : s,
+      ),
+    };
+    this.missions.set(missionId, updatedMission);
+    this.persist();
+    return record;
+  }
+
+  addPublishTarget(
+    missionId: string,
+    input: Omit<CreateMissionPublishTargetInput, "missionId">,
+  ): MissionPublishTarget {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const target = createMissionPublishTarget({ ...input, missionId });
+    const updated: Mission = {
+      ...mission,
+      publishTargets: [...(mission.publishTargets ?? []), target],
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+    return target;
+  }
+
+  removePublishTarget(missionId: string, targetId: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const updated: Mission = {
+      ...mission,
+      publishTargets: (mission.publishTargets ?? []).filter((t) => t.id !== targetId),
+    };
+    this.missions.set(missionId, updated);
+    this.persist();
+  }
+
+  listPublishTargets(missionId: string): MissionPublishTarget[] {
+    const mission = this.missions.get(missionId);
+    return mission?.publishTargets ? [...mission.publishTargets] : [];
+  }
+
+  async triggerPublish(
+    missionId: string,
+    targetId: string,
+    artifactId: string,
+  ): Promise<PublishAttempt> {
+    const mission = this.missions.get(missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${missionId}`);
+    }
+    const target = mission.publishTargets?.find((t) => t.id === targetId);
+    if (!target) {
+      throw new Error(`Publish target not found: ${targetId}`);
+    }
+    const artifact = this.artifacts.get(artifactId);
+    if (!artifact || this.tasks.get(artifact.taskId)?.missionId !== missionId) {
+      throw new Error(`Artifact not found in mission: ${artifactId}`);
+    }
+    const task = this.tasks.get(artifact.taskId);
+    const adapter = this.publishTargetAdapters.get(target.adapter);
+    const attemptedAt = new Date().toISOString();
+    const result = await adapter.publish(
+      {
+        artifactId: artifact.id,
+        artifactContent: artifact.content,
+        missionGoal: mission.goal,
+        ...(task?.title ? { taskTitle: task.title } : {}),
+      },
+      target.config,
+    );
+
+    const attempt: PublishAttempt = result.ok
+      ? {
+          id: createId("attempt"),
+          targetId: target.id,
+          artifactId: artifact.id,
+          attemptedAt,
+          status: "ok",
+          responseSnippet: JSON.stringify(result.response).slice(0, 500),
+        }
+      : {
+          id: createId("attempt"),
+          targetId: target.id,
+          artifactId: artifact.id,
+          attemptedAt,
+          status: "failed",
+          errorMessage: result.error,
+        };
+
+    if (!result.ok) {
+      const owner = [...this.agents.values()].find(
+        (a) => a.missionId === missionId && a.role === "owner",
+      );
+      if (owner) {
+        this.appendMessage({
+          missionId,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: `Publish to "${target.name}" failed: ${result.error}`,
+        });
+      }
+    }
+
+    const trimmed = [attempt, ...target.attempts].slice(0, 50);
+    const updatedTarget: MissionPublishTarget = {
+      ...target,
+      status: result.ok ? "ok" : "failed",
+      attempts: trimmed,
+      lastAttemptAt: attemptedAt,
+    };
+    const updatedMission: Mission = {
+      ...mission,
+      publishTargets: (mission.publishTargets ?? []).map((t) =>
+        t.id === targetId ? updatedTarget : t,
+      ),
+    };
+    this.missions.set(missionId, updatedMission);
+    this.persist();
+    return attempt;
+  }
+
+  private autoPublishApprovedArtifact(missionId: string, artifactId: string, artifactType: string): void {
+    const mission = this.missions.get(missionId);
+    if (!mission?.publishTargets?.length) return;
+    const matching = mission.publishTargets.filter(
+      (t) => t.contentTypes.includes("*") || t.contentTypes.includes(artifactType),
+    );
+    for (const target of matching) {
+      void this.triggerPublish(missionId, target.id, artifactId).catch((err: unknown) => {
+        console.error(
+          `[MissionService] auto-publish failed (target ${target.id}, artifact ${artifactId}):`,
+          err instanceof Error ? err.message : String(err),
+        );
+      });
+    }
+  }
+
   async triggerAgentConversation(input: {
     missionId: string;
     agentId: string;
@@ -2356,6 +2770,10 @@ export class InMemoryMissionService {
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
         maxDiscussionRounds: this.config.agentCollaboration?.maxDiscussionRounds ?? 5,
         cooldownMs: this.config.agentCollaboration?.cooldownMs ?? 30_000,
+        createFollowupTask: (input) => this.createFollowupTask(input),
+        recordLlmCall: (input) => {
+          this.recordLlmCall(input);
+        },
       });
     }
     return this.conversationBus;
@@ -2385,6 +2803,7 @@ export class InMemoryMissionService {
         },
         updateAgent: (id, patch) => this.updateAgent(id, patch),
         maxConversationDepth: this.config.agentCollaboration?.maxConversationDepth ?? 5,
+        createFollowupTask: (input) => this.createFollowupTask(input),
       });
     }
     return this.autonomyService;
@@ -2505,6 +2924,147 @@ export class InMemoryMissionService {
     scheduler = new MissionScheduler(deps);
     this.schedulers.set(missionId, scheduler);
     return scheduler;
+  }
+
+  async createFollowupTask(input: {
+    missionId: string;
+    triggeringEventId: string;
+    payload: CreateFollowupTaskPayload;
+  }): Promise<
+    | { created: true; taskId: string }
+    | {
+        created: false;
+        reason: "per_event_limit" | "mission_cap" | "no_assignee" | "mission_paused" | "budget_exceeded";
+        escalateMessageSent: boolean;
+      }
+  > {
+    const mission = this.missions.get(input.missionId);
+    if (!mission) {
+      throw new Error(`Mission not found: ${input.missionId}`);
+    }
+
+    if (mission.status !== "active") {
+      return { created: false, reason: "mission_paused", escalateMessageSent: false };
+    }
+
+    const totalTasksInMission = [...this.tasks.values()].filter(
+      (t) => t.missionId === input.missionId,
+    ).length;
+
+    // Mission-level budget enforcement: auto-pause if over budget
+    if (
+      mission.budget.maxFollowupTasks !== undefined &&
+      totalTasksInMission >= mission.budget.maxFollowupTasks
+    ) {
+      this.pauseMissionLifecycle({
+        missionId: input.missionId,
+        reason: `Budget exceeded: ${totalTasksInMission} tasks reached the maxFollowupTasks limit of ${mission.budget.maxFollowupTasks}`,
+      });
+      return { created: false, reason: "budget_exceeded", escalateMessageSent: true };
+    }
+
+    const followupsForEvent = this.followupCountByEvent.get(input.triggeringEventId) ?? 0;
+
+    const safety = checkFollowupSafety(this.followupSafetyConfig, {
+      missionId: input.missionId,
+      triggeringEventId: input.triggeringEventId,
+      totalTasksInMission,
+      followupsAlreadyCreatedForEvent: followupsForEvent,
+    });
+
+    if (!safety.allowed) {
+      let escalateMessageSent = false;
+      if (safety.escalateToUser) {
+        const owner = [...this.agents.values()].find(
+          (a) => a.missionId === input.missionId && a.role === "owner",
+        );
+        if (owner) {
+          this.appendMessage({
+            missionId: input.missionId,
+            fromAgentId: "system",
+            toAgentId: owner.id,
+            type: "agent_notify",
+            content: `Mission cap reached (${safety.limit} tasks). Followup task "${input.payload.title}" was blocked. Manual review required before more followup tasks.`,
+          });
+          escalateMessageSent = true;
+        }
+      }
+      this.persist();
+      return { created: false, reason: safety.reason, escalateMessageSent };
+    }
+
+    const assignee = [...this.agents.values()].find(
+      (a) =>
+        a.missionId === input.missionId &&
+        (a.role === input.payload.assigneeRole ||
+          a.role.includes(input.payload.assigneeRole) ||
+          input.payload.assigneeRole.includes(a.role)),
+    );
+    if (!assignee) {
+      const owner = [...this.agents.values()].find(
+        (a) => a.missionId === input.missionId && a.role === "owner",
+      );
+      let escalateMessageSent = false;
+      if (owner) {
+        this.appendMessage({
+          missionId: input.missionId,
+          fromAgentId: "system",
+          toAgentId: owner.id,
+          type: "agent_notify",
+          content: `Followup task "${input.payload.title}" could not be assigned: no agent for role "${input.payload.assigneeRole}".`,
+        });
+        escalateMessageSent = true;
+      }
+      this.persist();
+      return { created: false, reason: "no_assignee", escalateMessageSent };
+    }
+
+    const task = createTask({
+      missionId: input.missionId,
+      title: input.payload.title,
+      dependencies: [],
+      contract: {
+        objective: input.payload.objective,
+        input: input.payload.inputContext ?? {},
+        outputSchema: {},
+        successCriteria: [`Output addresses: ${input.payload.objective}`],
+      },
+      approvalRequired: false,
+      origin: {
+        type: "followup",
+        reason: input.payload.reason,
+        ...(input.payload.sourceTaskId ? { sourceTaskId: input.payload.sourceTaskId } : {}),
+        triggeredByEventId: input.triggeringEventId,
+      },
+    });
+    const assigned: Task = { ...task, assigneeAgentId: assignee.id };
+    this.tasks.set(assigned.id, assigned);
+    this.followupCountByEvent.set(input.triggeringEventId, followupsForEvent + 1);
+
+    this.appendMessage({
+      missionId: input.missionId,
+      fromAgentId: "system",
+      type: "task_plan",
+      content: `Followup task "${input.payload.title}" assigned to ${assignee.name} (reason: ${input.payload.reason}).`,
+    });
+
+    if (this.runtime) {
+      try {
+        this.executeTask({
+          missionId: input.missionId,
+          taskId: assigned.id,
+          message: input.payload.objective,
+        });
+      } catch (error) {
+        console.error(
+          `[MissionService] Followup task execution failed to start (mission ${input.missionId}, task ${assigned.id}):`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+
+    this.persist();
+    return { created: true, taskId: assigned.id };
   }
 
   private createTaskFromScheduleRule(mission: Mission, rule: ScheduleRule): Task | undefined {

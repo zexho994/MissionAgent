@@ -1,7 +1,7 @@
 import type { LlmMessage, LlmService } from "@digitalagent/runtime";
 import type { AgentPersonaRegistry } from "./agent-personas.js";
 import type { ContextRetriever } from "./context-retriever.js";
-import type { BusEvent, ConversationThread } from "./agent-conversation-types.js";
+import type { BusEvent, ConversationThread, CreateFollowupTaskPayload } from "./agent-conversation-types.js";
 import type { AgentMessage, MissionSnapshot, WarRoomAgent } from "./mission-service.js";
 import { parseAgentConversationResponse } from "./agent-conversation-bus.js";
 
@@ -25,6 +25,14 @@ export interface AgentAutonomyDeps {
   appendMessage: (message: Omit<AgentMessage, "id" | "createdAt">) => AgentMessage;
   updateAgent: (id: string, patch: Partial<WarRoomAgent>) => void;
   maxConversationDepth: number;
+  createFollowupTask?: (input: {
+    missionId: string;
+    triggeringEventId: string;
+    payload: CreateFollowupTaskPayload;
+  }) => Promise<
+    | { created: true; taskId: string }
+    | { created: false; reason: string; escalateMessageSent?: boolean }
+  >;
 }
 
 export class AgentAutonomyService {
@@ -167,9 +175,9 @@ export class AgentAutonomyService {
             `Context: ${JSON.stringify(context)}`,
             `Your recent messages: ${recentMessages || "(none)"}`,
             "",
-            "Given your current context and role, should you communicate? If you have findings to report, use report_to_superior action. If you need information, use request_info. If nothing to communicate, respond with acknowledge.",
+            "Given your current context and role, should you communicate? If you have findings to report, use report_to_superior action. If you need information, use request_info. If `create_followup_task` is in your available actions AND the recent activity indicates the mission needs the next concrete work step (e.g., a task completed and the next substantive work is clear), you MAY return: {\"action\":{\"type\":\"create_followup_task\",\"payload\":{\"title\":\"<short task name>\",\"objective\":\"<one-sentence what to deliver>\",\"assigneeRole\":\"<role from team>\",\"reason\":\"<why this is the right next step>\"}}}. If nothing to communicate, respond with acknowledge.",
             "",
-            "Respond with one JSON object only: {\"message\":\"...\",\"type\":\"agent_report|agent_chat|agent_request|agent_notify\",\"mentionedAgentIds\":[],\"shouldPropagate\":false,\"action\":{\"type\":\"acknowledge|report_to_superior|request_info|notify_owner|escalate\"}}",
+            "Respond with one JSON object only: {\"message\":\"...\",\"type\":\"agent_report|agent_chat|agent_request|agent_notify\",\"mentionedAgentIds\":[],\"shouldPropagate\":false,\"action\":{...}}",
           ].join("\n"),
         },
       ];
@@ -177,7 +185,21 @@ export class AgentAutonomyService {
       const result = await this.deps.llm.call(messages, { temperature: 0.3 });
       const response = parseAgentConversationResponse(result.content);
 
-      if (response.action?.type === "report_to_superior" && tickCount % this.deps.config.reportFrequencyTicks === 0) {
+      if (response.action?.type === "create_followup_task" && this.deps.createFollowupTask) {
+        const triggeringEventId = `autonomy:${missionId}:${agent.id}:${tickCount}`;
+        try {
+          await this.deps.createFollowupTask({
+            missionId,
+            triggeringEventId,
+            payload: response.action.payload,
+          });
+        } catch (error) {
+          console.error(
+            "[AgentAutonomyService] createFollowupTask failed:",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      } else if (response.action?.type === "report_to_superior" && tickCount % this.deps.config.reportFrequencyTicks === 0) {
         await this.deps.dispatchEvent({
           missionId,
           event: {

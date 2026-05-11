@@ -3,6 +3,7 @@ export type MissionStatus = "active" | "paused" | "completed" | "cancelled";
 export interface MissionBudget {
   maxRuntimeMinutes: number;
   maxTokenSpendUsd?: number;
+  maxFollowupTasks?: number;
 }
 
 export interface MissionBrief {
@@ -76,6 +77,8 @@ export interface Mission {
   briefConfirmed?: boolean;
   confirmedPlanId?: string;
   scheduleRules: ScheduleRule[];
+  dataSources?: MissionDataSource[];
+  publishTargets?: MissionPublishTarget[];
 }
 
 export interface RoleBudget {
@@ -129,6 +132,15 @@ export interface TaskContract {
   successCriteria: string[];
 }
 
+export type TaskOriginType = "initial" | "scheduled" | "followup";
+
+export interface TaskOrigin {
+  type: TaskOriginType;
+  reason?: string;
+  sourceTaskId?: string;
+  triggeredByEventId?: string;
+}
+
 export interface Task {
   id: string;
   missionId: string;
@@ -142,6 +154,7 @@ export interface Task {
   reviewId?: string;
   failureReason?: string;
   scheduleRuleId?: string;
+  origin?: TaskOrigin;
 }
 
 export type ArtifactType = "research_report" | "content_draft" | "metric_snapshot" | "execution_log";
@@ -304,4 +317,64 @@ export interface ScheduleRule {
   };
   maxConcurrent: number;
   metadata: Record<string, unknown>;
+}
+
+export type MissionDataSourceStatus = "idle" | "fetching" | "ok" | "failed";
+
+export interface HttpDataSourceConfig {
+  url: string;
+  method: "GET" | "POST";
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+export interface DataSourceFetchRecord {
+  id: string;
+  fetchedAt: string;
+  status: "ok" | "failed";
+  knowledgeEntryId?: string;
+  errorMessage?: string;
+}
+
+export interface MissionDataSource {
+  id: string;
+  missionId: string;
+  name: string;
+  adapter: "http";
+  config: HttpDataSourceConfig;
+  status: MissionDataSourceStatus;
+  fetchHistory: DataSourceFetchRecord[];
+  createdAt: string;
+  lastFetchedAt?: string;
+}
+
+export type MissionPublishTargetStatus = "idle" | "publishing" | "ok" | "failed";
+
+export interface HttpPublishTargetConfig {
+  url: string;
+  method: "POST" | "PUT";
+  headers?: Record<string, string>;
+}
+
+export interface PublishAttempt {
+  id: string;
+  targetId: string;
+  artifactId: string;
+  attemptedAt: string;
+  status: "ok" | "failed";
+  responseSnippet?: string;
+  errorMessage?: string;
+}
+
+export interface MissionPublishTarget {
+  id: string;
+  missionId: string;
+  name: string;
+  adapter: "http";
+  config: HttpPublishTargetConfig;
+  status: MissionPublishTargetStatus;
+  contentTypes: string[];
+  attempts: PublishAttempt[];
+  createdAt: string;
+  lastAttemptAt?: string;
 }

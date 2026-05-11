@@ -56,3 +56,63 @@ describe("createTask", () => {
     expect(task.scheduleRuleId).toBe("schedule_1");
   });
 });
+
+describe("createTask with origin", () => {
+  it("does not set origin when not specified (backward compat)", () => {
+    const task = createTask({
+      missionId: "mission_1",
+      title: "do thing",
+      dependencies: [],
+      contract: {
+        objective: "x",
+        input: {},
+        outputSchema: {},
+        successCriteria: ["criterion"],
+      },
+      approvalRequired: false,
+    });
+    expect(task.origin).toBeUndefined();
+  });
+
+  it("records followup origin with reason and sourceTaskId", () => {
+    const task = createTask({
+      missionId: "mission_1",
+      title: "do followup",
+      dependencies: [],
+      contract: {
+        objective: "y",
+        input: {},
+        outputSchema: {},
+        successCriteria: ["criterion"],
+      },
+      approvalRequired: false,
+      origin: {
+        type: "followup",
+        reason: "based on review of task-A",
+        sourceTaskId: "task-A",
+      },
+    });
+    expect(task.origin).toEqual({
+      type: "followup",
+      reason: "based on review of task-A",
+      sourceTaskId: "task-A",
+    });
+  });
+
+  it("records initial origin when explicitly set", () => {
+    const task = createTask({
+      missionId: "mission_1",
+      title: "initial task",
+      dependencies: [],
+      contract: {
+        objective: "z",
+        input: {},
+        outputSchema: {},
+        successCriteria: ["criterion"],
+      },
+      approvalRequired: false,
+      origin: { type: "initial" },
+    });
+    expect(task.origin).toEqual({ type: "initial" });
+  });
+});

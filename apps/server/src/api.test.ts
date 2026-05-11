@@ -3,13 +3,13 @@ import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
-import type { OpenClawCliAdapter } from "@digitalagent/runtime";
+import type { PiCliAdapter } from "@digitalagent/runtime";
 import type { MissionSnapshot } from "./mission-service.js";
 
-function fakeOpenClaw(): Pick<OpenClawCliAdapter, "health" | "runAgentTask"> {
+function fakeOpenClaw(): Pick<PiCliAdapter, "health" | "runAgentTask"> {
   return {
     async health() {
-      return { available: true, version: "test-openclaw" };
+      return { available: true, version: "test-pi" };
     },
     async runAgentTask() {
       return {
@@ -116,13 +116,13 @@ describe("handleApiRequest", () => {
   it("returns health with OpenClaw status and current snapshot counts", async () => {
     const response = await handleApiRequest(
       { method: "GET", path: "/api/health" },
-      { missions: new InMemoryMissionService(), openclaw: fakeOpenClaw() },
+      { missions: new InMemoryMissionService(), runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
         ok: true,
-        openclaw: { available: true, version: "test-openclaw" },
+        openclaw: { available: true, version: "test-pi" },
         counts: { missions: 0, tasks: 0, artifacts: 0, reviews: 0, executions: 0 },
       });
   });
@@ -136,7 +136,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions",
         body: { goal: "学习 harness 并生成知识图" },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(createResponse.status).toBe(201);
@@ -158,7 +158,7 @@ describe("handleApiRequest", () => {
           constraints: ["human approval before publishing"],
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(createResponse.status).toBe(201);
@@ -170,7 +170,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions/activate",
         body: { missionId: missions.snapshot().missions[0]?.id },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(activateResponse.status).toBe(400);
@@ -190,7 +190,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions/activate-async",
         body: { missionId },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(202);
@@ -211,7 +211,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions/activate-async",
         body: { missionId },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     const recruitingHr = missions.snapshot().agents.find(
       (agent) => agent.missionId === missionId && agent.role === "hr",
@@ -242,7 +242,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions/negotiate/confirm",
         body: { missionId },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(202);
@@ -272,7 +272,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions/negotiate/confirm",
         body: { missionId },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     await Promise.resolve();
     await Promise.resolve();
@@ -294,7 +294,7 @@ describe("handleApiRequest", () => {
         path: "/api/missions/activate-async",
         body: { missionId: mission.id },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(400);
@@ -320,7 +320,7 @@ describe("handleApiRequest", () => {
           message: "补充：头像要更像参考图",
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(200);
@@ -340,7 +340,7 @@ describe("handleApiRequest", () => {
         method: "DELETE",
         path: `/api/missions/${mission.id}`,
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(200);
@@ -378,7 +378,7 @@ describe("handleApiRequest", () => {
           message: "Create a first execution plan",
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(202);
@@ -394,7 +394,7 @@ describe("handleApiRequest", () => {
 
     const response = await handleApiRequest(
       { method: "GET", path: `/api/missions/${mission.id}/autopilot-diagnosis` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(200);
@@ -413,7 +413,7 @@ describe("handleApiRequest", () => {
   it("GET /api/missions/:id/autopilot-diagnosis reports unavailable OpenClaw runner", async () => {
     const missions = new InMemoryMissionService();
     const mission = await missions.createMission({ goal: "Grow GitHub repositories" });
-    const unavailableOpenClaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask"> = {
+    const unavailableOpenClaw: Pick<PiCliAdapter, "health" | "runAgentTask"> = {
       async health() {
         return { available: false };
       },
@@ -424,7 +424,7 @@ describe("handleApiRequest", () => {
 
     const response = await handleApiRequest(
       { method: "GET", path: `/api/missions/${mission.id}/autopilot-diagnosis` },
-      { missions, openclaw: unavailableOpenClaw },
+      { missions, runtime: unavailableOpenClaw },
     );
 
     expect(response.status).toBe(200);
@@ -437,7 +437,7 @@ describe("handleApiRequest", () => {
 
     const response = await handleApiRequest(
       { method: "GET", path: `/api/missions/${mission.id}/plan` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(response.status).toBe(200);
@@ -454,7 +454,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${missionId}/plan/generate`,
         body: { feedback: "Include analytics." },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(generateResponse.status).toBe(200);
@@ -472,7 +472,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${missionId}/plan/confirm`,
         body: { planId: generated.plan.id },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(confirmResponse.status).toBe(200);
@@ -487,7 +487,7 @@ describe("handleApiRequest", () => {
 
     const diagnosisResponse = await handleApiRequest(
       { method: "GET", path: `/api/missions/${missionId}/autopilot-diagnosis` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(diagnosisResponse.status).toBe(200);
@@ -504,7 +504,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${missionId}/plan/generate`,
         body: { feedback: 42 },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(malformedFeedback.status).toBe(400);
@@ -516,7 +516,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${missionId}/plan/confirm`,
         body: {},
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(malformedConfirm.status).toBe(400);
@@ -535,18 +535,18 @@ describe("handleApiRequest", () => {
 
     const createResponse = await handleApiRequest(
       { method: "POST", path: "/api/missions", body: { goal: "运营小红书账号" } },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     const missionId = (createResponse.body as { mission: { id: string } }).mission.id;
 
     await handleApiRequest(
       { method: "POST", path: "/api/missions/continue", body: { missionId, message: "目标人群是年轻女性" } },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     const confirmResponse = await handleApiRequest(
       { method: "POST", path: "/api/missions/confirm-brief", body: { missionId } },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(confirmResponse.status).toBe(200);
@@ -579,7 +579,7 @@ describe("handleApiRequest", () => {
           message: "请说明当前风险",
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(converseResponse.status).toBe(200);
@@ -588,14 +588,14 @@ describe("handleApiRequest", () => {
 
     const threadsResponse = await handleApiRequest(
       { method: "GET", path: `/api/missions/threads?missionId=${mission.id}` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     expect(threadsResponse.status).toBe(200);
     expect((threadsResponse.body as { threads: unknown[] }).threads).toHaveLength(1);
 
     const threadResponse = await handleApiRequest(
       { method: "GET", path: `/api/missions/threads/${converseBody.message.threadId}` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     expect(threadResponse.status).toBe(200);
     expect((threadResponse.body as { messages: Array<{ content: string }> }).messages.some((message) => message.content.includes("下一步建议"))).toBe(true);
@@ -616,7 +616,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${mission.id}/feedback-summary`,
         body: undefined,
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(200);
@@ -647,7 +647,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${mission.id}/feedback/evaluations`,
         body: undefined,
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     const failureAnalyses = await handleApiRequest(
       {
@@ -655,7 +655,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${mission.id}/feedback/failure-analyses`,
         body: undefined,
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     const strategyAdjustments = await handleApiRequest(
       {
@@ -663,7 +663,7 @@ describe("handleApiRequest", () => {
         path: `/api/missions/${mission.id}/feedback/strategy-adjustments`,
         body: undefined,
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(evaluations.status).toBe(200);
@@ -687,7 +687,7 @@ describe("schedule API endpoints", () => {
           constraints: ["test constraint"],
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     return (createResp.body as { mission: { id: string } }).mission.id;
   }
@@ -718,7 +718,7 @@ describe("schedule API endpoints", () => {
           maxConcurrent: 1,
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     expect(addResp.status).toBe(201);
     return (addResp.body as { rule: { id: string } }).rule.id;
@@ -730,7 +730,7 @@ describe("schedule API endpoints", () => {
 
     const resp = await handleApiRequest(
       { method: "GET", path: `/api/missions/${missionId}/schedule` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(200);
@@ -769,7 +769,7 @@ describe("schedule API endpoints", () => {
           maxConcurrent: 1,
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(400);
@@ -782,14 +782,14 @@ describe("schedule API endpoints", () => {
 
     const delResp = await handleApiRequest(
       { method: "DELETE", path: `/api/missions/${missionId}/schedule/${ruleId}` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(delResp.status).toBe(200);
 
     const listResp = await handleApiRequest(
       { method: "GET", path: `/api/missions/${missionId}/schedule` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     expect((listResp.body as { rules: unknown[] }).rules).toHaveLength(0);
   });
@@ -805,7 +805,7 @@ describe("schedule API endpoints", () => {
         path: `/api/missions/${missionId}/schedule/${ruleId}`,
         body: { enabled: false },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(patchResp.status).toBe(200);
@@ -823,7 +823,7 @@ describe("schedule API endpoints", () => {
         path: `/api/missions/${missionId}/schedule/${ruleId}`,
         body: { maxConcurrent: 0 },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(patchResp.status).toBe(400);
@@ -842,7 +842,7 @@ describe("schedule API endpoints", () => {
         path: `/api/missions/${missionId}/schedule/${ruleId}`,
         body: { id: "schedule_bad" },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(patchResp.status).toBe(400);
@@ -870,11 +870,11 @@ describe("schedule API endpoints", () => {
           },
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     const listResp = await handleApiRequest(
       { method: "GET", path: `/api/missions/${missionId}/schedule` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(patchResp.status).toBe(200);
@@ -889,7 +889,7 @@ describe("schedule API endpoints", () => {
 
     const triggerResp = await handleApiRequest(
       { method: "POST", path: `/api/missions/${missionId}/schedule/${ruleId}/trigger`, body: {} },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(triggerResp.status).toBe(200);
@@ -903,7 +903,7 @@ describe("schedule API endpoints", () => {
 
     await handleApiRequest(
       { method: "POST", path: `/api/missions/${missionId}/schedule/${ruleId}/trigger`, body: {} },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     const scheduledTask = missions.snapshot().tasks.find((task) => task.scheduleRuleId === ruleId);
@@ -936,7 +936,7 @@ describe("schedule API endpoints", () => {
 
     const resp = await handleApiRequest(
       { method: "GET", path: `/api/missions/${missionId}/schedule` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(200);
@@ -951,7 +951,7 @@ describe("schedule API endpoints", () => {
 
     const resp = await handleApiRequest(
       { method: "GET", path: `/api/missions/${missionId}/automation-summary` },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(200);
@@ -966,7 +966,7 @@ describe("schedule API endpoints", () => {
 
     const resp = await handleApiRequest(
       { method: "POST", path: `/api/missions/${missionId}/schedule/trigger-next`, body: {} },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(200);
@@ -988,7 +988,7 @@ describe("schedule API endpoints", () => {
           taskGoal: "Check yesterday's GitHub growth metrics",
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(201);
@@ -1009,7 +1009,7 @@ describe("schedule API endpoints", () => {
           taskGoal: "Review every two weeks",
         },
       },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(resp.status).toBe(400);
@@ -1025,16 +1025,220 @@ describe("schedule API endpoints", () => {
 
     const pauseResp = await handleApiRequest(
       { method: "POST", path: `/api/missions/${missionId}/schedule/pause`, body: {} },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
     const resumeResp = await handleApiRequest(
       { method: "POST", path: `/api/missions/${missionId}/schedule/resume`, body: {} },
-      { missions, openclaw: fakeOpenClaw() },
+      { missions, runtime: fakeOpenClaw() },
     );
 
     expect(pauseResp.status).toBe(200);
     expect(resumeResp.status).toBe(200);
     expect(missions.getScheduleRules(missionId).find((rule) => rule.id === enabledRuleId)?.enabled).toBe(true);
     expect(missions.getScheduleRules(missionId).find((rule) => rule.id === disabledRuleId)?.enabled).toBe(false);
+  });
+
+  describe("data sources REST endpoints", () => {
+    it("POST /data-sources adds and GET lists", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+
+      const createResp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/data-sources`,
+          body: {
+            name: "GSC",
+            adapter: "http",
+            config: { url: "https://api.example.com/x", method: "GET" },
+          },
+        },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(createResp.status).toBe(201);
+
+      const listResp = await handleApiRequest(
+        { method: "GET", path: `/api/missions/${missionId}/data-sources` },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(listResp.status).toBe(200);
+      expect((listResp.body as { dataSources: unknown[] }).dataSources).toHaveLength(1);
+    });
+
+    it("rejects invalid method on data source create", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/data-sources`,
+          body: {
+            name: "X",
+            adapter: "http",
+            config: { url: "https://x", method: "DELETE" },
+          },
+        },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(400);
+    });
+
+    it("DELETE /data-sources/:id removes the source", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      const ds = missions.addDataSource(missionId, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      const resp = await handleApiRequest(
+        { method: "DELETE", path: `/api/missions/${missionId}/data-sources/${ds.id}` },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect(missions.listDataSources(missionId)).toHaveLength(0);
+    });
+
+    it("POST /data-sources/:id/fetch triggers a fetch", async () => {
+      const fakeFetch = async () =>
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const missions = new InMemoryMissionService({ fetch: fakeFetch });
+      const missionId = await createMissionViaApi(missions);
+      const ds = missions.addDataSource(missionId, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      const resp = await handleApiRequest(
+        { method: "POST", path: `/api/missions/${missionId}/data-sources/${ds.id}/fetch` },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect((resp.body as { record: { status: string } }).record.status).toBe("ok");
+    });
+  });
+
+  describe("publish targets REST endpoints", () => {
+    it("POST /publish-targets adds and GET lists", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+
+      const createResp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/publish-targets`,
+          body: {
+            name: "speakin",
+            adapter: "http",
+            config: { url: "https://speakin.cc/api/posts", method: "POST" },
+            contentTypes: ["*"],
+          },
+        },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(createResp.status).toBe(201);
+
+      const listResp = await handleApiRequest(
+        { method: "GET", path: `/api/missions/${missionId}/publish-targets` },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(listResp.status).toBe(200);
+      expect((listResp.body as { publishTargets: unknown[] }).publishTargets).toHaveLength(1);
+    });
+
+    it("rejects invalid method on publish target create", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/publish-targets`,
+          body: {
+            name: "X",
+            adapter: "http",
+            config: { url: "https://x", method: "GET" },
+            contentTypes: ["*"],
+          },
+        },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(400);
+    });
+  });
+
+  describe("mission pause/resume endpoints", () => {
+    it("POST /missions/:id/pause sets status to paused", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      missions.activateMission({ missionId });
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: `/api/missions/${missionId}/pause`,
+          body: { reason: "manual test" },
+        },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect((resp.body as { mission: { status: string } }).mission.status).toBe("paused");
+    });
+
+    it("POST /missions/:id/resume restores active status", async () => {
+      const missions = new InMemoryMissionService();
+      const missionId = await createMissionViaApi(missions);
+      missions.activateMission({ missionId });
+      missions.pauseMissionLifecycle({ missionId });
+      const resp = await handleApiRequest(
+        { method: "POST", path: `/api/missions/${missionId}/resume`, body: {} },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      expect((resp.body as { mission: { status: string } }).mission.status).toBe("active");
+    });
+  });
+
+  describe("mission template endpoints", () => {
+    it("GET /mission-templates lists registered templates", async () => {
+      const missions = new InMemoryMissionService();
+      const resp = await handleApiRequest(
+        { method: "GET", path: "/api/mission-templates" },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(200);
+      const templates = (resp.body as { templates: { id: string }[] }).templates;
+      expect(templates.some((t) => t.id === "speakin-content")).toBe(true);
+    });
+
+    it("POST /missions/from-template creates a mission with template config", async () => {
+      const missions = new InMemoryMissionService();
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: "/api/missions/from-template",
+          body: { templateId: "speakin-content" },
+        },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(201);
+      const missionId = (resp.body as { mission: { id: string } }).mission.id;
+      expect(missions.listDataSources(missionId).length).toBeGreaterThanOrEqual(1);
+      expect(missions.listPublishTargets(missionId).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("rejects unknown template id with 400", async () => {
+      const missions = new InMemoryMissionService();
+      const resp = await handleApiRequest(
+        {
+          method: "POST",
+          path: "/api/missions/from-template",
+          body: { templateId: "no-such" },
+        },
+        { missions, runtime: fakeOpenClaw() },
+      );
+      expect(resp.status).toBe(400);
+    });
   });
 });

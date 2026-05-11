@@ -75,6 +75,7 @@ function makeTestDeps(): {
     missionOutcomeEvaluations: [],
     taskFailureAnalyses: [],
     strategyAdjustments: [],
+    tokenUsageByMission: {},
   };
 
   const deps: AgentAutonomyDeps = {
@@ -337,5 +338,56 @@ describe("AgentAutonomyService", () => {
     // Tick 2: non-report tick, but agent_1 has new activity → should be evaluated
     await tickCallback!();
     expect(llmCalls).toBeGreaterThan(callsAfterFirstTick);
+  });
+
+  it("calls deps.createFollowupTask when LLM returns create_followup_task action", async () => {
+    const { deps } = makeTestDeps();
+    deps.llm = {
+      call: async () => ({
+        content: JSON.stringify({
+          message: "派下一个任务",
+          type: "agent_chat",
+          mentionedAgentIds: [],
+          shouldPropagate: false,
+          action: {
+            type: "create_followup_task",
+            payload: {
+              title: "Follow-up X",
+              objective: "Do step X",
+              assigneeRole: "writer",
+              reason: "Previous task surfaced X",
+            },
+          },
+        }),
+        model: "test",
+        usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+        finishReason: "stop",
+      }),
+      stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+    };
+
+    const followupCalls: Array<{ missionId: string; triggeringEventId: string; payload: unknown }> = [];
+    deps.createFollowupTask = async (input) => {
+      followupCalls.push(input);
+      return { created: true, taskId: "tx" };
+    };
+
+    let tickCallback: (() => Promise<void>) | undefined;
+    const timer = {
+      setInterval: (cb: () => void, _ms: number) => {
+        tickCallback = cb as () => Promise<void>;
+        return { clear: () => {} };
+      },
+    };
+    const service = new AgentAutonomyService(deps, timer);
+    service.startLoop("mission_1");
+
+    await tickCallback!();
+    expect(followupCalls.length).toBeGreaterThanOrEqual(1);
+    const firstCall = followupCalls[0]!;
+    expect(firstCall.missionId).toBe("mission_1");
+    expect(firstCall.triggeringEventId).toBeTruthy();
+    const payload = firstCall.payload as { title: string };
+    expect(payload.title).toBe("Follow-up X");
   });
 });

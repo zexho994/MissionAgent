@@ -1,6 +1,7 @@
 import { createScheduleRule, type ScheduleRule } from "@digitalagent/core";
-import type { OpenClawCliAdapter } from "@digitalagent/runtime";
+import type { PiCliAdapter } from "@digitalagent/runtime";
 import type { InMemoryMissionService, ScheduleTemplateRequest } from "./mission-service.js";
+import { listMissionTemplates } from "./mission-templates.js";
 
 export interface ApiRequest {
   method: string;
@@ -15,7 +16,11 @@ export interface ApiResponse {
 
 export interface ApiDependencies {
   missions: InMemoryMissionService;
-  openclaw: Pick<OpenClawCliAdapter, "health" | "runAgentTask">;
+  // Field name kept neutral as runtime to allow swapping execution adapters.
+  // The /api/health JSON response still surfaces the runtime status under the
+  // legacy key `openclaw` to preserve the public response shape; that key is
+  // renamed in Plan 6 v2.
+  runtime: Pick<PiCliAdapter, "health" | "runAgentTask">;
 }
 
 export async function handleApiRequest(
@@ -27,7 +32,7 @@ export async function handleApiRequest(
       const snapshot = deps.missions.snapshot();
       return json(200, {
         ok: true,
-        openclaw: await deps.openclaw.health(),
+        openclaw: await deps.runtime.health(),
         counts: {
           missions: snapshot.missions.length,
           tasks: snapshot.tasks.length,
@@ -289,9 +294,9 @@ export async function handleApiRequest(
         return json(400, { error: "Mission ID required" });
       }
       if (request.method === "GET") {
-        const openclawHealth = await deps.openclaw.health();
+        const runtimeHealth = await deps.runtime.health();
         const diagnosis = deps.missions.getAutopilotDiagnosis(missionId, {
-          hasExecutionRunner: openclawHealth.available,
+          hasExecutionRunner: runtimeHealth.available,
         });
         return json(200, { diagnosis });
       }
@@ -501,6 +506,141 @@ export async function handleApiRequest(
       if (request.method === "POST" && ruleId && action === "trigger") {
         deps.missions.triggerScheduleRule(missionId, ruleId);
         return json(200, { triggered: true, snapshot: deps.missions.snapshot() });
+      }
+    }
+
+    if (request.method === "GET" && request.path === "/api/mission-templates") {
+      return json(200, { templates: listMissionTemplates() });
+    }
+
+    if (request.method === "POST" && request.path === "/api/missions/from-template") {
+      const body = expectObject(request.body);
+      const templateId = expectString(body.templateId, "templateId");
+      const mission = await deps.missions.createMissionFromTemplate({ templateId });
+      return json(201, { mission, snapshot: deps.missions.snapshot() });
+    }
+
+    const lifecycleMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/(pause|resume)$/,
+    );
+    if (lifecycleMatch && request.method === "POST") {
+      const missionId = decodeURIComponent(lifecycleMatch[1] ?? "");
+      const action = lifecycleMatch[2];
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+      if (action === "pause") {
+        const body = request.body ? expectObject(request.body) : {};
+        const reason = typeof body.reason === "string" ? body.reason : undefined;
+        const mission = deps.missions.pauseMissionLifecycle(
+          reason ? { missionId, reason } : { missionId },
+        );
+        return json(200, { mission, snapshot: deps.missions.snapshot() });
+      }
+      if (action === "resume") {
+        const mission = deps.missions.resumeMissionLifecycle({ missionId });
+        return json(200, { mission, snapshot: deps.missions.snapshot() });
+      }
+    }
+
+    const dataSourceMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/data-sources(?:\/([^/]+)(?:\/(fetch))?)?$/,
+    );
+    if (dataSourceMatch) {
+      const missionId = decodeURIComponent(dataSourceMatch[1] ?? "");
+      const sourceId = dataSourceMatch[2] ? decodeURIComponent(dataSourceMatch[2]) : undefined;
+      const action = dataSourceMatch[3];
+
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !sourceId) {
+        return json(200, { dataSources: deps.missions.listDataSources(missionId) });
+      }
+
+      if (request.method === "POST" && !sourceId) {
+        const body = expectObject(request.body);
+        const config = expectObject(body.config);
+        const method = expectString(config.method, "config.method");
+        if (method !== "GET" && method !== "POST") {
+          return json(400, { error: "config.method must be GET or POST" });
+        }
+        const ds = deps.missions.addDataSource(missionId, {
+          name: expectString(body.name, "name"),
+          adapter: "http",
+          config: {
+            url: expectString(config.url, "config.url"),
+            method,
+            ...(config.headers ? { headers: expectRecord(config.headers, "config.headers") as Record<string, string> } : {}),
+            ...(typeof config.body === "string" ? { body: config.body } : {}),
+          },
+        });
+        return json(201, { dataSource: ds, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "DELETE" && sourceId && !action) {
+        deps.missions.removeDataSource(missionId, sourceId);
+        return json(200, { snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && sourceId && action === "fetch") {
+        const record = await deps.missions.triggerDataSourceFetch(missionId, sourceId);
+        return json(200, { record, snapshot: deps.missions.snapshot() });
+      }
+    }
+
+    const publishTargetMatch = request.path.match(
+      /^\/api\/missions\/([^/]+)\/publish-targets(?:\/([^/]+)(?:\/(publish))?)?$/,
+    );
+    if (publishTargetMatch) {
+      const missionId = decodeURIComponent(publishTargetMatch[1] ?? "");
+      const targetId = publishTargetMatch[2] ? decodeURIComponent(publishTargetMatch[2]) : undefined;
+      const action = publishTargetMatch[3];
+
+      if (!missionId) {
+        return json(400, { error: "Mission ID required" });
+      }
+
+      if (request.method === "GET" && !targetId) {
+        return json(200, { publishTargets: deps.missions.listPublishTargets(missionId) });
+      }
+
+      if (request.method === "POST" && !targetId) {
+        const body = expectObject(request.body);
+        const config = expectObject(body.config);
+        const method = expectString(config.method, "config.method");
+        if (method !== "POST" && method !== "PUT") {
+          return json(400, { error: "config.method must be POST or PUT" });
+        }
+        const target = deps.missions.addPublishTarget(missionId, {
+          name: expectString(body.name, "name"),
+          adapter: "http",
+          config: {
+            url: expectString(config.url, "config.url"),
+            method,
+            ...(config.headers ? { headers: expectRecord(config.headers, "config.headers") as Record<string, string> } : {}),
+          },
+          contentTypes: Array.isArray(body.contentTypes)
+            ? expectStringArray(body.contentTypes, "contentTypes")
+            : ["*"],
+        });
+        return json(201, { publishTarget: target, snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "DELETE" && targetId && !action) {
+        deps.missions.removePublishTarget(missionId, targetId);
+        return json(200, { snapshot: deps.missions.snapshot() });
+      }
+
+      if (request.method === "POST" && targetId && action === "publish") {
+        const body = expectObject(request.body);
+        const attempt = await deps.missions.triggerPublish(
+          missionId,
+          targetId,
+          expectString(body.artifactId, "artifactId"),
+        );
+        return json(200, { attempt, snapshot: deps.missions.snapshot() });
       }
     }
 

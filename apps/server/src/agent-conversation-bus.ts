@@ -5,6 +5,7 @@ import type {
   AgentConversationResponse,
   BusEvent,
   ConversationThread,
+  CreateFollowupTaskPayload,
 } from "./agent-conversation-types.js";
 import type { AgentMessage, AgentMessageType, MissionSnapshot, WarRoomAgent } from "./mission-service.js";
 import { findSuperiors } from "./agent-hierarchy.js";
@@ -32,6 +33,19 @@ export class AgentConversationBus {
     maxConversationDepth: number;
     maxDiscussionRounds: number;
     cooldownMs: number;
+    createFollowupTask?: (input: {
+      missionId: string;
+      triggeringEventId: string;
+      payload: CreateFollowupTaskPayload;
+    }) => Promise<
+      | { created: true; taskId: string }
+      | { created: false; reason: string; escalateMessageSent?: boolean }
+    >;
+    recordLlmCall?: (input: {
+      missionId: string;
+      promptTokens: number;
+      completionTokens: number;
+    }) => void;
   }) {}
 
   async dispatchEvent(input: {
@@ -111,6 +125,25 @@ export class AgentConversationBus {
           });
           this.recordCooldown(input.event, target.id);
 
+          if (
+            response.action?.type === "create_followup_task" &&
+            this.deps.createFollowupTask
+          ) {
+            const triggeringEventId = `${thread.id}:${target.id}:${lastMessage.id}`;
+            try {
+              await this.deps.createFollowupTask({
+                missionId: input.missionId,
+                triggeringEventId,
+                payload: response.action.payload,
+              });
+            } catch (error) {
+              console.error(
+                "[AgentConversationBus] createFollowupTask failed:",
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+          }
+
           const propagated = this.propagationTargets(response, responded, agentById);
           nextRoundTargets.push(...propagated);
         } catch (error) {
@@ -147,7 +180,7 @@ export class AgentConversationBus {
   ): WarRoomAgent[] {
     if (!response.shouldPropagate) return [];
     const candidateIds: string[] = [];
-    if (response.action?.targetAgentId) {
+    if (response.action && response.action.type !== "create_followup_task" && response.action.targetAgentId) {
       candidateIds.push(response.action.targetAgentId);
     }
     if (response.mentionedAgentIds?.length) {
@@ -201,11 +234,19 @@ export class AgentConversationBus {
           `Shared context: ${JSON.stringify(context)}`,
           `Thread history:\n${threadMessages || "(none)"}`,
           knowledgeSummary(context),
-          "Respond with one JSON object only: {\"message\":\"...\",\"type\":\"agent_chat|agent_report|agent_request|agent_notify|agent_discussion\",\"mentionedAgentIds\":[],\"shouldPropagate\":false,\"action\":{\"type\":\"acknowledge\"}}",
+          "Choose `action.type` based on your persona's `Available actions`. If `create_followup_task` is among your available actions AND the event indicates substantive work has just completed (or a review approved a result) AND the mission needs the next concrete work step, you MAY return: {\"action\":{\"type\":\"create_followup_task\",\"payload\":{\"title\":\"<short task name>\",\"objective\":\"<one-sentence what to deliver>\",\"assigneeRole\":\"<role name from team>\",\"reason\":\"<why this is the right next step>\",\"sourceTaskId\":\"<optional id of the task this builds on>\"}}}. Otherwise return one of: acknowledge / report_to_superior / request_info / notify_owner / escalate.",
+          "Respond with one JSON object only: {\"message\":\"...\",\"type\":\"agent_chat|agent_report|agent_request|agent_notify|agent_discussion\",\"mentionedAgentIds\":[],\"shouldPropagate\":false,\"action\":{...}}",
         ].join("\n\n"),
       },
     ];
     const result = await this.deps.llm.call(messages, { temperature: 0.2 });
+    if (this.deps.recordLlmCall) {
+      this.deps.recordLlmCall({
+        missionId: input.missionId,
+        promptTokens: result.usage?.promptTokens ?? 0,
+        completionTokens: result.usage?.completionTokens ?? 0,
+      });
+    }
     return parseAgentConversationResponse(result.content);
   }
 
@@ -359,10 +400,39 @@ function parseAction(action: unknown): AgentConversationResponse["action"] {
   }
   const value = action as Record<string, unknown>;
   const type = value.type;
+  if (type === "create_followup_task") {
+    const payload = value.payload as Record<string, unknown> | undefined;
+    if (
+      !payload ||
+      typeof payload.title !== "string" || !payload.title.trim() ||
+      typeof payload.objective !== "string" || !payload.objective.trim() ||
+      typeof payload.assigneeRole !== "string" || !payload.assigneeRole.trim() ||
+      typeof payload.reason !== "string" || !payload.reason.trim()
+    ) {
+      return { type: "acknowledge" };
+    }
+    const followupPayload: CreateFollowupTaskPayload = {
+      title: payload.title.trim(),
+      objective: payload.objective.trim(),
+      assigneeRole: payload.assigneeRole.trim(),
+      reason: payload.reason.trim(),
+    };
+    if (typeof payload.sourceTaskId === "string" && payload.sourceTaskId.trim()) {
+      followupPayload.sourceTaskId = payload.sourceTaskId.trim();
+    }
+    if (
+      payload.inputContext &&
+      typeof payload.inputContext === "object" &&
+      !Array.isArray(payload.inputContext)
+    ) {
+      followupPayload.inputContext = payload.inputContext as Record<string, unknown>;
+    }
+    return { type: "create_followup_task", payload: followupPayload };
+  }
   if (type !== "request_info" && type !== "notify_owner" && type !== "escalate" && type !== "acknowledge" && type !== "report_to_superior") {
     return { type: "acknowledge" };
   }
-  const parsed: NonNullable<AgentConversationResponse["action"]> = { type };
+  const parsed: { type: typeof type; targetAgentId?: string; payload?: Record<string, unknown> } = { type };
   if (typeof value.targetAgentId === "string") parsed.targetAgentId = value.targetAgentId;
   if (value.payload && typeof value.payload === "object" && !Array.isArray(value.payload)) {
     parsed.payload = value.payload as Record<string, unknown>;

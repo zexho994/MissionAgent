@@ -13,7 +13,7 @@ describe("buildOwnerSystemPrompt", () => {
     expect(prompt).toContain("You are a project manager");
     expect(prompt).toContain("Ask clarifying questions");
     expect(prompt).toContain('{"goal":"..."}');
-    expect(prompt).toContain("When you need more information");
+    expect(prompt).toContain("ONLY ask ONE question per response");
     expect(prompt).toContain("A. ");
   });
 });

@@ -2513,4 +2513,577 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("data sources (HTTP)", () => {
+    it("addDataSource persists a new source on the mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      expect(ds.id).toMatch(/^datasource_/);
+      const list = service.listDataSources(mission.id);
+      expect(list).toHaveLength(1);
+      expect(list[0]?.name).toBe("GSC");
+    });
+
+    it("removeDataSource removes by id", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      service.removeDataSource(mission.id, ds.id);
+      expect(service.listDataSources(mission.id)).toHaveLength(0);
+    });
+
+    it("triggerDataSourceFetch on success creates a KnowledgeEntry and records ok", async () => {
+      const fakeFetch = async () =>
+        new Response(JSON.stringify({ rows: [1, 2] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      const record = await service.triggerDataSourceFetch(mission.id, ds.id);
+      expect(record.status).toBe("ok");
+      expect(record.knowledgeEntryId).toBeDefined();
+      const entries = service.listKnowledge({ missionId: mission.id });
+      expect(entries.some((e) => e.key.startsWith("dataSource:GSC:"))).toBe(true);
+    });
+
+    it("triggerDataSourceFetch on failure records error and notifies owner", async () => {
+      const fakeFetch = async () => new Response("nope", { status: 503 });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      const ds = service.addDataSource(mission.id, {
+        name: "GSC",
+        adapter: "http",
+        config: { url: "https://api.example.com/x", method: "GET" },
+      });
+      const record = await service.triggerDataSourceFetch(mission.id, ds.id);
+      expect(record.status).toBe("failed");
+      expect(record.errorMessage).toMatch(/503/);
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const ownerNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.includes("GSC"),
+      );
+      expect(ownerNotify).toBeDefined();
+    });
+
+    it("fetchHistory caps at 50 entries", async () => {
+      const fakeFetch = async () =>
+        new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      const service = new InMemoryMissionService({ fetch: fakeFetch });
+      const mission = await service.createMission({ goal: "test" });
+      const ds = service.addDataSource(mission.id, {
+        name: "X",
+        adapter: "http",
+        config: { url: "https://x", method: "GET" },
+      });
+      for (let i = 0; i < 55; i += 1) {
+        await service.triggerDataSourceFetch(mission.id, ds.id);
+      }
+      const list = service.listDataSources(mission.id);
+      expect(list[0]?.fetchHistory.length).toBe(50);
+    });
+  });
+
+  describe("publish targets (HTTP)", () => {
+    function makeApprovableRuntime(): MissionExecutionRuntime {
+      return {
+        async runAgentTask() {
+          return {
+            status: "completed",
+            output: {
+              payloads: [
+                { text: "research GitHub growth metrics delivered with daily review (run 1)." },
+              ],
+              searchResults: [
+                { url: "https://example.com/source", title: "src", snippet: "x" },
+              ],
+            },
+            stderr: "",
+          };
+        },
+      };
+    }
+
+    it("addPublishTarget persists a new target", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const t = service.addPublishTarget(mission.id, {
+        name: "speakin",
+        adapter: "http",
+        config: { url: "https://speakin.cc/api/posts", method: "POST" },
+        contentTypes: ["execution_log"],
+      });
+      expect(t.id).toMatch(/^publishtarget_/);
+      const list = service.listPublishTargets(mission.id);
+      expect(list).toHaveLength(1);
+    });
+
+    it("removePublishTarget removes by id", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      const t = service.addPublishTarget(mission.id, {
+        name: "x",
+        adapter: "http",
+        config: { url: "https://x", method: "POST" },
+        contentTypes: ["*"],
+      });
+      service.removePublishTarget(mission.id, t.id);
+      expect(service.listPublishTargets(mission.id)).toHaveLength(0);
+    });
+
+    it("auto-publishes approved artifact to matching HTTP publish target", async () => {
+      const fetched: { url: string; body: string }[] = [];
+      const fakeFetch = async (url: string, init?: RequestInit) => {
+        fetched.push({ url, body: String(init?.body ?? "") });
+        return new Response(JSON.stringify({ id: "post-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      };
+      const service = new InMemoryMissionService({
+        runtime: makeApprovableRuntime(),
+        fetch: fakeFetch,
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+        successMetrics: ["daily review generated"],
+      });
+      service.activateMission({ missionId: mission.id });
+      service.addPublishTarget(mission.id, {
+        name: "speakin",
+        adapter: "http",
+        config: { url: "https://speakin.cc/api/posts", method: "POST" },
+        contentTypes: ["*"],
+      });
+
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+      if (!initialTask) throw new Error("missing initial task");
+      service.executeTask({
+        missionId: mission.id,
+        taskId: initialTask.id,
+        message: "go",
+      });
+      for (let i = 0; i < 12; i += 1) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      expect(fetched.length).toBeGreaterThanOrEqual(1);
+      expect(fetched[0]?.url).toBe("https://speakin.cc/api/posts");
+      const target = service.listPublishTargets(mission.id)[0]!;
+      expect(target.attempts.length).toBeGreaterThanOrEqual(1);
+      expect(target.attempts[0]?.status).toBe("ok");
+    });
+
+    it("auto-publish failure notifies owner without blocking the approval", async () => {
+      const fakeFetch = async () => new Response("nope", { status: 500 });
+      const service = new InMemoryMissionService({
+        runtime: makeApprovableRuntime(),
+        fetch: fakeFetch,
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+        successMetrics: ["daily review generated"],
+      });
+      service.activateMission({ missionId: mission.id });
+      service.addPublishTarget(mission.id, {
+        name: "speakin",
+        adapter: "http",
+        config: { url: "https://speakin.cc/api/posts", method: "POST" },
+        contentTypes: ["*"],
+      });
+
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id)!;
+      service.executeTask({
+        missionId: mission.id,
+        taskId: initialTask.id,
+        message: "go",
+      });
+      for (let i = 0; i < 12; i += 1) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const failureNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.includes("speakin"),
+      );
+      expect(failureNotify).toBeDefined();
+      const target = service.listPublishTargets(mission.id)[0]!;
+      expect(target.attempts[0]?.status).toBe("failed");
+      // Approval flow not blocked: task moved to completed
+      const finalTask = service.snapshot().tasks.find((t) => t.id === initialTask.id);
+      expect(finalTask?.status).toBe("completed");
+    });
+
+    it("does NOT auto-publish if contentTypes do not match", async () => {
+      const fetched: string[] = [];
+      const fakeFetch = async (url: string) => {
+        fetched.push(url);
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      };
+      const service = new InMemoryMissionService({
+        runtime: makeApprovableRuntime(),
+        fetch: fakeFetch,
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+        successMetrics: ["daily review generated"],
+      });
+      service.activateMission({ missionId: mission.id });
+      service.addPublishTarget(mission.id, {
+        name: "specific",
+        adapter: "http",
+        config: { url: "https://specific.example.com/api", method: "POST" },
+        contentTypes: ["content_draft"],
+      });
+
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id)!;
+      service.executeTask({
+        missionId: mission.id,
+        taskId: initialTask.id,
+        message: "go",
+      });
+      for (let i = 0; i < 12; i += 1) {
+        await new Promise((r) => setImmediate(r));
+      }
+
+      // Initial task artifacts are type "execution_log", not "content_draft" — skip
+      expect(fetched.length).toBe(0);
+    });
+  });
+
+  describe("pauseMissionLifecycle / resumeMissionLifecycle", () => {
+    it("pauseMissionLifecycle sets mission status to paused and notifies owner", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+
+      const paused = service.pauseMissionLifecycle({ missionId: mission.id, reason: "test pause" });
+      expect(paused.status).toBe("paused");
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      expect(
+        messages.some((m) => m.type === "agent_notify" && m.content.includes("Mission paused")),
+      ).toBe(true);
+    });
+
+    it("pauseMissionLifecycle is idempotent on already-paused mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      service.pauseMissionLifecycle({ missionId: mission.id });
+      const second = service.pauseMissionLifecycle({ missionId: mission.id });
+      expect(second.status).toBe("paused");
+    });
+
+    it("createFollowupTask returns mission_paused when mission is paused", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      service.pauseMissionLifecycle({ missionId: mission.id });
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-1",
+        payload: {
+          title: "Should be blocked",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "test",
+        },
+      });
+      expect(result.created).toBe(false);
+      if (!result.created) {
+        expect(result.reason).toBe("mission_paused");
+      }
+    });
+
+    it("resumeMissionLifecycle restores active status and re-enables followups", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "research GitHub growth metrics" });
+      service.activateMission({ missionId: mission.id });
+      service.pauseMissionLifecycle({ missionId: mission.id });
+
+      const resumed = service.resumeMissionLifecycle({ missionId: mission.id });
+      expect(resumed.status).toBe("active");
+
+      // Followup should now succeed
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-resume",
+        payload: {
+          title: "Followup",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "after resume",
+        },
+      });
+      if (!result.created) {
+        throw new Error(`Expected created=true but got reason=${result.reason}`);
+      }
+      expect(result.created).toBe(true);
+    });
+
+    it("resumeMissionLifecycle is idempotent on active mission", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMission({ goal: "test" });
+      service.activateMission({ missionId: mission.id });
+      const result = service.resumeMissionLifecycle({ missionId: mission.id });
+      expect(result.status).toBe("active");
+    });
+  });
+
+  describe("createMissionFromTemplate", () => {
+    it("creates a mission with data sources and publish targets from speakin-content template", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMissionFromTemplate({ templateId: "speakin-content" });
+      expect(mission.goal).toContain("speakin");
+      expect(service.listDataSources(mission.id).length).toBeGreaterThanOrEqual(1);
+      expect(service.listPublishTargets(mission.id).length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("rejects unknown template id", async () => {
+      const service = new InMemoryMissionService();
+      await expect(
+        service.createMissionFromTemplate({ templateId: "no-such-template" }),
+      ).rejects.toThrow(/Unknown mission template/);
+    });
+
+    it("applies the template budget", async () => {
+      const service = new InMemoryMissionService();
+      const mission = await service.createMissionFromTemplate({ templateId: "speakin-content" });
+      expect(mission.budget.maxFollowupTasks).toBe(30);
+    });
+  });
+
+  describe("budget enforcement (maxFollowupTasks)", () => {
+    it("auto-pauses mission when total tasks reach maxFollowupTasks", async () => {
+      const service = new InMemoryMissionService({
+        runtime: {
+          async runAgentTask() {
+            return { status: "completed", output: { payloads: [{ text: "x" }] }, stderr: "" };
+          },
+        },
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+        budget: { maxRuntimeMinutes: 60, maxFollowupTasks: 1 },
+      });
+      service.activateMission({ missionId: mission.id });
+      // mission already has 1 initial task; cap is 1, so any followup blocks + auto-pause
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-budget",
+        payload: {
+          title: "Should trigger pause",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "test",
+        },
+      });
+      expect(result.created).toBe(false);
+      if (!result.created) {
+        expect(result.reason).toBe("budget_exceeded");
+        expect(result.escalateMessageSent).toBe(true);
+      }
+      const finalMission = service.snapshot().missions.find((m) => m.id === mission.id);
+      expect(finalMission?.status).toBe("paused");
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      expect(
+        messages.some((m) => m.type === "agent_notify" && m.content.includes("Budget exceeded")),
+      ).toBe(true);
+    });
+
+    it("does NOT auto-pause when no maxFollowupTasks budget is set", async () => {
+      const service = new InMemoryMissionService({
+        runtime: {
+          async runAgentTask() {
+            return { status: "completed", output: { payloads: [{ text: "x" }] }, stderr: "" };
+          },
+        },
+      });
+      const mission = await service.createMission({
+        goal: "research GitHub growth metrics",
+      });
+      service.activateMission({ missionId: mission.id });
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-no-budget",
+        payload: {
+          title: "Followup",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "test",
+        },
+      });
+      expect(result.created).toBe(true);
+      const finalMission = service.snapshot().missions.find((m) => m.id === mission.id);
+      expect(finalMission?.status).toBe("active");
+    });
+  });
+
+  describe("createFollowupTask", () => {
+    function makeRuntime(): { runtime: MissionExecutionRuntime; calls: { message: string }[] } {
+      const calls: { message: string }[] = [];
+      const runtime: MissionExecutionRuntime = {
+        async runAgentTask(input) {
+          calls.push({ message: input.message });
+          return {
+            status: "completed",
+            output: {
+              payloads: [{ text: "Followup work delivered with detailed output." }],
+            },
+            stderr: "",
+          };
+        },
+      };
+      return { runtime, calls };
+    }
+
+    it("creates a followup task with origin metadata, assigns it to a matching role, and triggers execution", async () => {
+      const { runtime, calls } = makeRuntime();
+      const service = new InMemoryMissionService({ runtime });
+      const mission = await service.createMission({ goal: "Create a harness learning image" });
+      service.activateMission({ missionId: mission.id });
+      const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+      if (!initialTask) throw new Error("expected initial task");
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-1",
+        payload: {
+          title: "Step 2: Refine image based on feedback",
+          objective: "Refine the harness learning image based on first version output",
+          assigneeRole: "researcher",
+          reason: "First task surfaced topic X",
+          sourceTaskId: initialTask.id,
+        },
+      });
+
+      expect(result.created).toBe(true);
+      const tasks = service.snapshot().tasks.filter((t) => t.missionId === mission.id);
+      const newTask = tasks.find((t) => t.title === "Step 2: Refine image based on feedback");
+      expect(newTask).toBeDefined();
+      expect(newTask?.origin).toEqual({
+        type: "followup",
+        reason: "First task surfaced topic X",
+        sourceTaskId: initialTask.id,
+        triggeredByEventId: "evt-1",
+      });
+      expect(newTask?.assigneeAgentId).toBeDefined();
+
+      // Drain runtime promise + downstream
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+      // Execution was triggered
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("blocks creating a second followup for the same triggering event (per_event_limit)", async () => {
+      const { runtime } = makeRuntime();
+      const service = new InMemoryMissionService({ runtime });
+      const mission = await service.createMission({ goal: "Create a harness learning image" });
+      service.activateMission({ missionId: mission.id });
+
+      const first = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-A",
+        payload: {
+          title: "First followup",
+          objective: "Do thing 1",
+          assigneeRole: "researcher",
+          reason: "r1",
+        },
+      });
+      expect(first.created).toBe(true);
+
+      const second = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-A",
+        payload: {
+          title: "Second followup (should be blocked)",
+          objective: "Do thing 2",
+          assigneeRole: "researcher",
+          reason: "r2",
+        },
+      });
+      expect(second.created).toBe(false);
+      if (!second.created) {
+        expect(second.reason).toBe("per_event_limit");
+      }
+    });
+
+    it("escalates to owner when mission cap reached", async () => {
+      const { runtime } = makeRuntime();
+      const service = new InMemoryMissionService({
+        runtime,
+        followupSafety: { maxFollowupsPerEvent: 99, maxTotalTasksPerMission: 1 },
+      });
+      const mission = await service.createMission({ goal: "Cap test" });
+      service.activateMission({ missionId: mission.id });
+      // mission already has 1 task (initial); cap is 1, so any followup should fail
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-cap",
+        payload: {
+          title: "Should be blocked",
+          objective: "x",
+          assigneeRole: "researcher",
+          reason: "r",
+        },
+      });
+      expect(result.created).toBe(false);
+      if (!result.created) {
+        expect(result.reason).toBe("mission_cap");
+        expect(result.escalateMessageSent).toBe(true);
+      }
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const ownerNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.toLowerCase().includes("mission cap"),
+      );
+      expect(ownerNotify).toBeDefined();
+    });
+
+    it("falls back when no agent matches assigneeRole, notifying owner", async () => {
+      const { runtime } = makeRuntime();
+      const service = new InMemoryMissionService({ runtime });
+      const mission = await service.createMission({ goal: "No match test" });
+      service.activateMission({ missionId: mission.id });
+
+      const result = await service.createFollowupTask({
+        missionId: mission.id,
+        triggeringEventId: "evt-noassignee",
+        payload: {
+          title: "Should not be assigned",
+          objective: "x",
+          assigneeRole: "non_existent_role_xyz",
+          reason: "r",
+        },
+      });
+      expect(result.created).toBe(false);
+      if (!result.created) {
+        expect(result.reason).toBe("no_assignee");
+      }
+      const messages = service.snapshot().agentMessages.filter((m) => m.missionId === mission.id);
+      const ownerNotify = messages.find(
+        (m) => m.type === "agent_notify" && m.content.includes("non_existent_role_xyz"),
+      );
+      expect(ownerNotify).toBeDefined();
+    });
+  });
+
 });

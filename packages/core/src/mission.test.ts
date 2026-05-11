@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createMission, completeMission, cancelMission } from "./mission.js";
+import {
+  createMission,
+  completeMission,
+  cancelMission,
+  pauseMission,
+  resumeMission,
+} from "./mission.js";
 
 describe("createMission", () => {
   it("creates an active mission with explicit success metrics and constraints", () => {
@@ -69,5 +75,59 @@ describe("cancelMission", () => {
     const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
     const completed = completeMission(mission);
     expect(() => cancelMission(completed)).toThrow("Cannot cancel a completed mission");
+  });
+});
+
+describe("pauseMission", () => {
+  it("transitions active mission to paused", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const paused = pauseMission(mission);
+    expect(paused.status).toBe("paused");
+  });
+
+  it("returns paused mission unchanged (idempotent)", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const first = pauseMission(mission);
+    const second = pauseMission(first);
+    expect(second.status).toBe("paused");
+  });
+
+  it("throws when mission is completed", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const completed = completeMission(mission);
+    expect(() => pauseMission(completed)).toThrow("Cannot pause a completed mission");
+  });
+
+  it("throws when mission is cancelled", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const cancelled = cancelMission(mission);
+    expect(() => pauseMission(cancelled)).toThrow("Cannot pause a cancelled mission");
+  });
+});
+
+describe("resumeMission", () => {
+  it("transitions paused mission back to active", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const paused = pauseMission(mission);
+    const resumed = resumeMission(paused);
+    expect(resumed.status).toBe("active");
+  });
+
+  it("returns active mission unchanged (idempotent)", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const resumed = resumeMission(mission);
+    expect(resumed.status).toBe("active");
+  });
+
+  it("throws when mission is completed", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const completed = completeMission(mission);
+    expect(() => resumeMission(completed)).toThrow("Cannot resume a completed mission");
+  });
+
+  it("throws when mission is cancelled", () => {
+    const mission = createMission({ goal: "Test", successMetrics: ["done"], constraints: ["budget"] });
+    const cancelled = cancelMission(mission);
+    expect(() => resumeMission(cancelled)).toThrow("Cannot resume a cancelled mission");
   });
 });

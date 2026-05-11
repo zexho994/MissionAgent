@@ -1,5 +1,5 @@
 import { createId } from "./ids.js";
-import type { Task, TaskContract } from "./types.js";
+import type { Task, TaskContract, TaskOrigin } from "./types.js";
 
 export interface CreateTaskInput {
   missionId: string;
@@ -8,6 +8,7 @@ export interface CreateTaskInput {
   contract: TaskContract;
   approvalRequired: boolean;
   scheduleRuleId?: string;
+  origin?: TaskOrigin;
 }
 
 export function createTask(input: CreateTaskInput): Task {
@@ -41,5 +42,6 @@ export function createTask(input: CreateTaskInput): Task {
     },
     approvalRequired: input.approvalRequired,
     ...(input.scheduleRuleId === undefined ? {} : { scheduleRuleId: input.scheduleRuleId }),
+    ...(input.origin === undefined ? {} : { origin: { ...input.origin } }),
   };
 }

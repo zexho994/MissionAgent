@@ -701,7 +701,14 @@ function renderTaskCard(data, task, artifact, agentById) {
 
 function artifactPreview(artifact) {
   if (!artifact || !artifact.content) return null;
-  const content = artifact.content;
+  let content = artifact.content;
+  if (typeof content === "string") {
+    try {
+      content = JSON.parse(content);
+    } catch {
+      return shortText(content, 80);
+    }
+  }
   if (content.summary) return shortText(String(content.summary), 80);
   if (content.text) return shortText(String(content.text), 80);
   if (content.result) return shortText(String(content.result), 80);
@@ -772,6 +779,13 @@ function renderSource(source) {
 
 function formatArtifactContent(content) {
   if (!content) return "<p>无内容</p>";
+  if (typeof content === "string") {
+    try {
+      content = JSON.parse(content);
+    } catch {
+      return `<p>${esc(content)}</p>`;
+    }
+  }
   if (content.summary) return `<p>${esc(content.summary)}</p>`;
   if (content.text) return `<p>${esc(content.text)}</p>`;
   if (content.result) return `<p>${esc(content.result)}</p>`;

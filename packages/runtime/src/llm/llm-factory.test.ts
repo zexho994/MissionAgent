@@ -1,120 +1,86 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createLlmService, createLlmServiceFromEnv } from "./index.js";
 
-function successResponse(content: string) {
+function fakeCompleteResponse(text: string, modelId = "test-model") {
   return {
-    choices: [{ message: { content }, finish_reason: "stop" }],
-    model: "test-model",
-    usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+    content: [{ type: "text", text }],
+    usage: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0 },
+    stopReason: "end_turn",
+    model: { id: modelId, name: modelId },
   };
 }
 
 describe("createLlmService", () => {
-  it("creates an OpenAI-compatible service for GLM with GLM defaults", async () => {
-    let capturedUrl: RequestInfo | URL | undefined;
-    let capturedInit: RequestInit | undefined;
+  it("glm provider resolves to openai pi-provider with glm defaults", async () => {
+    const completeMock = vi.fn().mockResolvedValue(fakeCompleteResponse("ok", "glm-4-flash"));
     const llm = createLlmService({
       provider: "glm",
       apiKey: "glm-key",
-      fetch: async (input, init) => {
-        capturedUrl = input;
-        capturedInit = init;
-        return {
-          ok: true,
-          status: 200,
-          json: async () => successResponse("ok"),
-          text: async () => "",
-        } as Response;
-      },
+      completeFn: completeMock,
     });
-
-    if (!llm) {
-      throw new Error("expected LLM service");
-    }
     await llm.call([{ role: "user", content: "hello" }]);
-
-    expect(String(capturedUrl)).toBe("https://open.bigmodel.cn/api/paas/v4/chat/completions");
-    expect(capturedInit?.headers).toHaveProperty("authorization", "Bearer glm-key");
-    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({ model: "glm-4-flash" });
+    const [model, , options] = completeMock.mock.calls[0]!;
+    expect(model.provider).toBe("openai");
+    expect(model.id).toBe("glm-4-flash");
+    expect(model.baseUrl).toBe("https://open.bigmodel.cn/api/paas/v4");
+    expect(options).toMatchObject({ apiKey: "glm-key" });
   });
 
-  it("creates an OpenAI-compatible service for MiniMax with MiniMax defaults", async () => {
-    let capturedUrl: RequestInfo | URL | undefined;
-    let capturedInit: RequestInit | undefined;
+  it("minimax provider resolves to pi minimax-cn provider with anthropic-compatible endpoint", async () => {
+    const completeMock = vi
+      .fn()
+      .mockResolvedValue(fakeCompleteResponse("ok", "MiniMax-M2.7-highspeed"));
     const llm = createLlmService({
       provider: "minimax",
       apiKey: "minimax-key",
-      fetch: async (input, init) => {
-        capturedUrl = input;
-        capturedInit = init;
-        return {
-          ok: true,
-          status: 200,
-          json: async () => successResponse("ok"),
-          text: async () => "",
-        } as Response;
-      },
+      completeFn: completeMock,
     });
-
     await llm.call([{ role: "user", content: "hello" }]);
-
-    expect(String(capturedUrl)).toBe("https://api.minimax.io/v1/chat/completions");
-    expect(capturedInit?.headers).toHaveProperty("authorization", "Bearer minimax-key");
-    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({
-      model: "MiniMax-M2.7-highspeed",
-      reasoning_split: true,
-    });
+    const [model, , options] = completeMock.mock.calls[0]!;
+    expect(model.id).toBe("MiniMax-M2.7-highspeed");
+    expect(model.provider).toBe("minimax-cn");
+    expect(model.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+    expect(model.api).toBe("anthropic-messages");
+    expect(options).toMatchObject({ apiKey: "minimax-key" });
   });
 
-  it("creates an Anthropic service for claude provider", async () => {
-    let capturedUrl: RequestInfo | URL | undefined;
+  it("claude provider resolves to anthropic pi-provider with anthropic defaults", async () => {
+    const completeMock = vi
+      .fn()
+      .mockResolvedValue(fakeCompleteResponse("hello", "claude-3-5-haiku-latest"));
     const llm = createLlmService({
       provider: "claude",
       apiKey: "claude-key",
-      fetch: async (input) => {
-        capturedUrl = input;
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            content: [{ type: "text", text: "hello" }],
-            model: "claude-3-5-haiku-latest",
-            usage: { input_tokens: 4, output_tokens: 5 },
-            stop_reason: "end_turn",
-          }),
-          text: async () => "",
-        } as Response;
-      },
+      completeFn: completeMock,
     });
-
     const response = await llm.call([{ role: "user", content: "hello" }]);
-
-    expect(String(capturedUrl)).toBe("https://api.anthropic.com/v1/messages");
+    const [model] = completeMock.mock.calls[0]!;
+    expect(model.provider).toBe("anthropic");
+    expect(model.id).toBe("claude-3-5-haiku-latest");
     expect(response.content).toBe("hello");
   });
 
-  it("fast-fails when provider is unknown", () => {
+  it("fast-fails when API key is missing", () => {
     expect(() =>
       createLlmService({
-        provider: "local" as never,
-        apiKey: "key",
+        provider: "openai",
+        apiKey: "",
       }),
-    ).toThrow("Unsupported LLM provider");
+    ).toThrow("LLM API key is required");
   });
 });
 
 describe("createLlmServiceFromEnv", () => {
   it("fast-fails when provider is configured without an API key", () => {
     expect(() =>
-      createLlmServiceFromEnv({
-        LLM_PROVIDER: "openai",
-      }),
-    ).toThrow("LLM_API_KEY is required");
+      createLlmServiceFromEnv({ LLM_PROVIDER: "openai" }),
+    ).toThrow("LLM API key is required");
   });
 
   it("uses env provider, base URL, and model", async () => {
-    let capturedUrl: RequestInfo | URL | undefined;
-    let capturedInit: RequestInit | undefined;
+    const completeMock = vi
+      .fn()
+      .mockResolvedValue(fakeCompleteResponse("ok", "custom-model"));
     const llm = createLlmServiceFromEnv(
       {
         LLM_PROVIDER: "openai",
@@ -122,26 +88,58 @@ describe("createLlmServiceFromEnv", () => {
         LLM_BASE_URL: "https://compatible.example/v1",
         LLM_MODEL: "custom-model",
       },
-      {
-        fetch: async (input, init) => {
-          capturedUrl = input;
-          capturedInit = init;
-          return {
-            ok: true,
-            status: 200,
-            json: async () => successResponse("ok"),
-            text: async () => "",
-          } as Response;
-        },
+      { completeFn: completeMock },
+    );
+    await llm.call([{ role: "user", content: "hello" }]);
+    const [model, , options] = completeMock.mock.calls[0]!;
+    expect(model.id).toBe("custom-model");
+    expect(model.baseUrl).toBe("https://compatible.example/v1");
+    expect(options).toMatchObject({ apiKey: "openai-key" });
+  });
+});
+
+describe("createLlmService (pi-ai backed)", () => {
+  it("converts LlmMessage[] to pi-ai Context, calls complete(), maps response", async () => {
+    const completeMock = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "Hello back" }],
+      usage: {
+        input: 12,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
       },
+      stopReason: "end_turn",
+      model: { id: "claude-3-5-haiku-latest", name: "Claude Haiku" },
+    });
+
+    const service = createLlmService({
+      provider: "anthropic",
+      apiKey: "sk-test",
+      model: "claude-3-5-haiku-latest",
+      completeFn: completeMock,
+    });
+
+    const response = await service.call(
+      [
+        { role: "system", content: "You are helpful." },
+        { role: "user", content: "Say hi" },
+      ],
+      { maxTokens: 64 },
     );
 
-    if (!llm) {
-      throw new Error("expected LLM service");
-    }
-    await llm.call([{ role: "user", content: "hello" }]);
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    const [model, context, options] = completeMock.mock.calls[0]!;
+    expect(model.id).toBe("claude-3-5-haiku-latest");
+    expect(context.systemPrompt).toBe("You are helpful.");
+    expect(context.messages).toEqual([{ role: "user", content: "Say hi" }]);
+    expect(options).toMatchObject({ apiKey: "sk-test", maxTokens: 64 });
 
-    expect(String(capturedUrl)).toBe("https://compatible.example/v1/chat/completions");
-    expect(JSON.parse(String(capturedInit?.body))).toMatchObject({ model: "custom-model" });
+    expect(response).toMatchObject({
+      content: "Hello back",
+      model: "claude-3-5-haiku-latest",
+      usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
+      finishReason: "end_turn",
+    });
   });
 });

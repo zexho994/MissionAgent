@@ -555,7 +555,7 @@ function renderChatContent(data) {
     if (message.type === "mission_brief") {
       // Only render brief once - the first mission_brief message
       if (!briefRendered) {
-        parts.push(renderBriefMessage(data));
+        parts.push(renderBriefMessage(data, message));
         briefRendered = true;
       }
     } else if (message.type === "team_created") {
@@ -635,8 +635,20 @@ function renderChatContent(data) {
   return parts.join("");
 }
 
-function renderBriefMessage(data) {
-  const brief = data.mission.brief;
+function renderBriefMessage(data, message) {
+  // Try data.mission.brief first, fallback to parsing message.content as JSON
+  let brief = data.mission.brief;
+  if (!brief && message.content) {
+    try {
+      const parsed = JSON.parse(message.content);
+      // Check if it looks like a brief object (has goal field)
+      if (parsed && typeof parsed.goal === "string") {
+        brief = parsed;
+      }
+    } catch {
+      // Not valid JSON, ignore
+    }
+  }
   if (!brief) return "";
   const fullContent = `
     <strong>Owner Agent · MissionBrief</strong>
