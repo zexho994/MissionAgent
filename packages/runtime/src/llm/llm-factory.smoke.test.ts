@@ -24,7 +24,7 @@ describe.skipIf(!SMOKE)("llm-factory smoke (real pi-ai call)", () => {
         { role: "system", content: "Reply with exactly the word OK." },
         { role: "user", content: "Reply now." },
       ],
-      { maxTokens: 16 },
+      { maxTokens: 256 },
     );
     expect(response.content.trim().length).toBeGreaterThan(0);
     expect(response.usage.totalTokens).toBeGreaterThan(0);

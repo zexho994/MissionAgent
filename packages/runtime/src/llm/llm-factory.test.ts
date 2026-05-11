@@ -26,7 +26,7 @@ describe("createLlmService", () => {
     expect(options).toMatchObject({ apiKey: "glm-key" });
   });
 
-  it("minimax provider resolves to openai pi-provider with minimax defaults", async () => {
+  it("minimax provider resolves to pi minimax-cn provider with anthropic-compatible endpoint", async () => {
     const completeMock = vi
       .fn()
       .mockResolvedValue(fakeCompleteResponse("ok", "MiniMax-M2.7-highspeed"));
@@ -38,7 +38,9 @@ describe("createLlmService", () => {
     await llm.call([{ role: "user", content: "hello" }]);
     const [model, , options] = completeMock.mock.calls[0]!;
     expect(model.id).toBe("MiniMax-M2.7-highspeed");
-    expect(model.baseUrl).toBe("https://api.minimax.io/v1");
+    expect(model.provider).toBe("minimax-cn");
+    expect(model.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+    expect(model.api).toBe("anthropic-messages");
     expect(options).toMatchObject({ apiKey: "minimax-key" });
   });
 

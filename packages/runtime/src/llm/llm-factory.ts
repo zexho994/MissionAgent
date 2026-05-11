@@ -43,9 +43,8 @@ const providerMap: Record<LlmProvider, ProviderResolution> = {
   anthropic: { piProvider: "anthropic", defaultModel: "claude-3-5-haiku-latest" },
   claude: { piProvider: "anthropic", defaultModel: "claude-3-5-haiku-latest" },
   minimax: {
-    piProvider: "openai",
+    piProvider: "minimax-cn",
     defaultModel: "MiniMax-M2.7-highspeed",
-    baseUrlOverride: "https://api.minimax.io/v1",
   },
 };
 
