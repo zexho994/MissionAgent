@@ -1072,7 +1072,7 @@ export class InMemoryMissionService {
       taskId: runningTask.id,
       executionId: execution.id,
       agentId: worker.id,
-      toolName: "openclaw.agent",
+      toolName: "pi.agent",
       status: "running",
       input: { taskId: runningTask.id },
       startedAt: execution.startedAt,
@@ -1119,6 +1119,7 @@ export class InMemoryMissionService {
       .runAgentTask({
         message: buildAgentMessage({ message: input.message, mission, task }),
         timeoutSeconds: 300,
+        sessionId: input.missionId,
         ...(systemPrompt ? { systemPrompt } : {}),
       })
       .then((result) => {
@@ -1127,8 +1128,8 @@ export class InMemoryMissionService {
           executionId: execution.id,
           missionId: input.missionId,
           taskId: input.taskId,
-          content: { openclaw: result.output, stderr: result.stderr },
-          evidence: ["openclaw:local"],
+          content: { pi: result.output, stderr: result.stderr },
+          evidence: ["pi:local"],
           sources,
         });
       })

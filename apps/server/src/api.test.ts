@@ -122,7 +122,7 @@ describe("handleApiRequest", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
         ok: true,
-        openclaw: { available: true, version: "test-pi" },
+        pi: { available: true, version: "test-pi" },
         counts: { missions: 0, tasks: 0, artifacts: 0, reviews: 0, executions: 0 },
       });
   });
@@ -371,7 +371,7 @@ describe("handleApiRequest", () => {
     const response = await handleApiRequest(
       {
         method: "POST",
-        path: "/api/openclaw/run",
+        path: "/api/pi/run",
         body: {
           missionId: mission.id,
           taskId: task.id,

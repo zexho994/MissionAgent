@@ -37,7 +37,7 @@ const artifact: Artifact = {
   taskId: "task_1",
   type: "execution_log",
   content: { summary: "Plan with next actions" },
-  evidence: ["openclaw:local"],
+  evidence: ["pi:local"],
   sources: [],
   qualityScore: 0.86,
   createdAt: new Date("2026-05-05T00:01:00.000Z"),

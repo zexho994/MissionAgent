@@ -17,9 +17,6 @@ export interface ApiResponse {
 export interface ApiDependencies {
   missions: InMemoryMissionService;
   // Field name kept neutral as runtime to allow swapping execution adapters.
-  // The /api/health JSON response still surfaces the runtime status under the
-  // legacy key `openclaw` to preserve the public response shape; that key is
-  // renamed in Plan 6 v2.
   runtime: Pick<PiCliAdapter, "health" | "runAgentTask">;
 }
 
@@ -32,7 +29,7 @@ export async function handleApiRequest(
       const snapshot = deps.missions.snapshot();
       return json(200, {
         ok: true,
-        openclaw: await deps.runtime.health(),
+        pi: await deps.runtime.health(),
         counts: {
           missions: snapshot.missions.length,
           tasks: snapshot.tasks.length,
@@ -245,7 +242,7 @@ export async function handleApiRequest(
       return json(201, { entry, snapshot: deps.missions.snapshot() });
     }
 
-    if (request.method === "POST" && request.path === "/api/openclaw/run") {
+    if (request.method === "POST" && request.path === "/api/pi/run") {
       const body = expectObject(request.body);
       const missionId = expectString(body.missionId, "missionId");
       const taskId = expectString(body.taskId, "taskId");

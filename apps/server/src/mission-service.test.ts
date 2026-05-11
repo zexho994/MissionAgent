@@ -232,11 +232,11 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task.id,
       content: {
-        openclaw: {
+        pi: {
           payloads: [{ text: "Harness learning image prompt and core knowledge map" }],
         },
       },
-      evidence: ["openclaw:local"],
+      evidence: ["pi:local"],
       sources: [],
     });
 
@@ -244,7 +244,7 @@ describe("InMemoryMissionService", () => {
     const worker = snapshot.agents.find((agent) => agent.role === "researcher" && agent.missionId === mission.id);
     if (!worker) throw new Error("missing worker");
 
-    expect(snapshot.tasks.some((candidate) => candidate.assigneeAgentId === "openclaw_runner")).toBe(true);
+    expect(snapshot.tasks.some((candidate) => candidate.assigneeAgentId === "pi_runner")).toBe(true);
     expect(snapshot.toolCalls.some((call) => call.agentId === worker.id && call.status === "completed")).toBe(true);
     expect(snapshot.agentMessages.some((message) => message.fromAgentId === worker.id && message.type === "execution_completed")).toBe(true);
     expect(snapshot.artifacts.some((artifact) => artifact.taskId === task.id)).toBe(true);
@@ -537,12 +537,12 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task.id,
       content: {
-        openclaw: {
+        pi: {
           payloads: [{ text: "Xiaohongshu account growth plan: daily review generated successfully" }],
           meta: { durationMs: 5000 },
         },
       },
-      evidence: ["openclaw:local"],
+      evidence: ["pi:local"],
       sources: [],
     });
 
@@ -593,11 +593,11 @@ describe("InMemoryMissionService", () => {
       taskId: task!.id,
       executionId: execution.id,
       content: {
-        openclaw: {
+        pi: {
           payloads: [{ text: "Grow a GitHub repository with next actions for repository growth and review cadence" }],
         },
       },
-      evidence: ["openclaw:local"],
+      evidence: ["pi:local"],
       sources: [],
     });
 
@@ -625,8 +625,8 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task!.id,
       executionId: execution.id,
-      content: { openclaw: "" },
-      evidence: ["openclaw:local"],
+      content: { pi: "" },
+      evidence: ["pi:local"],
       sources: [],
     });
 
@@ -744,7 +744,7 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task.id,
       content: { text: "some text" },
-      evidence: ["openclaw:local"],
+      evidence: ["pi:local"],
       sources: [],
     });
 
@@ -771,11 +771,11 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task.id,
       content: {
-        openclaw: {
+        pi: {
           payloads: [{ text: "Short text about image prompt without actual image generation" }],
         },
       },
-      evidence: ["openclaw:local"],
+      evidence: ["pi:local"],
       sources: [],
     });
 
@@ -1372,11 +1372,11 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task!.id,
       content: {
-        openclaw: {
+        pi: {
           payloads: [{ text: "Mission is runnable and execution completed successfully" }],
         },
       },
-      evidence: ["openclaw:local"],
+      evidence: ["pi:local"],
       sources: [],
     });
 
@@ -1429,11 +1429,11 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task.id,
       content: {
-        openclaw: {
+        pi: {
           payloads: [{ text: "Xiaohongshu account growth plan: daily review generated successfully" }],
         },
       },
-      evidence: ["openclaw:local"],
+      evidence: ["pi:local"],
       sources: [],
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
