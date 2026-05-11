@@ -117,24 +117,27 @@ function resolveModel(input: {
 }): Model<any> {
   try {
     const m = getModel(input.piProvider as any, input.modelId as any);
-    if (input.baseUrl) {
-      return { ...m, baseUrl: input.baseUrl };
+    if (m) {
+      if (input.baseUrl) {
+        return { ...m, baseUrl: input.baseUrl };
+      }
+      return m;
     }
-    return m;
   } catch {
-    return {
-      id: input.modelId,
-      name: input.modelId,
-      api: "openai-completions",
-      provider: input.piProvider,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
-    } as Model<any>;
+    // fall through to custom shape
   }
+  return {
+    id: input.modelId,
+    name: input.modelId,
+    api: "openai-completions",
+    provider: input.piProvider,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 4096,
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+  } as Model<any>;
 }
 
 function toContext(messages: LlmMessage[]): Context {
