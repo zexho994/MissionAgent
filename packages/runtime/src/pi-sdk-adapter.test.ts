@@ -82,4 +82,48 @@ describe("PiSdkAdapter", () => {
       { url: "https://b.example", title: "B", searchKeyword: "hello" },
     ]);
   });
+
+  it("returns failed status when prompt throws (exception isolation fence)", async () => {
+    const fakeAgent = {
+      prompt: vi.fn().mockRejectedValue(new Error("pi blew up")),
+      subscribe: vi.fn(),
+      state: { messages: [{ role: "user", content: "x" }] },
+    };
+
+    const adapter = new PiSdkAdapter({
+      apiKey: "k",
+      agentFactory: (() => fakeAgent) as never,
+    });
+
+    const result = await adapter.runAgentTask({
+      message: "x",
+      timeoutSeconds: 5,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe("pi blew up");
+    expect(result.stderr).toBe("pi blew up");
+    expect(result.sources).toEqual([]);
+  });
+
+  it("returns failed status when prompt does not resolve in time", async () => {
+    const fakeAgent = {
+      prompt: vi.fn().mockImplementation(() => new Promise(() => {})),
+      subscribe: vi.fn(),
+      state: { messages: [] },
+    };
+
+    const adapter = new PiSdkAdapter({
+      apiKey: "k",
+      agentFactory: (() => fakeAgent) as never,
+    });
+
+    const result = await adapter.runAgentTask({
+      message: "x",
+      timeoutSeconds: 0.05,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/timed out/);
+  });
 });
