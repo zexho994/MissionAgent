@@ -8,11 +8,10 @@
  * Backend is configured via:
  * - `WEB_SEARCH_API_KEY` env var (or `apiKey` option) — required; without it the tool returns empty results.
  * - `WEB_SEARCH_BACKEND_URL` env var (or `endpoint` option) — defaults to Brave Search.
- *
- * The pi extension default export is untyped (`pi: any`) because the project does not
- * depend on `@earendil-works/pi-coding-agent`. Pi loads the extension via jiti at runtime;
- * types are not required for execution.
  */
+
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 const DEFAULT_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 
@@ -86,31 +85,21 @@ export async function searchWeb(options: SearchOptions): Promise<SearchResponse>
   return { results, raw: payload };
 }
 
-const WEB_SEARCH_TOOL_PARAMETERS = {
-  type: "object",
-  properties: {
-    query: {
-      type: "string",
-      description: "Search query string",
-    },
-    count: {
-      type: "number",
-      description: "Maximum results to return (optional)",
-    },
-  },
-  required: ["query"],
-  additionalProperties: false,
-};
+const WebSearchParameters = Type.Object({
+  query: Type.String({ description: "Search query string" }),
+  count: Type.Optional(
+    Type.Number({ description: "Maximum results to return (optional)" }),
+  ),
+});
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export default function webSearchExtension(pi: any) {
+export default function webSearchExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
     description:
       "Search the public web. Returns a JSON list of {url, title, snippet}. Sources are also exposed via tool result details.",
-    parameters: WEB_SEARCH_TOOL_PARAMETERS,
-    async execute(_toolCallId: string, params: { query: string; count?: number }) {
+    parameters: WebSearchParameters,
+    async execute(_toolCallId, params) {
       const opts: SearchOptions = { query: params.query };
       if (params.count !== undefined) opts.count = params.count;
       const search = await searchWeb(opts);

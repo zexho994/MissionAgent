@@ -3,7 +3,13 @@ import { createReadStream, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PiCliAdapter, createLlmServiceFromEnv, type PiCliAdapterOptions } from "@digitalagent/runtime";
+import {
+  PI_EXTENSION_PATHS,
+  PiCliAdapter,
+  createLlmServiceFromEnv,
+  resolvePiBinaryPath,
+  type PiCliAdapterOptions,
+} from "@digitalagent/runtime";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
@@ -15,15 +21,15 @@ const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data",
 
 const llm = createLlmServiceFromEnv(process.env);
 
-// Pi runtime configuration. Set PI_COMMAND to override the binary path.
-// Set PI_EXTENSION_WEB_SEARCH to the absolute path of the built web-search
-// extension JS to enable the web_search tool.
+// Pi runtime configuration.
+// - PI_COMMAND overrides the binary path. Otherwise resolve from the bundled
+//   @earendil-works/pi-coding-agent dependency; fall back to PATH lookup.
+// - PI_EXTENSION_WEB_SEARCH overrides the web-search extension path. Otherwise
+//   use the extension shipped in @digitalagent/runtime.
 const piOptions: PiCliAdapterOptions = {
-  command: process.env.PI_COMMAND ?? "pi",
+  command: process.env.PI_COMMAND ?? resolvePiBinaryPath() ?? "pi",
+  defaultExtensions: [process.env.PI_EXTENSION_WEB_SEARCH ?? PI_EXTENSION_PATHS.webSearch],
 };
-if (process.env.PI_EXTENSION_WEB_SEARCH) {
-  piOptions.defaultExtensions = [process.env.PI_EXTENSION_WEB_SEARCH];
-}
 const pi = new PiCliAdapter(piOptions);
 
 const runtime: MissionExecutionRuntime = {
