@@ -178,7 +178,7 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 | **3** | 安全和监控 | A.4 完整 + 多次重试 + cadence 调度 | Plan 1 + Plan 2 | ✅ 已完成（2026-05-10，cadence 调度推迟到独立 plan） | 3-4 天 |
 | **4** | 浏览器自动化引擎 + 知乎/掘金适配 | A.1 + A.2（浏览器部分） | Plan 1 + Plan 2 | 推迟到 Phase C（看 Phase B 数据决定是否做） | 5-6 天 |
 | **5** | speakin Mission 模板 + 集成测试 | Mission 模板 + 端到端 Plans 1+2+3 集成验证 | Plan 1 + Plan 2 + Plan 3 | ✅ 已完成（2026-05-10） | 1 天 |
-| **6** | **运行时底座迁移**（pi 替换 OpenClaw） | runtime 重构（v1 CLI 替换 + v2 SDK 嵌入） | 与 Plan 4/5 解耦，可并行 | 待写 | v1: 1-2 天；v2: 1-2 周 |
+| **6** | **运行时底座迁移**（pi 替换 OpenClaw） | runtime 重构（v1 CLI 替换 + v2 SDK 嵌入） | 与 Plan 4/5 解耦，可并行 | ✅ v1 已完成（2026-05-11）；v2 待写 | v1: 1-2 天；v2: 1-2 周 |
 
 **节奏建议**：写 1 个 → 执行 1 个 → 用执行中学到的修正下一个 → 写下一个。**不要一次性写 5 个 plan**——执行中会暴露 ROADMAP 没考虑到的细节，后面 plan 都得改。
 
@@ -204,6 +204,21 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 - 任务执行从 `openclaw` 命令切到 `pi` 命令，输出走 JSON 模式
 - 实现一个 pi 的 web 搜索扩展（research / social mission 不能因为换底座退化）
 - agent 角色定义（system prompt）从配置文件下发，替代原 OpenClaw 的"agent 注册表"
+
+**v1 完成（2026-05-11）**：
+- 新增 `PiCliAdapter`（`packages/runtime/src/pi-cli-adapter.ts`）+ 完整单元测试（18 个 case，覆盖 health / runAgentTask / parsePiOutputJson 各种 happy & error path）
+- 新增 pi web-search 扩展（`packages/runtime/src/pi-extensions/web-search.ts`），Brave-shaped JSON API，`WEB_SEARCH_API_KEY` / `WEB_SEARCH_BACKEND_URL` 可覆盖
+- `agent-system.json` 每个角色加 `systemPrompt`；`getRoleSystemPrompt` helper 拼上统一的 JSON 输出格式指令；`mission-service` → `runtime.runAgentTask` 自动下发
+- 打包 `@earendil-works/pi-coding-agent` + `typebox` 为依赖；新增 `pi-resolver.ts` 自动定位 bundle 的 pi 二进制（PATH 仍可覆盖）
+- 删除 `OpenClawCliAdapter` 及其测试；公共 JSON 形状（`content.openclaw` 信封、`/api/health` 的 `openclaw` 字段、`/api/openclaw/run` 路由）按 spec **故意保留**到 v2 一起改名
+- `PI_SMOKE=1` 门控的 smoke 测试 + `pnpm test:smoke` 脚本（成本目标 < USD 0.01/次）
+- 560 个测试全部通过（+ 2 个 PI_SMOKE 烟囱测试默认跳过），typecheck 全绿
+
+**Deferred 到 v2**：
+- artifact `content.openclaw` 信封键、`/api/health` JSON 键、`/api/openclaw/run` 路由统一改名
+- `extractSourcesFromOpenClawOutput` 函数改名 + 改造为消费 pi 事件流
+- LLM provider 多端封装合并到 pi 自带网关
+- SDK 嵌入（砍掉子进程边界）
 
 **v2（1-2 周）：SDK 嵌入，砍进程**
 - 运行时不再 spawn 子进程，pi 作为 npm 包直接进 Node 进程
@@ -323,7 +338,7 @@ Phase B 跑完后看真实数据，从下面 3 条路径选一条：
 
 | 问题 | 影响 | 规划状态 |
 |---|---|---|
-| **任务执行有时跑、有时不跑**（用户实测） | 不稳定，可能 OpenClaw 子进程偶尔启动失败 | ✅ 已添加缓解（2026-05-10）：`OpenClawCliAdapter.runAgentTask` 增加可配置 retry（默认 2 次，指数退避 1s/2s）+ 结构化失败日志。timeout（exit 124）不重试。Phase B 跑通后若仍频繁出错，再考虑 Plan 6 (pi 迁移)。 |
+| **任务执行有时跑、有时不跑**（用户实测） | 不稳定，可能 OpenClaw 子进程偶尔启动失败 | ✅ Plan 6 v1 已替换 OpenClaw → pi（2026-05-11），本风险闭环。Plan 6 v2 进一步去掉子进程边界，整体稳定性还会再提一档。 |
 
 ---
 
