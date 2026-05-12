@@ -55,9 +55,10 @@ import { AgentAutonomyService } from "./agent-autonomy.js";
 import { MissionScheduler, type SchedulerClock, type SchedulerDeps } from "./mission-scheduler.js";
 import {
   buildAgentMessage,
-  extractSourcesFromOpenClawOutput,
+  extractSourcesFromPiOutput,
   type MissionExecutionRuntime,
 } from "./runtime-bridge.js";
+import { migrateOpenClawToPi } from "./store-migration.js";
 import {
   buildExecutionFailureFeedback,
   buildExecutionResultFeedback,
@@ -1072,7 +1073,7 @@ export class InMemoryMissionService {
       taskId: runningTask.id,
       executionId: execution.id,
       agentId: worker.id,
-      toolName: "openclaw.agent",
+      toolName: "pi.agent",
       status: "running",
       input: { taskId: runningTask.id },
       startedAt: execution.startedAt,
@@ -1119,16 +1120,17 @@ export class InMemoryMissionService {
       .runAgentTask({
         message: buildAgentMessage({ message: input.message, mission, task }),
         timeoutSeconds: 300,
+        sessionId: input.missionId,
         ...(systemPrompt ? { systemPrompt } : {}),
       })
       .then((result) => {
-        const sources = extractSourcesFromOpenClawOutput(result.output);
+        const sources = extractSourcesFromPiOutput(result.output, result.sources ?? []);
         this.submitExecutionResult({
           executionId: execution.id,
           missionId: input.missionId,
           taskId: input.taskId,
-          content: { openclaw: result.output, stderr: result.stderr },
-          evidence: ["openclaw:local"],
+          content: { pi: result.output, stderr: result.stderr },
+          evidence: ["pi:local"],
           sources,
         });
       })
@@ -3444,7 +3446,13 @@ export class InMemoryMissionService {
     if (!raw.trim()) {
       return;
     }
-    const stored = JSON.parse(raw) as StoredMissionSnapshot;
+    const migration = migrateOpenClawToPi(raw);
+    if (migration.migrated) {
+      writeFileSync(this.storageFile, migration.json, "utf8");
+      console.log("[store-migration] rewrote openclaw -> pi keys in", this.storageFile);
+    }
+    const json = migration.migrated ? migration.json : raw;
+    const stored = JSON.parse(json) as StoredMissionSnapshot;
     if (stored.schemaVersion !== 1) {
       throw new Error(`Unsupported mission store schema version: ${String(stored.schemaVersion)}`);
     }

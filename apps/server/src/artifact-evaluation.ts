@@ -8,12 +8,12 @@ export function evaluateArtifactQuality(
   let score = 0.5;
   let decision: "approve" | "revise" | "reject" = "approve";
 
-  const openclaw = content.openclaw as Record<string, unknown> | undefined;
-  if (!openclaw) {
+  const pi = content.pi as Record<string, unknown> | undefined;
+  if (!pi) {
     return { score: 0.1, decision: "reject", comments: ["Artifact has no OpenClaw output"] };
   }
 
-  const payloads = openclaw.payloads as Array<Record<string, unknown>> | undefined;
+  const payloads = pi.payloads as Array<Record<string, unknown>> | undefined;
   const agentText = payloads?.[0]?.text as string | undefined;
 
   if (!agentText || agentText.trim().length < 20) {
@@ -35,7 +35,7 @@ export function evaluateArtifactQuality(
   }
 
   // Evaluate sources for research missions
-  const sources = extractSourcesFromContent(openclaw);
+  const sources = extractSourcesFromContent(pi);
   if (sources.length > 0) {
     score += 0.1;
     comments.push(`Artifact includes ${sources.length} source(s)`);
@@ -119,11 +119,11 @@ export function evaluateArtifactQuality(
  * Extracts source information from OpenClaw output content.
  * Supports the same formats as extractSourcesFromOpenClawOutput in api.ts.
  */
-function extractSourcesFromContent(openclaw: Record<string, unknown>): Source[] {
+function extractSourcesFromContent(pi: Record<string, unknown>): Source[] {
   const sources: Source[] = [];
 
   // Check for searchResults array
-  const searchResults = openclaw.searchResults as Array<Record<string, unknown>> | undefined;
+  const searchResults = pi.searchResults as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(searchResults)) {
     for (const result of searchResults) {
       if (result.url && typeof result.url === "string") {
@@ -140,7 +140,7 @@ function extractSourcesFromContent(openclaw: Record<string, unknown>): Source[] 
   }
 
   // Check for sources array
-  const directSources = openclaw.sources as Array<Record<string, unknown>> | undefined;
+  const directSources = pi.sources as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(directSources)) {
     for (const source of directSources) {
       if (source.url && typeof source.url === "string") {
@@ -156,7 +156,7 @@ function extractSourcesFromContent(openclaw: Record<string, unknown>): Source[] 
   }
 
   // Check for webSearch object
-  const webSearch = openclaw.webSearch as Record<string, unknown> | undefined;
+  const webSearch = pi.webSearch as Record<string, unknown> | undefined;
   if (webSearch && typeof webSearch === "object") {
     const searchKeyword = typeof webSearch.searchKeyword === "string" ? webSearch.searchKeyword : undefined;
     const results = webSearch.results as Array<Record<string, unknown>> | undefined;
@@ -174,7 +174,7 @@ function extractSourcesFromContent(openclaw: Record<string, unknown>): Source[] 
   }
 
   // Check payloads for source references
-  const payloads = openclaw.payloads as Array<Record<string, unknown>> | undefined;
+  const payloads = pi.payloads as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(payloads)) {
     for (const payload of payloads) {
       if (payload.sources && Array.isArray(payload.sources)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { searchWeb } from "./web-search.js";
+import { searchWeb, createWebSearchTool } from "./web-search.js";
 
 describe("searchWeb", () => {
   const originalEnv = { ...process.env };
@@ -123,6 +123,45 @@ describe("searchWeb", () => {
     expect(String(url)).toMatch(/^https:\/\/env\.example\.com\/search/);
     expect((init as RequestInit).headers).toMatchObject({
       "X-Subscription-Token": "env-key",
+    });
+  });
+});
+
+describe("createWebSearchTool", () => {
+  it("returns an AgentTool with web_search shape", () => {
+    const tool = createWebSearchTool({ apiKey: "k", endpoint: "https://api.test" });
+    expect(tool.name).toBe("web_search");
+    expect(tool.parameters).toBeDefined();
+    expect(typeof tool.execute).toBe("function");
+  });
+
+  it("execute calls searchWeb with toolOptions overrides and returns details with sources", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        web: {
+          results: [{ url: "https://x.example", title: "X", description: "snip-x" }],
+        },
+      }),
+    } as unknown as Response);
+
+    const tool = createWebSearchTool({
+      apiKey: "k",
+      endpoint: "https://api.test",
+      fetch: fetchMock,
+    });
+
+    const result = await tool.execute("call-id-1", { query: "hello" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain("q=hello");
+    expect((init as RequestInit).headers).toMatchObject({ "X-Subscription-Token": "k" });
+
+    expect(result.details).toMatchObject({
+      searchKeyword: "hello",
+      sources: [{ url: "https://x.example", title: "X", snippet: "snip-x" }],
     });
   });
 });

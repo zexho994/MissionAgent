@@ -5,10 +5,12 @@ export interface MissionExecutionRuntime {
     message: string;
     timeoutSeconds: number;
     systemPrompt?: string;
+    sessionId?: string;
   }): Promise<{
     status: string;
     output: unknown;
     stderr: string;
+    sources?: Source[];
   }>;
 }
 
@@ -34,20 +36,36 @@ export function buildAgentMessage(input: {
 }
 
 /**
- * Extracts source information from OpenClaw agent output.
- * The OpenClaw output may contain search results in various formats:
+ * Extracts source information from pi runtime output, merged with any sources
+ * pre-collected from the pi event stream (`tool_execution_end` events).
+ *
+ * pi output may contain search results in various legacy formats (kept for
+ * backwards compatibility with v1 artifacts):
  * - searchResults: Array of {url, title, snippet, searchKeyword}
  * - sources: Array of {url, title, snippet}
  * - webSearch: Object with searchKeyword and results
+ * - payloads[].sources / payloads[].searchResults
+ *
+ * preCollected sources from the adapter's event-stream subscription take
+ * precedence (deduped by URL).
  */
-export function extractSourcesFromOpenClawOutput(output: unknown): Source[] {
-  const sources: Source[] = [];
+export function extractSourcesFromPiOutput(
+  output: unknown,
+  preCollected: Source[] = [],
+): Source[] {
+  const sources: Source[] = [...preCollected];
+  const seen = new Set(sources.map((s) => s.url));
 
   if (!output || typeof output !== "object") {
     return sources;
   }
 
   const record = output as Record<string, unknown>;
+  const push = (src: Source): void => {
+    if (seen.has(src.url)) return;
+    sources.push(src);
+    seen.add(src.url);
+  };
 
   // Check for searchResults array
   const searchResults = record.searchResults as Array<Record<string, unknown>> | undefined;
@@ -58,11 +76,8 @@ export function extractSourcesFromOpenClawOutput(output: unknown): Source[] {
         if (typeof result.title === "string") src.title = result.title;
         if (typeof result.snippet === "string") src.snippet = result.snippet;
         if (typeof result.searchKeyword === "string") src.searchKeyword = result.searchKeyword;
-        sources.push(src);
+        push(src);
       }
-    }
-    if (sources.length > 0) {
-      return sources;
     }
   }
 
@@ -74,11 +89,8 @@ export function extractSourcesFromOpenClawOutput(output: unknown): Source[] {
         const src: Source = { url: source.url };
         if (typeof source.title === "string") src.title = source.title;
         if (typeof source.snippet === "string") src.snippet = source.snippet;
-        sources.push(src);
+        push(src);
       }
-    }
-    if (sources.length > 0) {
-      return sources;
     }
   }
 
@@ -94,36 +106,35 @@ export function extractSourcesFromOpenClawOutput(output: unknown): Source[] {
           if (typeof result.title === "string") src.title = result.title;
           if (typeof result.snippet === "string") src.snippet = result.snippet;
           if (searchKeyword) src.searchKeyword = searchKeyword;
-          sources.push(src);
+          push(src);
         }
       }
     }
   }
 
-  // Check payloads for source references (common pattern in OpenClaw outputs)
+  // Check payloads for source references (common pattern in v1 artifacts)
   const payloads = record.payloads as Array<Record<string, unknown>> | undefined;
   if (Array.isArray(payloads)) {
     for (const payload of payloads) {
       if (payload.sources && Array.isArray(payload.sources)) {
         for (const source of payload.sources as Array<Record<string, unknown>>) {
           if (source.url && typeof source.url === "string") {
-            const src: { url: string; title?: string; snippet?: string } = { url: source.url };
+            const src: Source = { url: source.url };
             if (typeof source.title === "string") src.title = source.title;
             if (typeof source.snippet === "string") src.snippet = source.snippet;
-            sources.push(src);
+            push(src);
           }
         }
       }
-      // Also check for searchResults within payload
       const payloadSearchResults = payload.searchResults as Array<Record<string, unknown>> | undefined;
       if (Array.isArray(payloadSearchResults)) {
         for (const result of payloadSearchResults) {
           if (result.url && typeof result.url === "string") {
-            const src: { url: string; title?: string; snippet?: string; searchKeyword?: string } = { url: result.url };
+            const src: Source = { url: result.url };
             if (typeof result.title === "string") src.title = result.title;
             if (typeof result.snippet === "string") src.snippet = result.snippet;
             if (typeof result.searchKeyword === "string") src.searchKeyword = result.searchKeyword;
-            sources.push(src);
+            push(src);
           }
         }
       }

@@ -1,17 +1,17 @@
 /**
- * Web search pi extension.
+ * Web search pi extension (pi-agent-core AgentTool shape).
  *
  * Two exports:
- * - `searchWeb`: pure function (tested) that calls a Brave-shaped JSON web search API.
- * - default: pi extension factory that registers a `web_search` tool wrapping `searchWeb`.
+ * - `searchWeb`: pure function that calls a Brave-shaped JSON web search API.
+ * - `createWebSearchTool`: factory that returns an `AgentTool` consumed by the pi-agent-core Agent.
  *
  * Backend is configured via:
  * - `WEB_SEARCH_API_KEY` env var (or `apiKey` option) — required; without it the tool returns empty results.
  * - `WEB_SEARCH_BACKEND_URL` env var (or `endpoint` option) — defaults to Brave Search.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 const DEFAULT_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 
@@ -85,6 +85,12 @@ export async function searchWeb(options: SearchOptions): Promise<SearchResponse>
   return { results, raw: payload };
 }
 
+export interface WebSearchToolOptions {
+  apiKey?: string;
+  endpoint?: string;
+  fetch?: typeof fetch;
+}
+
 const WebSearchParameters = Type.Object({
   query: Type.String({ description: "Search query string" }),
   count: Type.Optional(
@@ -92,8 +98,10 @@ const WebSearchParameters = Type.Object({
   ),
 });
 
-export default function webSearchExtension(pi: ExtensionAPI): void {
-  pi.registerTool({
+export function createWebSearchTool(
+  toolOptions: WebSearchToolOptions = {},
+): AgentTool<typeof WebSearchParameters> {
+  return {
     name: "web_search",
     label: "Web Search",
     description:
@@ -102,6 +110,9 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
     async execute(_toolCallId, params) {
       const opts: SearchOptions = { query: params.query };
       if (params.count !== undefined) opts.count = params.count;
+      if (toolOptions.apiKey !== undefined) opts.apiKey = toolOptions.apiKey;
+      if (toolOptions.endpoint !== undefined) opts.endpoint = toolOptions.endpoint;
+      if (toolOptions.fetch !== undefined) opts.fetch = toolOptions.fetch;
       const search = await searchWeb(opts);
       const text =
         search.results.length === 0
@@ -116,5 +127,5 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         },
       };
     },
-  });
+  };
 }
