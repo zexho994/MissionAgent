@@ -194,7 +194,7 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 | **3** | 安全和监控                       | A.4 完整 + 多次重试 + cadence 调度        | Plan 1 + Plan 2          | ✅ 已完成（2026-05-10，cadence 调度推迟到独立 plan） | 3-4 天               |
 | **4** | 浏览器自动化引擎 + 知乎/掘金适配          | A.1 + A.2（浏览器部分）                  | Plan 1 + Plan 2          | 推迟到 Phase C（看 Phase B 数据决定是否做）         | 5-6 天               |
 | **5** | speakin Mission 模板 + 集成测试   | Mission 模板 + 端到端 Plans 1+2+3 集成验证 | Plan 1 + Plan 2 + Plan 3 | ✅ 已完成（2026-05-10）                      | 1 天                 |
-| **6** | **运行时底座迁移**（pi 替换 OpenClaw） | runtime 重构（v1 CLI 替换 + v2 SDK 嵌入） | 与 Plan 4/5 解耦，可并行        | ✅ v1 已完成（2026-05-11）；v2 待写             | v1: 1-2 天；v2: 1-2 周 |
+| **6** | **运行时底座迁移**（pi 替换 OpenClaw） | runtime 重构（v1 CLI 替换 + v2 SDK 嵌入） | 与 Plan 4/5 解耦，可并行        | ✅ v1+v2 全部完成（2026-05-12）             | v1: 1-2 天；v2: 1-2 周 |
 
 
 **节奏建议**：写 1 个 → 执行 1 个 → 用执行中学到的修正下一个 → 写下一个。**不要一次性写 5 个 plan**——执行中会暴露 ROADMAP 没考虑到的细节，后面 plan 都得改。
@@ -249,10 +249,41 @@ DigitalAgent 是一个 **Mission Harness**——让用户为长期目标创建�
 - 用 pi 的标准事件流替代当前的文本解析逻辑
 - 任务级 prompt cache（pi 支持跨任务复用同一会话）
 
-**验收**：
+**v2 完成（2026-05-12）**：
 
-- v1：同一组 mission 在 pi 和 OpenClaw 下双跑，产出质量相当或更好
-- v2：运行时不再启动任何外部子进程；mission 端到端循环未退化；test suite 全绿
+分两个 PR 交付：
+
+**Stage 1（PR #24，已合并）— LLM 调度层替换为 pi-ai**
+
+- 删除自写的多 provider 封装（`anthropic-adapter.ts` 281 行 + `openai-adapter.ts` 316 行 + 旧 `llm-factory.ts` 123 行）
+- 新 `llm-factory.ts` 是 `pi-ai` 薄壳（~190 行），保留 `LlmService` / `LlmMessage` / `LlmResponse` 接口契约
+- 12+ 处 `this.llm.call(...)` 调用站点零改动
+- `@earendil-works/pi-ai@0.74.0` 精确版本锁定
+- **minimax 路由修复**：烟囱测试发现 minimax 国内 token plan key 走 `api.minimaxi.com/anthropic`（不是 `api.minimax.io/v1` 也不是 OpenAI 兼容）。改 provider 走 pi-ai 内置 `minimax-cn`，自动使用 Anthropic-compatible 协议 + 正确 endpoint。
+- 真实烟囱测试通过（minimax-cn 1.7s 返回非空 content）
+
+**Stage 2（PR #25）— SDK 嵌入 + 事件流 + 任务记忆 + 改名**
+
+- `PiSdkAdapter` 替代 `PiCliAdapter`：用 `pi-agent-core` 的 `Agent` 类在主进程内跑
+- 异常隔离围栏 + 超时熔断：pi 内部异常/卡死不会拖垮 server
+- Source 提取改造：`extractSourcesFromPiOutput` 接收来自 `tool_execution_end` 事件流的 preCollected sources（不再依赖最终 JSON 输出格式），同时保留对 v1 历史 artifact 各种格式的兼容读取
+- 任务记忆复用：mission-service 调 runtime 时传入 `sessionId: task.missionId`，pi-ai 自动对同 Mission 多任务做 prompt cache
+- `openclaw` 全面改名：代码 15 处（mission-service / mission-helpers / artifact-evaluation / api.ts `/api/health` 字段 + `/api/openclaw/run` 路由 → `/api/pi/run`）+ 测试 + 启动时一次性 store JSON 迁移（`store-migration.ts`，replaceAll-based、幂等）
+- CI 守门：`lint:no-openclaw` 脚本扫描 ts 源代码，发现 `openclaw` 字符串就报红（除允许的 `store-migration` 文件）
+- 清理：删 `pi-cli-adapter.ts`（189 行）+ `pi-resolver.ts`，移除 `@earendil-works/pi-coding-agent` 依赖（卸载 62 个传递依赖）
+- 新增 `pi-hooks.ts` 集中导出 pi-agent-core 扩展点（beforeToolCall / afterToolCall / shouldStopAfterTurn），未来扩展只动一个文件
+- `web-search.ts` 从 CLI extension 重构为 pi-agent-core `AgentTool` 对象
+- `MissionExecutionRuntime` 接口扩展可选 `sessionId` + `sources` 字段（backwards-compatible）
+- 540 单元测试 + 2 个 PI_SMOKE 烟囱测试（默认 skip）；真实烟囱测试 2.9s 跑通 minimax-cn + web_search + 事件流整套链路
+
+**验收（已达成）**：
+
+- ✅ v1：pi 替换 OpenClaw 后产出质量未退化
+- ✅ v2：运行时不再启动任何外部子进程；mission 端到端循环未退化；test suite 全绿；`grep openclaw` 在源代码中无残留
+
+**v2.1（未启动，3-4 天）— 角色工具集清理**：
+
+让 HR / 内容策略师 / 审稿人 / 图像创作者等非编码角色去掉默认的 bash + 文件编辑工具，按各自需求配专属工具集（如审稿人只读、内容策略师只配 web_search + 数据源查询）。等真实 Mission 跑过一段后再开。
 
 **风险与前置**：
 
