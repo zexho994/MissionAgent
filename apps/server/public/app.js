@@ -192,7 +192,7 @@ async function runTask(missionId, taskId, message = "Execute the assigned task."
   state.scheduleError = "";
   renderAll();
   try {
-    const result = await api(`/api/openclaw/run`, {
+    const result = await api(`/api/pi/run`, {
       method: "POST",
       body: { missionId, taskId, message },
     });
@@ -250,11 +250,11 @@ async function createScheduleTemplate(missionId, payload, runNow) {
 async function refresh(options = {}) {
   state.config = await api("/api/config");
   const health = await api("/api/health");
-  const version = health.openclaw.version || "unknown";
-  $("openclaw-status").textContent = health.openclaw.available
-    ? (version.startsWith("OpenClaw") ? version : `OpenClaw ${version}`)
-    : "OpenClaw 不可用";
-  $("openclaw-dot").classList.toggle("ok", Boolean(health.openclaw.available));
+  const version = health.pi?.version || "unknown";
+  $("openclaw-status").textContent = health.pi?.available
+    ? (version.startsWith("Pi") || version.startsWith("pi") ? version : `Pi ${version}`)
+    : "Pi 不可用";
+  $("openclaw-dot").classList.toggle("ok", Boolean(health.pi?.available));
 
   state.snapshot = await api("/api/snapshot");
   syncSelectedMission();
