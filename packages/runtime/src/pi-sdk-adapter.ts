@@ -59,7 +59,7 @@ export class PiSdkAdapter {
 
   constructor(options: PiSdkAdapterOptions) {
     this.apiKey = options.apiKey;
-    this.modelProvider = options.modelProvider ?? "minimax";
+    this.modelProvider = options.modelProvider ?? "minimax-cn";
     this.modelId = options.modelId ?? "MiniMax-M2.7-highspeed";
     this.tools = options.tools ?? [];
     this.agentFactory =

@@ -83,6 +83,38 @@ describe("PiSdkAdapter", () => {
     ]);
   });
 
+  it("uses the configured pi-ai provider directly for agent execution", async () => {
+    const fakeAgent = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+      state: { messages: [] },
+    };
+    const agentFactory = vi.fn().mockReturnValue(fakeAgent);
+
+    const adapter = new PiSdkAdapter({
+      apiKey: "k",
+      modelProvider: "minimax-cn",
+      modelId: "MiniMax-M2.7-highspeed",
+      agentFactory: agentFactory as never,
+    });
+
+    await adapter.runAgentTask({
+      message: "do it",
+      timeoutSeconds: 5,
+    });
+
+    expect(agentFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialState: expect.objectContaining({
+          model: expect.objectContaining({
+            provider: "minimax-cn",
+            baseUrl: "https://api.minimaxi.com/anthropic",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("returns failed status when prompt throws (exception isolation fence)", async () => {
     const fakeAgent = {
       prompt: vi.fn().mockRejectedValue(new Error("pi blew up")),

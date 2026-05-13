@@ -6,7 +6,7 @@ const SMOKE = process.env.PI_SMOKE === "1";
 describe.skipIf(!SMOKE)("llm-factory smoke (real pi-ai call)", () => {
   it("returns a non-empty response from a real provider", async () => {
     const env = {
-      LLM_PROVIDER: process.env.LLM_PROVIDER ?? "minimax",
+      LLM_PROVIDER: process.env.LLM_PROVIDER ?? "minimax-cn",
       LLM_API_KEY:
         process.env.LLM_API_KEY ??
         process.env.MINIMAX_API_KEY ??

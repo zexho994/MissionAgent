@@ -1,4 +1,4 @@
-import { complete, getModel, type Context, type Model } from "@earendil-works/pi-ai";
+import { complete, getModel, type Context, type Model, type Provider } from "@earendil-works/pi-ai";
 import type { LlmService } from "./llm-service.js";
 import type {
   LlmCallOptions,
@@ -7,7 +7,7 @@ import type {
   LlmResponse,
 } from "./types.js";
 
-export type LlmProvider = "openai" | "glm" | "claude" | "anthropic" | "minimax";
+export type LlmProvider = Provider;
 
 export type CompleteFn = typeof complete;
 
@@ -27,38 +27,19 @@ export interface CreateLlmServiceFromEnvOptions {
   completeFn?: CompleteFn;
 }
 
-interface ProviderResolution {
-  piProvider: string;
-  defaultModel: string;
-  baseUrlOverride?: string;
-}
-
-const providerMap: Record<LlmProvider, ProviderResolution> = {
-  openai: { piProvider: "openai", defaultModel: "gpt-4o-mini" },
-  glm: {
-    piProvider: "openai",
-    defaultModel: "glm-4-flash",
-    baseUrlOverride: "https://open.bigmodel.cn/api/paas/v4",
-  },
-  anthropic: { piProvider: "anthropic", defaultModel: "claude-3-5-haiku-latest" },
-  claude: { piProvider: "anthropic", defaultModel: "claude-3-5-haiku-latest" },
-  minimax: {
-    piProvider: "minimax-cn",
-    defaultModel: "MiniMax-M2.7-highspeed",
-  },
-};
+const DEFAULT_LLM_PROVIDER: LlmProvider = "minimax-cn";
+const DEFAULT_LLM_MODEL = "MiniMax-M2.7-highspeed";
 
 export function createLlmService(options: CreateLlmServiceOptions): LlmService {
   if (!options.apiKey) {
     throw new Error("LLM API key is required");
   }
-  const resolution = providerMap[options.provider];
-  const modelId = options.model ?? resolution.defaultModel;
+  const modelId = options.model ?? defaultModelForProvider(options.provider);
   const completeFn = options.completeFn ?? complete;
-  const baseUrl = options.baseUrl ?? resolution.baseUrlOverride;
+  const baseUrl = options.baseUrl;
 
   const model = resolveModel({
-    piProvider: resolution.piProvider,
+    piProvider: options.provider,
     modelId,
     ...(baseUrl !== undefined ? { baseUrl } : {}),
   });
@@ -251,9 +232,10 @@ export function createLlmServiceFromEnv(
   env: LlmEnv,
   options?: CreateLlmServiceFromEnvOptions,
 ): LlmService {
-  const provider = (env.LLM_PROVIDER ?? "anthropic") as LlmProvider;
+  const provider = (env.LLM_PROVIDER ?? DEFAULT_LLM_PROVIDER) as LlmProvider;
   const apiKey =
     env.LLM_API_KEY ??
+    env.MINIMAX_API_KEY ??
     env.ANTHROPIC_API_KEY ??
     env.OPENAI_API_KEY ??
     "";
@@ -264,4 +246,9 @@ export function createLlmServiceFromEnv(
     ...(env.LLM_BASE_URL !== undefined ? { baseUrl: env.LLM_BASE_URL } : {}),
     ...(options?.completeFn !== undefined ? { completeFn: options.completeFn } : {}),
   });
+}
+
+function defaultModelForProvider(provider: LlmProvider): string {
+  if (provider === DEFAULT_LLM_PROVIDER) return DEFAULT_LLM_MODEL;
+  throw new Error(`LLM model is required for provider: ${provider}`);
 }

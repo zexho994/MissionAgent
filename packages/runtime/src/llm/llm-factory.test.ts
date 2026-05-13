@@ -11,27 +11,12 @@ function fakeCompleteResponse(text: string, modelId = "test-model") {
 }
 
 describe("createLlmService", () => {
-  it("glm provider resolves to openai pi-provider with glm defaults", async () => {
-    const completeMock = vi.fn().mockResolvedValue(fakeCompleteResponse("ok", "glm-4-flash"));
-    const llm = createLlmService({
-      provider: "glm",
-      apiKey: "glm-key",
-      completeFn: completeMock,
-    });
-    await llm.call([{ role: "user", content: "hello" }]);
-    const [model, , options] = completeMock.mock.calls[0]!;
-    expect(model.provider).toBe("openai");
-    expect(model.id).toBe("glm-4-flash");
-    expect(model.baseUrl).toBe("https://open.bigmodel.cn/api/paas/v4");
-    expect(options).toMatchObject({ apiKey: "glm-key" });
-  });
-
-  it("minimax provider resolves to pi minimax-cn provider with anthropic-compatible endpoint", async () => {
+  it("uses the configured pi-ai provider directly", async () => {
     const completeMock = vi
       .fn()
       .mockResolvedValue(fakeCompleteResponse("ok", "MiniMax-M2.7-highspeed"));
     const llm = createLlmService({
-      provider: "minimax",
+      provider: "minimax-cn",
       apiKey: "minimax-key",
       completeFn: completeMock,
     });
@@ -42,22 +27,6 @@ describe("createLlmService", () => {
     expect(model.baseUrl).toBe("https://api.minimaxi.com/anthropic");
     expect(model.api).toBe("anthropic-messages");
     expect(options).toMatchObject({ apiKey: "minimax-key" });
-  });
-
-  it("claude provider resolves to anthropic pi-provider with anthropic defaults", async () => {
-    const completeMock = vi
-      .fn()
-      .mockResolvedValue(fakeCompleteResponse("hello", "claude-3-5-haiku-latest"));
-    const llm = createLlmService({
-      provider: "claude",
-      apiKey: "claude-key",
-      completeFn: completeMock,
-    });
-    const response = await llm.call([{ role: "user", content: "hello" }]);
-    const [model] = completeMock.mock.calls[0]!;
-    expect(model.provider).toBe("anthropic");
-    expect(model.id).toBe("claude-3-5-haiku-latest");
-    expect(response.content).toBe("hello");
   });
 
   it("fast-fails when API key is missing", () => {
@@ -78,7 +47,7 @@ describe("createLlmService", () => {
       model: { id: "MiniMax-M2.7-highspeed", name: "MiniMax" },
     });
     const llm = createLlmService({
-      provider: "minimax",
+      provider: "minimax-cn",
       apiKey: "minimax-key",
       completeFn: completeMock,
     });
@@ -87,7 +56,7 @@ describe("createLlmService", () => {
       "assistantMsg.content.flatMap is not a function",
     );
     await expect(llm.call([{ role: "user", content: "hello" }])).rejects.toThrow(
-      "provider=minimax",
+      "provider=minimax-cn",
     );
   });
 });
@@ -168,7 +137,7 @@ describe("createLlmService (pi-ai backed)", () => {
   it("serializes assistant history as text content blocks for pi-ai", async () => {
     const completeMock = vi.fn().mockResolvedValue(fakeCompleteResponse("ok"));
     const service = createLlmService({
-      provider: "minimax",
+      provider: "minimax-cn",
       apiKey: "sk-test",
       completeFn: completeMock,
     });

@@ -26,7 +26,7 @@ const apiKey =
   "";
 const pi = new PiSdkAdapter({
   apiKey,
-  modelProvider: process.env.LLM_PROVIDER ?? "minimax",
+  modelProvider: process.env.LLM_PROVIDER ?? "minimax-cn",
   modelId: process.env.LLM_MODEL ?? "MiniMax-M2.7-highspeed",
   tools: [createWebSearchTool({})],
 });
