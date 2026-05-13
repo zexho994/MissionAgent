@@ -164,4 +164,27 @@ describe("createLlmService (pi-ai backed)", () => {
       finishReason: "end_turn",
     });
   });
+
+  it("serializes assistant history as text content blocks for pi-ai", async () => {
+    const completeMock = vi.fn().mockResolvedValue(fakeCompleteResponse("ok"));
+    const service = createLlmService({
+      provider: "minimax",
+      apiKey: "sk-test",
+      completeFn: completeMock,
+    });
+
+    await service.call([
+      { role: "system", content: "You are helpful." },
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi, how can I help?" },
+      { role: "user", content: "Tell me a joke" },
+    ]);
+
+    const [, context] = completeMock.mock.calls[0]!;
+    expect(context.messages).toEqual([
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: [{ type: "text", text: "Hi, how can I help?" }] },
+      { role: "user", content: "Tell me a joke" },
+    ]);
+  });
 });

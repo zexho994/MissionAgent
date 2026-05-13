@@ -154,10 +154,18 @@ function resolveModel(input: {
 
 function toContext(messages: LlmMessage[]): Context {
   const systemParts: string[] = [];
-  const conversational: Array<{ role: "user" | "assistant"; content: string }> = [];
+  const conversational: Array<{
+    role: "user" | "assistant";
+    content: string | Array<{ type: "text"; text: string }>;
+  }> = [];
   for (const m of messages) {
     if (m.role === "system") {
       systemParts.push(m.content);
+    } else if (m.role === "assistant") {
+      conversational.push({
+        role: "assistant",
+        content: [{ type: "text", text: m.content }],
+      });
     } else {
       conversational.push({ role: m.role, content: m.content });
     }
