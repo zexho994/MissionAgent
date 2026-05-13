@@ -7,7 +7,7 @@
 **Architecture:**
 - **资料库**：扩展现有 `KnowledgeEntry` 类型加 `category` 字段，给 AI agent 新增 `archive_to_knowledge` action（写入 `mission-service.setKnowledge` 接口已存在）。前端 War Room 新增"资料库" Tab，按 category 分组 + 时间倒序。
 - **产出 Tab 升级**：复用现有 `PublishAttempt[]` 数据（已在 `MissionPublishTarget.attempts` 里）。后端在 outputs 查询时按 artifactId 聚合所有渠道的最新尝试。前端在产出 Tab 每条产出物下加"发布状态"块。
-- **Owner 动态配置**：给 Owner persona 新增 `configure_publish_target` / `configure_data_source` 两个 action（每个支持 add/update/remove 三种 op），扩展 conversation bus 的 action parser 和 dispatcher，直接调用现有 `mission-service.addPublishTarget` / `removePublishTarget` / `addDataSource` / `removeDataSource`。
+- **Owner 动态配置**：给 Owner persona 新增 `configure_publish_target` / `configure_data_source` 两个 action（每个支持 add/update/remove 三种 op），扩展 conversation bus 的 action parser 和 dispatcher，调用 `mission-service.add/update/removePublishTarget` 与 `add/update/removeDataSource`；如果 update 方法不存在，先补齐 service 方法再接 bus。
 
 **Tech Stack:**
 - TypeScript（strict + exactOptionalPropertyTypes + noUncheckedIndexedAccess）
@@ -20,7 +20,7 @@
 ## File Structure
 
 **Will modify:**
-- `packages/core/src/types.ts` — KnowledgeCategory 类型 + KnowledgeEntry.category 字段
+- `packages/core/src/knowledge-category.ts` / `apps/server/src/knowledge-base.ts` — KnowledgeCategory 类型 + KnowledgeEntry.category 字段
 - `apps/server/src/knowledge-base.ts` — createKnowledgeEntry 加 category
 - `apps/server/src/mission-service.ts` — setKnowledge / listKnowledge 支持 category；产出聚合发布状态
 - `apps/server/src/agent-conversation-types.ts` — 新增 ArchiveToKnowledgePayload、ConfigurePublishTargetPayload、ConfigureDataSourcePayload + 加入 union
@@ -546,20 +546,15 @@ if (
   response.action?.type === "archive_to_knowledge" &&
   this.deps.archiveToKnowledge
 ) {
-  try {
-    this.deps.archiveToKnowledge({
-      missionId: input.missionId,
-      agentId: target.id,
-      payload: response.action.payload,
-    });
-  } catch (error) {
-    console.error(
-      "[AgentConversationBus] archiveToKnowledge failed:",
-      error instanceof Error ? error.message : String(error),
-    );
-  }
+  this.deps.archiveToKnowledge({
+    missionId: input.missionId,
+    agentId: target.id,
+    payload: response.action.payload,
+  });
 }
 ```
+
+不要在 action dispatch 层 catch 后只 `console.error`。归档是用户可见的状态变更；service 抛错时应让 `AgentConversationBus` 外层错误路径把 agent 标记为 blocked，并写入失败消息。
 
 - [ ] **Step 3: mission-service 注入 archiveToKnowledge 回调**
 
@@ -1010,6 +1005,15 @@ export type ConfigurePublishTargetPayload =
       headers?: Record<string, string>;
     }
   | {
+      op: "update";
+      targetId: string;
+      name?: string;
+      url?: string;
+      method?: "POST" | "PUT";
+      contentTypes?: string[];
+      headers?: Record<string, string>;
+    }
+  | {
       op: "remove";
       targetId: string;
     };
@@ -1056,6 +1060,23 @@ describe("parseAgentConversationResponse configure_publish_target", () => {
       action: {
         type: "configure_publish_target",
         payload: { op: "remove", targetId: "pt_123" },
+      },
+    });
+    const parsed = parseAgentConversationResponse(content);
+    expect(parsed.action?.type).toBe("configure_publish_target");
+  });
+
+  it("accepts update op with targetId and at least one changed field", () => {
+    const content = JSON.stringify({
+      message: "Updating target",
+      type: "agent_chat",
+      action: {
+        type: "configure_publish_target",
+        payload: {
+          op: "update",
+          targetId: "pt_123",
+          url: "https://api.example.com/newsletter-v2",
+        },
       },
     });
     const parsed = parseAgentConversationResponse(content);
@@ -1122,6 +1143,29 @@ if (type === "configure_publish_target") {
     };
   }
 
+  if (payload.op === "update") {
+    if (typeof payload.targetId !== "string" || !payload.targetId.trim()) {
+      return { type: "acknowledge" };
+    }
+    const patch: ConfigurePublishTargetPayload = {
+      op: "update",
+      targetId: payload.targetId.trim(),
+    };
+    if (typeof payload.name === "string" && payload.name.trim()) patch.name = payload.name.trim();
+    if (typeof payload.url === "string" && payload.url.trim()) patch.url = payload.url.trim();
+    if (payload.method === "POST" || payload.method === "PUT") patch.method = payload.method;
+    if (Array.isArray(payload.contentTypes)) {
+      patch.contentTypes = payload.contentTypes.filter((c): c is string => typeof c === "string");
+    }
+    if (payload.headers && typeof payload.headers === "object" && !Array.isArray(payload.headers)) {
+      patch.headers = payload.headers as Record<string, string>;
+    }
+    if (!patch.name && !patch.url && !patch.method && !patch.contentTypes && !patch.headers) {
+      return { type: "acknowledge" };
+    }
+    return { type: "configure_publish_target", payload: patch };
+  }
+
   return { type: "acknowledge" };
 }
 ```
@@ -1166,6 +1210,15 @@ export type ConfigureDataSourcePayload =
       body?: string;
     }
   | {
+      op: "update";
+      sourceId: string;
+      name?: string;
+      url?: string;
+      method?: "POST" | "GET";
+      headers?: Record<string, string>;
+      body?: string;
+    }
+  | {
       op: "remove";
       sourceId: string;
     };
@@ -1174,13 +1227,13 @@ export type ConfigureDataSourcePayload =
 
 - [ ] **Step 2: 写 parser 测试**
 
-类似 Task 10 的三个 case：add 成功、remove 成功、malformed 回 acknowledge。
+类似 Task 10 的四个 case：add 成功、update 成功、remove 成功、malformed 回 acknowledge。update 必须有 sourceId 且至少一个可更新字段。
 
 - [ ] **Step 3: 运行看测试失败**
 
 - [ ] **Step 4: 扩展 parseAction**
 
-Add 对应分支，结构同 Task 10 但字段不同（add 接收 url/method/headers/body；remove 接收 sourceId）。
+Add 对应分支，结构同 Task 10 但字段不同（add 接收 url/method/headers/body；update 接收 sourceId 加可选 name/url/method/headers/body，且至少一个字段存在；remove 接收 sourceId）。
 
 - [ ] **Step 5: propagationTargets 排除**
 
@@ -1215,6 +1268,8 @@ configureDataSource?: (input: {
 }) => Promise<void>;
 ```
 
+这些回调必须 fastfail：不要在 bus dispatch 层 catch 后只 `console.error`。配置动作是用户可见的状态变更；service 抛错时应让 `AgentConversationBus` 外层错误路径把 agent 标记为 blocked，并写入失败消息。
+
 - [ ] **Step 2: 在 action dispatch 块加分支**
 
 紧跟 archive_to_knowledge 的 dispatch 之后：
@@ -1223,30 +1278,22 @@ if (
   response.action?.type === "configure_publish_target" &&
   this.deps.configurePublishTarget
 ) {
-  try {
-    await this.deps.configurePublishTarget({
-      missionId: input.missionId,
-      agentId: target.id,
-      payload: response.action.payload,
-    });
-  } catch (error) {
-    console.error("[AgentConversationBus] configurePublishTarget failed:", error);
-  }
+  await this.deps.configurePublishTarget({
+    missionId: input.missionId,
+    agentId: target.id,
+    payload: response.action.payload,
+  });
 }
 
 if (
   response.action?.type === "configure_data_source" &&
   this.deps.configureDataSource
 ) {
-  try {
-    await this.deps.configureDataSource({
-      missionId: input.missionId,
-      agentId: target.id,
-      payload: response.action.payload,
-    });
-  } catch (error) {
-    console.error("[AgentConversationBus] configureDataSource failed:", error);
-  }
+  await this.deps.configureDataSource({
+    missionId: input.missionId,
+    agentId: target.id,
+    payload: response.action.payload,
+  });
 }
 ```
 
@@ -1280,6 +1327,24 @@ configurePublishTarget: async ({ missionId, agentId, payload }) => {
       type: "agent_chat",
       content: `已移除发布渠道（${payload.targetId}）`,
     });
+  } else if (payload.op === "update") {
+    const target = this.updatePublishTarget(missionId, payload.targetId, {
+      name: payload.name,
+      config: payload.url || payload.method || payload.headers
+        ? {
+            ...(payload.url ? { url: payload.url } : {}),
+            ...(payload.method ? { method: payload.method } : {}),
+            ...(payload.headers ? { headers: payload.headers } : {}),
+          }
+        : undefined,
+      contentTypes: payload.contentTypes,
+    });
+    this.appendAgentMessage({
+      missionId,
+      fromAgentId: agentId,
+      type: "agent_chat",
+      content: `已更新发布渠道【${target.name}】（${target.id}）`,
+    });
   }
 },
 configureDataSource: async ({ missionId, agentId, payload }) => {
@@ -1308,10 +1373,34 @@ configureDataSource: async ({ missionId, agentId, payload }) => {
       type: "agent_chat",
       content: `已移除数据源（${payload.sourceId}）`,
     });
+  } else if (payload.op === "update") {
+    const source = this.updateDataSource(missionId, payload.sourceId, {
+      name: payload.name,
+      config: payload.url || payload.method || payload.headers || payload.body
+        ? {
+            ...(payload.url ? { url: payload.url } : {}),
+            ...(payload.method ? { method: payload.method } : {}),
+            ...(payload.headers ? { headers: payload.headers } : {}),
+            ...(payload.body ? { body: payload.body } : {}),
+          }
+        : undefined,
+    });
+    this.appendAgentMessage({
+      missionId,
+      fromAgentId: agentId,
+      type: "agent_chat",
+      content: `已更新数据源【${source.name}】（${source.id}）`,
+    });
   }
 },
 ```
 （核对 `addDataSource` 的入参签名——参考 line 2264 附近现有方法）
+
+如果 `mission-service.ts` 当前没有 update 方法，先新增 `updatePublishTarget` / `updateDataSource`，要求：
+- 找不到 mission/target/source 直接 throw。
+- update patch 为空直接 throw。
+- URL/method/header/body/contentTypes 仍复用现有创建路径的校验规则。
+- 持久化后返回更新后的对象。
 
 - [ ] **Step 4: 写 mission-service 集成测试**
 
@@ -1374,13 +1463,17 @@ In `apps/server/config/agent-system.json` line 174:
 
 Modify `apps/server/src/agent-conversation-bus.ts` callAgent 的 user message，在 archive 指引之后加：
 ```
-If `configure_publish_target` is among your available actions AND the user (or mission context) clearly asked to add/remove a publish channel, you SHOULD return:
+If `configure_publish_target` is among your available actions AND the user (or mission context) clearly asked to add/update/remove a publish channel, you SHOULD return:
 {"action":{"type":"configure_publish_target","payload":{"op":"add","name":"<channel name>","url":"<full URL>","method":"POST","contentTypes":["*"]}}}
+or
+{"action":{"type":"configure_publish_target","payload":{"op":"update","targetId":"<existing target id>","url":"<new full URL>"}}}
 or
 {"action":{"type":"configure_publish_target","payload":{"op":"remove","targetId":"<existing target id>"}}}.
 
-If `configure_data_source` is among your available actions AND the user wants to add/remove an observed data source, you SHOULD return:
+If `configure_data_source` is among your available actions AND the user wants to add/update/remove an observed data source, you SHOULD return:
 {"action":{"type":"configure_data_source","payload":{"op":"add","name":"<source name>","url":"<full URL>","method":"GET"}}}
+or
+{"action":{"type":"configure_data_source","payload":{"op":"update","sourceId":"<existing source id>","url":"<new full URL>"}}}
 or
 {"action":{"type":"configure_data_source","payload":{"op":"remove","sourceId":"<existing source id>"}}}.
 

@@ -59,6 +59,21 @@ async function api(path, options = {}) {
   return json;
 }
 
+function expectPiHealth(health) {
+  if (!health || typeof health !== "object") {
+    throw new Error("Health response must be an object");
+  }
+  const pi = health.pi;
+  if (!pi || typeof pi !== "object") {
+    throw new Error("Health response missing pi runtime status");
+  }
+  if (typeof pi.available !== "boolean") {
+    throw new Error("Health response pi.available must be boolean");
+  }
+  const version = typeof pi.version === "string" && pi.version.trim() ? pi.version.trim() : "unknown";
+  return { available: pi.available, version };
+}
+
 async function loadAutomationState(missionId) {
   if (!missionId) return;
   const [summaryResult, scheduleResult] = await Promise.all([
@@ -250,11 +265,12 @@ async function createScheduleTemplate(missionId, payload, runNow) {
 async function refresh(options = {}) {
   state.config = await api("/api/config");
   const health = await api("/api/health");
-  const version = health.pi?.version || "unknown";
-  $("openclaw-status").textContent = health.pi?.available
+  const piHealth = expectPiHealth(health);
+  const version = piHealth.version;
+  $("openclaw-status").textContent = piHealth.available
     ? (version.startsWith("Pi") || version.startsWith("pi") ? version : `Pi ${version}`)
     : "Pi 不可用";
-  $("openclaw-dot").classList.toggle("ok", Boolean(health.pi?.available));
+  $("openclaw-dot").classList.toggle("ok", piHealth.available);
 
   state.snapshot = await api("/api/snapshot");
   syncSelectedMission();
