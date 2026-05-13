@@ -118,7 +118,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
     },
     { missions, runtime: pi },
   );
-  writeJson(res, response.status, response.body);
+  writeJson(res, response.status, response.body, response.headers);
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -135,10 +135,16 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(raw);
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
+function writeJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): void {
   const payload = JSON.stringify(body, null, 2);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
+    ...headers,
     "content-length": Buffer.byteLength(payload),
   });
   res.end(payload);

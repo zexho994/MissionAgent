@@ -20,24 +20,6 @@ export interface AgentSystemConfig {
   };
   teamPlanner: {
     baseAgents: ConfigAgentSpec[];
-    rules: Array<{
-      id: string;
-      keywords: string[];
-      agent: ConfigAgentSpec;
-    }>;
-    fallbackAgent: ConfigAgentSpec;
-    reviewAgent: ConfigAgentSpec;
-    relationLabels: Array<{
-      fromRole?: string;
-      toRole?: string;
-      fromRoleIncludes?: string;
-      label: string;
-    }>;
-    initialTasks: Array<{
-      requires: string[];
-      title: string;
-      objective: string;
-    }>;
     capabilityMatchers: Record<"plan" | "execute" | "review", string[]>;
   };
   agentCollaboration?: {
@@ -111,9 +93,6 @@ export function getRoleSystemPrompt(roleName: string, config: AgentSystemConfig)
 function findRoleSpec(roleName: string, config: AgentSystemConfig): ConfigAgentSpec | undefined {
   const buckets: ConfigAgentSpec[] = [
     ...config.teamPlanner.baseAgents,
-    ...config.teamPlanner.rules.map((rule) => rule.agent),
-    config.teamPlanner.fallbackAgent,
-    config.teamPlanner.reviewAgent,
   ];
   return buckets.find((agent) => agent.role === roleName);
 }
@@ -124,8 +103,6 @@ function validateAgentSystemConfig(config: AgentSystemConfig): void {
   if (!config.owner.brief.constraints.length) throw new Error("owner.brief.constraints is required");
   if (!config.owner.followup.template.trim()) throw new Error("owner.followup.template is required");
   if (!config.teamPlanner.baseAgents.length) throw new Error("teamPlanner.baseAgents is required");
-  if (!config.teamPlanner.rules.length) throw new Error("teamPlanner.rules is required");
-  if (!config.teamPlanner.initialTasks.length) throw new Error("teamPlanner.initialTasks is required");
   if (!config.teamPlanner.capabilityMatchers.plan.length) throw new Error("teamPlanner.capabilityMatchers.plan is required");
   if (!config.ui.emptyPrompt.trim()) throw new Error("ui.emptyPrompt is required");
 }

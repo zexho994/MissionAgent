@@ -156,48 +156,33 @@ export function createHRAgent(options: HRAgentOptions) {
     const systemPrompt = buildHRAgentSystemPrompt();
     const userPrompt = buildAnalyzeAndPlanPrompt(brief);
 
-    try {
-      const content = await llmCallStream([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ]);
+    const content = await llmCallStream([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ]);
 
-      const json = extractJson(content, "object");
-      if (!json) {
-        throw new Error("No JSON object found in analyzeAndPlan response");
-      }
-      const parsed = JSON.parse(json) as {
-        analysis?: unknown;
-        roleSpecs?: unknown;
-      };
-
-      const analysis = buildAnalysis(parsed.analysis, brief);
-      const roleSpecs = buildRoleSpecsFromArray(parsed.roleSpecs, missionId);
-      if (roleSpecs.length === 0) {
-        throw new Error("analyzeAndPlan response contained no valid roleSpecs");
-      }
-      for (const spec of roleSpecs) {
-        const validation = validateRoleSpec(spec);
-        if (!validation.isValid) {
-          throw new Error(`Invalid role spec ${spec.name}: ${validation.errors.join(", ")}`);
-        }
-      }
-
-      return { analysis, roleSpecs };
-    } catch (error) {
-      console.error(
-        "[HR Agent] analyzeAndPlan failed, using fallback:",
-        error instanceof Error ? error.message : String(error),
-      );
-      const fallbackAnalysis: MissionAnalysis = {
-        ...fallbackMissionAnalysis(brief),
-        missionGoal: brief.goal,
-      };
-      return {
-        analysis: fallbackAnalysis,
-        roleSpecs: fallbackRoleSpecs(missionId, fallbackAnalysis),
-      };
+    const json = extractJson(content, "object");
+    if (!json) {
+      throw new Error("No JSON object found in analyzeAndPlan response");
     }
+    const parsed = JSON.parse(json) as {
+      analysis?: unknown;
+      roleSpecs?: unknown;
+    };
+
+    const analysis = buildAnalysis(parsed.analysis, brief);
+    const roleSpecs = buildRoleSpecsFromArray(parsed.roleSpecs, missionId);
+    if (roleSpecs.length === 0) {
+      throw new Error("analyzeAndPlan response contained no valid roleSpecs");
+    }
+    for (const spec of roleSpecs) {
+      const validation = validateRoleSpec(spec);
+      if (!validation.isValid) {
+        throw new Error(`Invalid role spec ${spec.name}: ${validation.errors.join(", ")}`);
+      }
+    }
+
+    return { analysis, roleSpecs };
   }
 
   async function proposeTeam(

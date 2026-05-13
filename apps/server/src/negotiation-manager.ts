@@ -10,6 +10,7 @@ import type { LlmService } from "@digitalagent/runtime";
 import { createHRAgent, type TeamProposal } from "./hr-agent.js";
 import { createAgentFactory } from "./agent-factory.js";
 import { createNegotiationService, type OwnerContext, type NegotiationSummary } from "./negotiation-service.js";
+import { withRetry } from "./retry.js";
 
 export type { NegotiationSummary };
 import type { WarRoomAgent, AgentRelation, MissionSnapshot, StreamEventListener, StreamSubscription, ParsedChoice, AgentMessage } from "./mission-service.js";
@@ -44,6 +45,9 @@ export interface StoredNegotiationState {
   roundCount: number;
   hrAgentId: string;
 }
+
+const HR_RETRY_DELAYS_MS = [1000, 2000, 4000];
+const HR_MAX_ATTEMPTS = 4;
 
 export class NegotiationManager {
   private readonly llm: LlmService;
@@ -84,14 +88,43 @@ export class NegotiationManager {
         llm: this.llm,
         ...(stream.onToken === undefined ? {} : { onToken: stream.onToken }),
       });
-      const { analysis, roleSpecs } = await hrAgent.analyzeAndPlan(mission.id, mission.brief);
-      this.appendMessage({
-        missionId: mission.id,
-        fromAgentId: hrAgentId,
-        type: "agent_notify",
-        content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
-      });
-      proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
+      try {
+        const { analysis, roleSpecs } = await withRetry(
+          () => hrAgent.analyzeAndPlan(mission.id, mission.brief!),
+          {
+            maxAttempts: HR_MAX_ATTEMPTS,
+            delaysMs: HR_RETRY_DELAYS_MS,
+            onRetry: ({ attempt }) => {
+              const current = this.agents.get(hrAgentId);
+              if (!current) {
+                throw new Error(`HR agent not found during retry: ${hrAgentId}`);
+              }
+              this.agents.set(hrAgentId, {
+                ...current,
+                status: "running",
+                lastAction: `第 ${attempt} 次重试中...`,
+              });
+            },
+          },
+        );
+        this.appendMessage({
+          missionId: mission.id,
+          fromAgentId: hrAgentId,
+          type: "agent_notify",
+          content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
+        });
+        proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
+      } catch (error) {
+        const current = this.agents.get(hrAgentId);
+        if (current) {
+          this.agents.set(hrAgentId, {
+            ...current,
+            status: "failed",
+            lastAction: "招募失败 (3 次重试均失败)",
+          });
+        }
+        throw error;
+      }
     } finally {
       stream.done();
     }

@@ -11,6 +11,7 @@ export interface ApiRequest {
 
 export interface ApiResponse {
   status: number;
+  headers?: Record<string, string>;
   body: unknown;
 }
 
@@ -88,10 +89,22 @@ export async function handleApiRequest(
 
     if (request.method === "POST" && request.path === "/api/missions/activate") {
       const body = expectObject(request.body);
-      const mission = await deps.missions.activateMissionWithHR({
-        missionId: expectString(body.missionId, "missionId"),
-      });
-      return json(200, { mission, snapshot: deps.missions.snapshot() });
+      try {
+        const mission = await deps.missions.activateMission({
+          missionId: expectString(body.missionId, "missionId"),
+        });
+        return json(200, { mission, snapshot: deps.missions.snapshot() });
+      } catch (error) {
+        return json(
+          503,
+          {
+            error: error instanceof Error ? error.message : String(error),
+            retryable: true,
+            message: "HR 招募失败,请点击重试",
+          },
+          { "Retry-After": "5" },
+        );
+      }
     }
 
     if (request.method === "POST" && request.path === "/api/missions/activate-async") {
@@ -99,7 +112,7 @@ export async function handleApiRequest(
       const missionId = expectString(body.missionId, "missionId");
       const mission = deps.missions.beginMissionActivation({ missionId });
       setTimeout(() => {
-        void deps.missions.activateMissionWithHR({ missionId }).catch((error: unknown) => {
+        void deps.missions.activateMission({ missionId }).catch((error: unknown) => {
           console.error("[API] Async mission activation failed:", error instanceof Error ? error.message : String(error));
         });
       }, 0);
@@ -649,8 +662,8 @@ export async function handleApiRequest(
   }
 }
 
-function json(status: number, body: unknown): ApiResponse {
-  return { status, body };
+function json(status: number, body: unknown, headers?: Record<string, string>): ApiResponse {
+  return { status, body, ...(headers === undefined ? {} : { headers }) };
 }
 
 function expectObject(value: unknown): Record<string, unknown> {
@@ -764,4 +777,3 @@ function parseScheduleRulePatch(body: Record<string, unknown>): Partial<Schedule
 
   return patch;
 }
-

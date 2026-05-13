@@ -77,6 +77,25 @@ function apiLlmWithPlan() {
         checkpoints: ["First task completed"],
       });
     }
+    if (messages[messages.length - 1]?.content.includes("Analyze this mission brief")) {
+      return JSON.stringify({
+        analysis: {
+          requiredCapabilities: ["research"],
+          estimatedTeamSize: 2,
+          priorityRoles: ["researcher"],
+          complexity: "medium",
+          riskFactors: [],
+        },
+        roleSpecs: [{
+          name: "Researcher",
+          purpose: "Run mission research",
+          responsibilities: ["Run the first task"],
+          allowedTools: ["web_search"],
+          successCriteria: ["Mission is runnable"],
+          budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+        }],
+      });
+    }
     return JSON.stringify({
       goal: "Run a mission",
       scope: "Execution test",
@@ -146,7 +165,7 @@ describe("handleApiRequest", () => {
     expect(snapshot.missions[0]?.successMetrics).toContain("目标结果已经被 Owner 明确");
   });
 
-  it("rejects API activation when no current MissionPlan is confirmed", async () => {
+  it("activates locally without HR when no LLM is configured", async () => {
     const missions = new InMemoryMissionService();
 
     const createResponse = await handleApiRequest(
@@ -174,11 +193,8 @@ describe("handleApiRequest", () => {
       { missions, runtime: fakeOpenClaw() },
     );
 
-    expect(activateResponse.status).toBe(400);
-    expect(activateResponse.body).toMatchObject({
-      error: expect.stringContaining("Mission requires a confirmed MissionPlan before activation"),
-    });
-    expect(missions.snapshot().tasks).toHaveLength(0);
+    expect(activateResponse.status).toBe(200);
+    expect(missions.snapshot().tasks).toHaveLength(1);
   });
 
   it("starts mission activation asynchronously so the UI can show HR recruiting", async () => {
@@ -199,6 +215,64 @@ describe("handleApiRequest", () => {
     const hr = snapshot.agents.find((agent) => agent.missionId === missionId && agent.role === "hr");
     expect(hr?.status).toBe("running");
     expect(snapshot.tasks.filter((task) => task.missionId === missionId)).toHaveLength(0);
+  });
+
+  it("returns 503 with Retry-After when HR activation fails", async () => {
+    vi.useFakeTimers();
+    const failingLlm = new FakeLlmAdapter((messages) => {
+      if (messages[0]?.content.includes("Owner planning workflow")) {
+        return JSON.stringify({
+          goal: "Run a mission",
+          successMetrics: ["Mission is runnable"],
+          phases: [{ name: "Launch", objective: "Start", deliverables: ["Plan"], successCriteria: ["Started"] }],
+          workstreams: [{
+            name: "Execution",
+            objective: "Deliver",
+            requiredRole: "researcher",
+            responsibilities: ["Work"],
+            firstTaskGoal: "Complete work",
+          }],
+          reportingLines: [],
+          scheduleRhythms: [{
+            name: "Daily check",
+            cadence: "daily",
+            ownerRole: "owner",
+            purpose: "Review execution status",
+          }],
+          risks: [],
+          checkpoints: ["First task completed"],
+        });
+      }
+      if (messages[messages.length - 1]?.content.includes("Analyze this mission brief")) {
+        throw new Error("LLM down");
+      }
+      return JSON.stringify({
+        goal: "Run a mission",
+        scope: "Execution test",
+        constraints: [],
+        successMetrics: ["Mission is runnable"],
+        keyAssumptions: [],
+      });
+    });
+    const missions = new InMemoryMissionService({ llm: failingLlm });
+    const missionId = await createMissionWithConfirmedPlan(missions);
+
+    const responsePromise = handleApiRequest(
+      {
+        method: "POST",
+        path: "/api/missions/activate",
+        body: { missionId },
+      },
+      { missions, runtime: fakeOpenClaw() },
+    );
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(4000);
+    const response = await responsePromise;
+
+    expect(response.status).toBe(503);
+    expect(response.headers?.["Retry-After"]).toBe("5");
+    expect((response.body as { retryable: boolean; message: string }).retryable).toBe(true);
   });
 
   it("reuses the recruiting HR agent when async activation starts negotiation", async () => {
@@ -235,7 +309,7 @@ describe("handleApiRequest", () => {
   it("confirms HR negotiation through the documented API route", async () => {
     const missions = new InMemoryMissionService({ llm: apiLlmWithPlan(), runtime: fakeRuntime() });
     const missionId = await createMissionWithConfirmedPlan(missions);
-    await missions.activateMissionWithHR({ missionId });
+    await missions.activateMission({ missionId });
 
     const response = await handleApiRequest(
       {
@@ -253,7 +327,7 @@ describe("handleApiRequest", () => {
     expect(snapshot.tasks.filter((task) => task.missionId === missionId)).toHaveLength(1);
     expect(body.execution.status).toBe("running");
     expect(snapshot.tasks.find((task) => task.id === body.execution.taskId)?.status).toBe("running");
-    expect(snapshot.agents.some((agent) => agent.missionId === missionId && agent.role !== "owner" && agent.role !== "hr" && agent.status === "running")).toBe(true);
+    expect(snapshot.agents.some((agent) => agent.missionId === missionId && agent.role !== "owner" && agent.role !== "hr" && agent.currentTaskId === body.execution.taskId)).toBe(true);
     expect(missions.getNegotiation({ missionId })).toBeUndefined();
   });
 
@@ -265,7 +339,7 @@ describe("handleApiRequest", () => {
     };
     const missions = new InMemoryMissionService({ llm: apiLlmWithPlan(), runtime: failingRuntime });
     const missionId = await createMissionWithConfirmedPlan(missions);
-    await missions.activateMissionWithHR({ missionId });
+    await missions.activateMission({ missionId });
 
     const response = await handleApiRequest(
       {
@@ -285,7 +359,7 @@ describe("handleApiRequest", () => {
     expect(snapshot.agentMessages.some((message) => message.missionId === missionId && message.type === "execution_failed" && message.content.includes("OpenClaw failed to start"))).toBe(true);
   });
 
-  it("rejects async API activation before creating HR work when no MissionPlan is confirmed", async () => {
+  it("starts async local activation when no LLM is configured", async () => {
     const missions = new InMemoryMissionService();
     const mission = await missions.createMission({ goal: "Run a mission" });
 
@@ -298,13 +372,10 @@ describe("handleApiRequest", () => {
       { missions, runtime: fakeOpenClaw() },
     );
 
-    expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({
-      error: expect.stringContaining("Mission requires a confirmed MissionPlan before activation"),
-    });
+    expect(response.status).toBe(202);
     const snapshot = missions.snapshot();
     expect(snapshot.tasks.filter((task) => task.missionId === mission.id)).toHaveLength(0);
-    expect(snapshot.agents.find((agent) => agent.missionId === mission.id && agent.role === "hr")).toBeUndefined();
+    expect(snapshot.agents.find((agent) => agent.missionId === mission.id && agent.role === "hr")).toBeDefined();
   });
 
   it("continues an existing mission instead of creating a new one", async () => {

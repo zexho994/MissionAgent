@@ -585,7 +585,7 @@ describe("HRAgent", () => {
       expect(first?.budget.maxRuntimeMinutes).toBe(90);
     });
 
-    it("falls back to rule-based analysis and role specs when LLM output is unparseable", async () => {
+    it("throws when LLM output is unparseable", async () => {
       let callCount = 0;
       mockLlm.call = async (_messages, options) => {
         callCount += 1;
@@ -602,20 +602,33 @@ describe("HRAgent", () => {
       };
 
       const hrAgent = createHRAgent({ llm: mockLlm });
-      const result = await hrAgent.analyzeAndPlan("mission-fallback", missionBrief);
 
+      await expect(hrAgent.analyzeAndPlan("mission-fallback", missionBrief)).rejects.toThrow(
+        "No JSON object found in analyzeAndPlan response",
+      );
       expect(callCount).toBe(1);
-      expect(result.analysis.missionGoal).toBe(missionBrief.goal);
-      expect(result.roleSpecs.length).toBeGreaterThan(0);
-      const first = result.roleSpecs[0];
-      expect(first?.id).toBeTruthy();
-      expect(first?.budget.maxTasks).toBeGreaterThan(0);
     });
 
     it("forwards each LLM token to onToken when provided", async () => {
       const seen: string[] = [];
       mockLlm.call = async (_messages, options) => {
-        const content = "abc-def";
+        const content = JSON.stringify({
+          analysis: {
+            requiredCapabilities: ["research"],
+            estimatedTeamSize: 1,
+            priorityRoles: ["researcher"],
+            complexity: "low",
+            riskFactors: [],
+          },
+          roleSpecs: [{
+            name: "研究员",
+            purpose: "做研究",
+            responsibilities: ["收集资料"],
+            allowedTools: ["web_search"],
+            successCriteria: ["产出结论"],
+            budget: { maxRuntimeMinutes: 60, maxTasks: 2 },
+          }],
+        });
         if (options?.onStream) {
           for (const char of content) options.onStream(char);
         }
@@ -634,7 +647,7 @@ describe("HRAgent", () => {
       await hrAgent.analyzeAndPlan("mission-stream", missionBrief);
 
       expect(seen.length).toBeGreaterThan(0);
-      expect(seen.join("")).toBe("abc-def");
+      expect(seen.join("")).toContain("\"roleSpecs\"");
     });
   });
 
