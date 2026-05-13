@@ -86,6 +86,17 @@ export function createLlmService(options: CreateLlmServiceOptions): LlmService {
       const promptTokens = piResponse.usage?.input ?? 0;
       const completionTokens = piResponse.usage?.output ?? 0;
       const responseModelId = extractModelId(piResponse, modelId);
+      const finishReason = extractFinishReason(piResponse);
+
+      if (isFailedPiResponse(piResponse, content, finishReason)) {
+        throw new Error(formatLlmFailure({
+          provider: options.provider,
+          model: responseModelId,
+          response: piResponse,
+          finishReason,
+          ...(baseUrl !== undefined ? { baseUrl } : {}),
+        }));
+      }
 
       stats = {
         totalCalls: stats.totalCalls + 1,
@@ -102,7 +113,7 @@ export function createLlmService(options: CreateLlmServiceOptions): LlmService {
           completionTokens,
           totalTokens: promptTokens + completionTokens,
         },
-        finishReason: piResponse.stopReason ?? "stop",
+        finishReason,
       };
     },
     stats() {
@@ -156,6 +167,55 @@ function toContext(messages: LlmMessage[]): Context {
     messages: conversational,
     tools: [],
   } as unknown as Context;
+}
+
+function extractFinishReason(response: any): string {
+  if (typeof response?.stopReason === "string") return response.stopReason;
+  if (typeof response?.finishReason === "string") return response.finishReason;
+  return "stop";
+}
+
+function isFailedPiResponse(response: any, content: string, finishReason: string): boolean {
+  if (finishReason === "error") return true;
+  return content === "" && extractTotalTokens(response?.usage) === 0;
+}
+
+function extractTotalTokens(usage: any): number | undefined {
+  if (!usage || typeof usage !== "object") return undefined;
+  if (typeof usage.totalTokens === "number") return usage.totalTokens;
+  if (typeof usage.total === "number") return usage.total;
+
+  const input = typeof usage.input === "number"
+    ? usage.input
+    : typeof usage.promptTokens === "number"
+      ? usage.promptTokens
+      : undefined;
+  const output = typeof usage.output === "number"
+    ? usage.output
+    : typeof usage.completionTokens === "number"
+      ? usage.completionTokens
+      : undefined;
+
+  if (input === undefined && output === undefined) return undefined;
+  return (input ?? 0) + (output ?? 0);
+}
+
+function formatLlmFailure(input: {
+  provider: LlmProvider;
+  model: string;
+  baseUrl?: string;
+  response: any;
+  finishReason: string;
+}): string {
+  const detail = extractErrorDetail(input.response);
+  const baseUrlPart = input.baseUrl ? ` baseUrl=${input.baseUrl}` : "";
+  return `LLM call failed: provider=${input.provider} model=${input.model}${baseUrlPart} finishReason=${input.finishReason}${detail ? ` error=${detail}` : ""}`;
+}
+
+function extractErrorDetail(response: any): string {
+  const message = response?.errorMessage ?? response?.error?.message ?? response?.message;
+  if (typeof message === "string" && message.trim() !== "") return message;
+  return "";
 }
 
 function extractTextContent(response: any): string {

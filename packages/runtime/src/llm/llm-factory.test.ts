@@ -68,6 +68,28 @@ describe("createLlmService", () => {
       }),
     ).toThrow("LLM API key is required");
   });
+
+  it("throws when pi-ai returns an error stop reason", async () => {
+    const completeMock = vi.fn().mockResolvedValue({
+      content: [],
+      usage: { input: 0, output: 0, totalTokens: 0 },
+      stopReason: "error",
+      errorMessage: "assistantMsg.content.flatMap is not a function",
+      model: { id: "MiniMax-M2.7-highspeed", name: "MiniMax" },
+    });
+    const llm = createLlmService({
+      provider: "minimax",
+      apiKey: "minimax-key",
+      completeFn: completeMock,
+    });
+
+    await expect(llm.call([{ role: "user", content: "hello" }])).rejects.toThrow(
+      "assistantMsg.content.flatMap is not a function",
+    );
+    await expect(llm.call([{ role: "user", content: "hello" }])).rejects.toThrow(
+      "provider=minimax",
+    );
+  });
 });
 
 describe("createLlmServiceFromEnv", () => {
