@@ -30,7 +30,7 @@ export function createPiAgentLlmService(options: CreatePiAgentLlmServiceOptions)
         ? Math.ceil(callOptions.timeoutMs / 1000)
         : options.timeoutSeconds ?? 90;
       const modelId = callOptions?.model ?? options.modelId;
-      let streamedContent = "";
+      let didStream = false;
       const result = await runPiAgent({
         apiKey: options.apiKey,
         ...(options.modelProvider !== undefined ? { modelProvider: options.modelProvider } : {}),
@@ -49,18 +49,18 @@ export function createPiAgentLlmService(options: CreatePiAgentLlmServiceOptions)
           if (assistantMessageEvent.type === "text_delta") {
             const delta = assistantMessageEvent.delta as string | undefined;
             if (delta) {
-              streamedContent += delta;
+              didStream = true;
               callOptions?.onStream?.(delta);
             }
           }
         },
       });
 
-      const content = streamedContent || extractLastAssistantText(result.messages);
+      const content = extractLastAssistantText(result.messages);
       if (!content.trim()) {
         throw new Error("PiAgentLlmService returned no assistant content");
       }
-      if (!streamedContent) {
+      if (!didStream) {
         callOptions?.onStream?.(content);
       }
 

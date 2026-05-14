@@ -73,6 +73,38 @@ describe("createPiAgentLlmService", () => {
     expect(onStream).toHaveBeenCalledWith("hello");
   });
 
+  it("uses final state messages for response.content, not accumulated deltas", async () => {
+    let handler: ((event: Record<string, unknown>) => void) | undefined;
+    const fakeAgent = {
+      prompt: vi.fn().mockResolvedValue(undefined).mockImplementation(() => {
+        handler?.({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "intermediate text - " } });
+        handler?.({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "more intermediate" } });
+        return Promise.resolve();
+      }),
+      subscribe: vi.fn().mockImplementation((h: (event: Record<string, unknown>) => void) => {
+        handler = h;
+      }),
+      state: {
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "intermediate text - more intermediate" }] },
+          { role: "assistant", content: [{ type: "text", text: "{\"status\":\"ready\"}" }] },
+        ],
+      },
+    };
+    const onStream = vi.fn();
+    const llm = createPiAgentLlmService({
+      apiKey: "k",
+      tools: [],
+      agentFactory: (() => fakeAgent) as never,
+    });
+
+    const response = await llm.call([{ role: "user", content: "x" }], { onStream });
+
+    expect(response.content).toBe("{\"status\":\"ready\"}");
+    expect(onStream).toHaveBeenCalledWith("intermediate text - ");
+    expect(onStream).toHaveBeenCalledWith("more intermediate");
+  });
+
   it("fails fast when no user prompt exists", async () => {
     const llm = createPiAgentLlmService({ apiKey: "k", tools: [] });
 
