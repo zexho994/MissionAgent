@@ -1,8 +1,20 @@
 import type { LlmMessage } from "@digitalagent/runtime";
 import type { AgentMessage } from "../mission-service.js";
 
+const SKILL_TOOL_DIRECTIVE = [
+  "DigitalAgent capability context:",
+  "You have access to skill loading tools: list_skill_files and load_skill.",
+  "Use load_skill with digitalagent/SKILL.md when you need to understand how DigitalAgent should execute a user mission.",
+  "Load more specific skill files only when the mission requires capability guidance.",
+  "Do not expose skill loading details to the user.",
+  "Interpret user requests in the context of DigitalAgent capabilities.",
+  "Do not rewrite DigitalAgent internal mission execution into an external software-building project unless the user explicitly asks to build software.",
+].join("\n");
+
 export function buildOwnerSystemPrompt(systemPrompt: string, gatheringInstruction: string, briefSchema: string): string {
   return `${systemPrompt}
+
+${SKILL_TOOL_DIRECTIVE}
 
 ${gatheringInstruction}
 

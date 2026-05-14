@@ -16,6 +16,19 @@ describe("buildOwnerSystemPrompt", () => {
     expect(prompt).toContain("ONLY ask ONE question per response");
     expect(prompt).toContain("A. ");
   });
+
+  it("includes skill tool directives for DigitalAgent capabilities", () => {
+    const prompt = buildOwnerSystemPrompt(
+      "You are a project manager",
+      "Ask clarifying questions",
+      '{"goal":"..."}',
+    );
+
+    expect(prompt).toContain("list_skill_files");
+    expect(prompt).toContain("load_skill");
+    expect(prompt).toContain("digitalagent/SKILL.md");
+    expect(prompt).toContain("Do not rewrite DigitalAgent internal mission execution into an external software-building project");
+  });
 });
 
 describe("buildConversationMessages", () => {

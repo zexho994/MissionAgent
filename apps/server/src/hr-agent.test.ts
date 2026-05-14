@@ -585,6 +585,65 @@ describe("HRAgent", () => {
       expect(first?.budget.maxRuntimeMinutes).toBe(90);
     });
 
+    it("includes skill tool directives in the system prompt", async () => {
+      const calls: Array<{ role: string; content: string }[]> = [];
+      const fakeLlm: LlmService = {
+        call: async (messages, options) => {
+          calls.push(messages);
+          const content = JSON.stringify({
+            analysis: {
+              requiredCapabilities: ["agent_collaboration"],
+              estimatedTeamSize: 2,
+              priorityRoles: ["Coordinator", "Reviewer"],
+              complexity: "low",
+              riskFactors: ["rule drift"],
+            },
+            roleSpecs: [
+              {
+                name: "接龙协调员",
+                purpose: "推进接龙轮次",
+                responsibilities: ["安排轮次"],
+                capabilities: ["agent_collaboration"],
+                allowedTools: ["load_skill"],
+                successCriteria: ["轮次清晰"],
+                budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+              },
+              {
+                name: "规则审核员",
+                purpose: "审核成语接龙规则",
+                responsibilities: ["检查成语合法性"],
+                capabilities: ["review"],
+                allowedTools: ["load_skill"],
+                successCriteria: ["规则检查完成"],
+                budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+              },
+            ],
+          });
+          if (options?.onStream) {
+            for (const char of content) options.onStream(char);
+          }
+          return {
+            content,
+            model: "test-model",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+          };
+        },
+        stats: () => ({
+          totalCalls: 0,
+          totalPromptTokens: 0,
+          totalCompletionTokens: 0,
+        }),
+      };
+
+      const hrAgent = createHRAgent({ llm: fakeLlm });
+      await hrAgent.analyzeAndPlan("mission_1", missionBrief);
+
+      expect(calls[0]?.[0]?.content).toContain("list_skill_files");
+      expect(calls[0]?.[0]?.content).toContain("load_skill");
+      expect(calls[0]?.[0]?.content).toContain("DigitalAgent mission execution system");
+    });
+
     it("throws when LLM output is unparseable", async () => {
       let callCount = 0;
       mockLlm.call = async (_messages, options) => {

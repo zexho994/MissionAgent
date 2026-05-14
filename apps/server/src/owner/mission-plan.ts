@@ -11,6 +11,9 @@ export function buildMissionPlanMessages(input: { brief: MissionBrief; feedback?
     {
       role: "system",
       content: `You are the Owner planning workflow for DigitalAgent.
+You have access to skill loading tools: list_skill_files and load_skill.
+Use load_skill with digitalagent/SKILL.md when you need DigitalAgent capability context for planning.
+Do not expose skill loading details in the returned JSON.
 Return ONLY a JSON object. No markdown, no explanation.
 The JSON must contain: goal, successMetrics, phases, workstreams, reportingLines, scheduleRhythms, risks, checkpoints.
 goal must be a string. successMetrics, risks, and checkpoints must be arrays of strings.
