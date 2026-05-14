@@ -29,10 +29,11 @@ export function createPiAgentLlmService(options: CreatePiAgentLlmServiceOptions)
       const timeoutSeconds = callOptions?.timeoutMs !== undefined
         ? Math.ceil(callOptions.timeoutMs / 1000)
         : options.timeoutSeconds ?? 90;
+      const modelId = callOptions?.model ?? options.modelId;
       const result = await runPiAgent({
         apiKey: options.apiKey,
-        modelProvider: options.modelProvider,
-        modelId: callOptions?.model ?? options.modelId,
+        ...(options.modelProvider !== undefined ? { modelProvider: options.modelProvider } : {}),
+        ...(modelId !== undefined ? { modelId } : {}),
         systemPrompt: prepared.systemPrompt,
         messages: prepared.messages,
         prompt: prepared.prompt,

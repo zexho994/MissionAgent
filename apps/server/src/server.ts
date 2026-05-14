@@ -5,9 +5,11 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PiSdkAdapter,
-  createLlmServiceFromEnv,
+  createPiAgentLlmService,
+  createSkillTools,
   createWebSearchTool,
 } from "@digitalagent/runtime";
+import { loadAgentSystemConfig } from "./system-config.js";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
@@ -17,18 +19,29 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
 const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data", "mission-store.json");
 
-const llm = createLlmServiceFromEnv(process.env);
+const configFile = join(root, "..", "config", "agent-system.json");
+const agentConfig = loadAgentSystemConfig(configFile);
+const skillRoot = join(root, "..", agentConfig.skills.rootDir);
+const skillTools = createSkillTools({ rootDir: skillRoot });
 
 const apiKey =
   process.env.LLM_API_KEY ??
   process.env.MINIMAX_API_KEY ??
   process.env.ANTHROPIC_API_KEY ??
   "";
+
+const llm = createPiAgentLlmService({
+  apiKey,
+  modelProvider: process.env.LLM_PROVIDER ?? "minimax-cn",
+  modelId: process.env.LLM_MODEL ?? "MiniMax-M2.7-highspeed",
+  tools: skillTools,
+});
+
 const pi = new PiSdkAdapter({
   apiKey,
   modelProvider: process.env.LLM_PROVIDER ?? "minimax-cn",
   modelId: process.env.LLM_MODEL ?? "MiniMax-M2.7-highspeed",
-  tools: [createWebSearchTool({})],
+  tools: [...skillTools, createWebSearchTool({})],
 });
 
 const runtime: MissionExecutionRuntime = {
