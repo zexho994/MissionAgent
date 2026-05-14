@@ -31,11 +31,13 @@ HR 能根据**任意** mission 目标真分析并招人,不再依赖关键词匹
 
 **自动化验收点**:
 - ✓ Mission 能被创建且 Owner Agent 走完 brief 确认流程
-- ✓ HR Agent 进入 running 状态,日志显示"正在分析 MissionBrief..."
+- ✓ Owner Agent 基于已确认 brief 生成 MissionPlan
+- ✓ MissionPlan 能被确认,确认后再触发 HR 招募
+- ✓ HR Agent 进入 running 状态,日志显示"正在基于 MissionPlan 分析团队需求..."
 - ✓ HR Agent 最终进入 idle 状态(不是 failed)
 - ✓ 招出的团队规模在 2-5 个角色之间(`preferredTeamSize` 范围)
 - ✓ 每个角色都有非空 `name` / `responsibility` / `budget` / `allowedTools`
-- ✓ Mission 可激活进入 running 状态(`/api/missions/:id/activate` 返回 200)
+- ✓ Mission 可激活进入 running 状态(同步激活接口返回 200;异步激活接口返回 202 并能观察到 HR 招募中状态)
 - ✓ 团队中**不存在**"Mission Operator Agent"(兜底角色) — 因为关键词路径已删
 
 **人工确认点**:
