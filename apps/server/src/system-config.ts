@@ -85,12 +85,22 @@ const TASK_OUTPUT_FORMAT_DIRECTIVE = [
   "If you did not perform web research, return empty arrays for searchResults and sources.",
 ].join("\n");
 
+const RUNTIME_SKILL_TOOL_DIRECTIVE = [
+  "",
+  "DigitalAgent capability context:",
+  "You have access to skill loading tools: list_skill_files and load_skill.",
+  "Use load_skill with digitalagent/SKILL.md when you need capability guidance for a mission.",
+  "Load more specific skill files (e.g., digitalagent/capabilities/*.md) only when the mission requires specific capability context.",
+  "Do not expose skill loading details to the user.",
+].join("\n");
+
 export function getRoleSystemPrompt(roleName: string, config: AgentSystemConfig): string | undefined {
   const spec = findRoleSpec(roleName, config);
   if (!spec || !spec.systemPrompt || !spec.systemPrompt.trim()) {
-    return undefined;
+    // Dynamic roles (HR-recruited) still get skill tool guidance
+    return `${RUNTIME_SKILL_TOOL_DIRECTIVE}${TASK_OUTPUT_FORMAT_DIRECTIVE}`;
   }
-  return `${spec.systemPrompt.trim()}${TASK_OUTPUT_FORMAT_DIRECTIVE}`;
+  return `${spec.systemPrompt.trim()}${RUNTIME_SKILL_TOOL_DIRECTIVE}${TASK_OUTPUT_FORMAT_DIRECTIVE}`;
 }
 
 function findRoleSpec(roleName: string, config: AgentSystemConfig): ConfigAgentSpec | undefined {

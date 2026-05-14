@@ -30,6 +30,7 @@ export function createPiAgentLlmService(options: CreatePiAgentLlmServiceOptions)
         ? Math.ceil(callOptions.timeoutMs / 1000)
         : options.timeoutSeconds ?? 90;
       const modelId = callOptions?.model ?? options.modelId;
+      let streamedContent = "";
       const result = await runPiAgent({
         apiKey: options.apiKey,
         ...(options.modelProvider !== undefined ? { modelProvider: options.modelProvider } : {}),
@@ -40,13 +41,28 @@ export function createPiAgentLlmService(options: CreatePiAgentLlmServiceOptions)
         tools: options.tools,
         timeoutSeconds,
         ...(options.agentFactory ? { agentFactory: options.agentFactory } : {}),
+        onEvent(event) {
+          if (event.type !== "message_update") return;
+          const anyEvent = event as Record<string, unknown>;
+          const assistantMessageEvent = anyEvent.assistantMessageEvent as Record<string, unknown> | undefined;
+          if (!assistantMessageEvent) return;
+          if (assistantMessageEvent.type === "text_delta") {
+            const delta = assistantMessageEvent.delta as string | undefined;
+            if (delta) {
+              streamedContent += delta;
+              callOptions?.onStream?.(delta);
+            }
+          }
+        },
       });
 
-      const content = extractLastAssistantText(result.messages);
+      const content = streamedContent || extractLastAssistantText(result.messages);
       if (!content.trim()) {
         throw new Error("PiAgentLlmService returned no assistant content");
       }
-      callOptions?.onStream?.(content);
+      if (!streamedContent) {
+        callOptions?.onStream?.(content);
+      }
 
       const promptTokens = messages.reduce((sum, message) => sum + message.content.length, 0);
       const completionTokens = content.length;

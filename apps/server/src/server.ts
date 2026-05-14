@@ -22,6 +22,9 @@ const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data",
 const configFile = join(root, "..", "config", "agent-system.json");
 const agentConfig = loadAgentSystemConfig(configFile);
 const skillRoot = join(root, "..", agentConfig.skills.rootDir);
+if (!existsSync(skillRoot)) {
+  throw new Error(`Skill root directory not found: ${skillRoot}`);
+}
 const skillTools = createSkillTools({ rootDir: skillRoot });
 
 const apiKey =
