@@ -132,10 +132,12 @@ describe("PiSdkAdapter", () => {
       timeoutSeconds: 5,
     });
 
-    expect(result.status).toBe("failed");
-    expect(result.error).toBe("pi blew up");
-    expect(result.stderr).toBe("pi blew up");
-    expect(result.sources).toEqual([]);
+    expect(result).toMatchObject({
+      status: "failed",
+      stderr: "pi blew up",
+      error: "pi blew up",
+      output: { messages: [], error: "pi blew up" },
+    });
   });
 
   it("returns failed status when prompt does not resolve in time", async () => {

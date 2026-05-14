@@ -1,6 +1,6 @@
 import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { getModel, type Model } from "@earendil-works/pi-ai";
 import type { Source } from "@digitalagent/core";
+import { runPiAgent, type PiAgentConfig, type PiAgentLike } from "./pi-agent-runner.js";
 
 export interface PiSdkAdapterOptions {
   apiKey: string;
@@ -10,24 +10,8 @@ export interface PiSdkAdapterOptions {
   agentFactory?: (config: AgentConfig) => AgentLike;
 }
 
-export interface AgentConfig {
-  initialState: {
-    systemPrompt: string;
-    model: Model<any>;
-    tools: AgentTool<any>[];
-    messages: never[];
-  };
-  sessionId?: string;
-  getApiKey?: () => Promise<string>;
-}
-
-export interface AgentLike {
-  prompt(text: string): Promise<void>;
-  subscribe(handler: (event: AgentEvent) => void): void;
-  state: {
-    messages: unknown[];
-  };
-}
+export type AgentConfig = PiAgentConfig;
+export type AgentLike = PiAgentLike;
 
 export interface RunAgentTaskInput {
   message: string;
@@ -75,33 +59,25 @@ export class PiSdkAdapter {
   }
 
   async runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTaskResult> {
-    const model = resolveModelSafe(this.modelProvider, this.modelId);
     const sources: Source[] = [];
 
-    const config: AgentConfig = {
-      initialState: {
-        systemPrompt: input.systemPrompt ?? "",
-        model,
-        tools: this.tools,
-        messages: [] as never[],
-      },
-      getApiKey: async () => this.apiKey,
-    };
-    if (input.sessionId) {
-      config.sessionId = input.sessionId;
-    }
-
-    const agent = this.agentFactory(config);
-
-    agent.subscribe((event) => {
-      collectSourcesFromEvent(event, sources);
-    });
-
     try {
-      await runWithTimeout(agent.prompt(input.message), input.timeoutSeconds);
+      const result = await runPiAgent({
+        apiKey: this.apiKey,
+        modelProvider: this.modelProvider,
+        modelId: this.modelId,
+        systemPrompt: input.systemPrompt ?? "",
+        messages: [],
+        prompt: input.message,
+        tools: this.tools,
+        timeoutSeconds: input.timeoutSeconds,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        onEvent: (event) => collectSourcesFromEvent(event, sources),
+        agentFactory: this.agentFactory,
+      });
       return {
         status: "completed",
-        output: { messages: agent.state.messages },
+        output: { messages: result.messages },
         stderr: "",
         sources,
       };
@@ -109,51 +85,13 @@ export class PiSdkAdapter {
       const message = error instanceof Error ? error.message : String(error);
       return {
         status: "failed",
-        output: { messages: agent.state.messages, error: message },
+        output: { messages: [], error: message },
         stderr: message,
         sources,
         error: message,
       };
     }
   }
-}
-
-function resolveModelSafe(provider: string, modelId: string): Model<any> {
-  try {
-    const m = getModel(provider as never, modelId as never);
-    if (m) return m;
-  } catch {
-    // fall through
-  }
-  return {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions",
-    provider,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 4096,
-  } as Model<any>;
-}
-
-function runWithTimeout<T>(promise: Promise<T>, timeoutSeconds: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`pi agent task timed out after ${timeoutSeconds}s`));
-    }, timeoutSeconds * 1000);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 }
 
 function collectSourcesFromEvent(event: AgentEvent, sources: Source[]): void {
