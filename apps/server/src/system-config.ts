@@ -18,6 +18,9 @@ export interface AgentSystemConfig {
       template: string;
     };
   };
+  skills: {
+    rootDir: string;
+  };
   teamPlanner: {
     baseAgents: ConfigAgentSpec[];
     capabilityMatchers: Record<"plan" | "execute" | "review", string[]>;
@@ -102,6 +105,7 @@ function validateAgentSystemConfig(config: AgentSystemConfig): void {
   if (!config.owner.brief.successMetrics.length) throw new Error("owner.brief.successMetrics is required");
   if (!config.owner.brief.constraints.length) throw new Error("owner.brief.constraints is required");
   if (!config.owner.followup.template.trim()) throw new Error("owner.followup.template is required");
+  if (!config.skills?.rootDir?.trim()) throw new Error("skills.rootDir is required");
   if (!config.teamPlanner.baseAgents.length) throw new Error("teamPlanner.baseAgents is required");
   if (!config.teamPlanner.capabilityMatchers.plan.length) throw new Error("teamPlanner.capabilityMatchers.plan is required");
   if (!config.ui.emptyPrompt.trim()) throw new Error("ui.emptyPrompt is required");

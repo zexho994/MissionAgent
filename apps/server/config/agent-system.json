@@ -23,6 +23,9 @@
       "template": "收到补充信息：{{message}}。这条信息已追加到当前 Mission，不会创建新的 Mission。"
     }
   },
+  "skills": {
+    "rootDir": "config/skills"
+  },
   "teamPlanner": {
     "baseAgents": [
       {
