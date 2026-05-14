@@ -35,6 +35,7 @@ export interface RunPiAgentInput {
   tools: AgentTool<any>[];
   timeoutSeconds: number;
   sessionId?: string;
+  traceLabel?: string;
   onEvent?: (event: AgentEvent) => void;
   agentFactory?: (config: PiAgentConfig) => PiAgentLike;
 }
@@ -61,11 +62,46 @@ export async function runPiAgent(input: RunPiAgentInput): Promise<RunPiAgentResu
   const agentFactory = input.agentFactory ?? ((agentConfig) => new Agent(agentConfig as never) as unknown as PiAgentLike);
   const agent = agentFactory(config);
   agent.subscribe((event) => {
+    logToolEvent(event, input.traceLabel, input.sessionId);
     input.onEvent?.(event);
   });
 
   await runWithTimeout(agent.prompt(input.prompt), input.timeoutSeconds);
   return { messages: agent.state.messages };
+}
+
+function logToolEvent(event: AgentEvent, traceLabel = "unknown", sessionId?: string): void {
+  if (event.type === "tool_execution_start") {
+    console.log(
+      `[pi-agent tool][${traceLabel}] start ${event.toolName}`,
+      compactLogPayload({
+        sessionId,
+        toolCallId: event.toolCallId,
+        args: event.args,
+      }),
+    );
+    return;
+  }
+
+  if (event.type === "tool_execution_end") {
+    const result = event.result as Record<string, unknown> | undefined;
+    console.log(
+      `[pi-agent tool][${traceLabel}] end ${event.toolName}`,
+      compactLogPayload({
+        sessionId,
+        toolCallId: event.toolCallId,
+        ok: !event.isError,
+        error: event.isError ? result?.error ?? result : undefined,
+        details: result?.details,
+      }),
+    );
+  }
+}
+
+function compactLogPayload(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => item !== undefined),
+  );
 }
 
 export function resolveModelSafe(provider: string, modelId: string): Model<any> {

@@ -42,6 +42,7 @@ describe("PiSdkAdapter", () => {
 
   it("collects sources from tool_execution_end events for web_search", async () => {
     let captured: ((event: any) => void) | null = null;
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const fakeAgent = {
       prompt: vi.fn().mockImplementation(async () => {
         if (captured) {
@@ -81,6 +82,7 @@ describe("PiSdkAdapter", () => {
       { url: "https://a.example", title: "A", snippet: "snip-a", searchKeyword: "hello" },
       { url: "https://b.example", title: "B", searchKeyword: "hello" },
     ]);
+    consoleSpy.mockRestore();
   });
 
   it("uses the configured pi-ai provider directly for agent execution", async () => {

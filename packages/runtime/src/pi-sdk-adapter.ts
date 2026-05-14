@@ -72,6 +72,7 @@ export class PiSdkAdapter {
         tools: this.tools,
         timeoutSeconds: input.timeoutSeconds,
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        traceLabel: inferRuntimeTraceLabel(input.systemPrompt),
         onEvent: (event) => collectSourcesFromEvent(event, sources),
         agentFactory: this.agentFactory,
       });
@@ -92,6 +93,13 @@ export class PiSdkAdapter {
       };
     }
   }
+}
+
+function inferRuntimeTraceLabel(systemPrompt?: string): string {
+  if (!systemPrompt?.trim()) return "RuntimeAgent";
+  const firstLine = systemPrompt.trim().split(/\r?\n/)[0]?.trim();
+  if (!firstLine) return "RuntimeAgent";
+  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
 }
 
 function collectSourcesFromEvent(event: AgentEvent, sources: Source[]): void {

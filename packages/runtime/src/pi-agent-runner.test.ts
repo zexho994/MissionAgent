@@ -47,6 +47,7 @@ describe("runPiAgent", () => {
   it("forwards agent events to onEvent", async () => {
     let handler: ((event: unknown) => void) | undefined;
     const onEvent = vi.fn();
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const fakeAgent = {
       prompt: vi.fn().mockImplementation(async () => {
         handler?.({ type: "tool_execution_end", toolName: "web_search" });
@@ -71,5 +72,65 @@ describe("runPiAgent", () => {
     });
 
     expect(onEvent).toHaveBeenCalledWith({ type: "tool_execution_end", toolName: "web_search" });
+    consoleSpy.mockRestore();
+  });
+
+  it("logs tool start and end events with trace context", async () => {
+    let handler: ((event: any) => void) | undefined;
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const fakeAgent = {
+      prompt: vi.fn().mockImplementation(async () => {
+        handler?.({
+          type: "tool_execution_start",
+          toolCallId: "tool-1",
+          toolName: "load_skill",
+          args: { path: "digitalagent/SKILL.md" },
+        });
+        handler?.({
+          type: "tool_execution_end",
+          toolCallId: "tool-1",
+          toolName: "load_skill",
+          result: { details: { path: "digitalagent/SKILL.md" } },
+          isError: false,
+        });
+      }),
+      subscribe: vi.fn().mockImplementation((next) => {
+        handler = next;
+      }),
+      state: { messages: [] },
+    };
+
+    await runPiAgent({
+      apiKey: "k",
+      modelProvider: "minimax-cn",
+      modelId: "MiniMax-M2.7-highspeed",
+      systemPrompt: "",
+      messages: [],
+      prompt: "run",
+      tools: [],
+      sessionId: "mission-1",
+      traceLabel: "Owner",
+      timeoutSeconds: 5,
+      agentFactory: (() => fakeAgent) as never,
+    });
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "[pi-agent tool][Owner] start load_skill",
+      {
+        sessionId: "mission-1",
+        toolCallId: "tool-1",
+        args: { path: "digitalagent/SKILL.md" },
+      },
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "[pi-agent tool][Owner] end load_skill",
+      {
+        sessionId: "mission-1",
+        toolCallId: "tool-1",
+        ok: true,
+        details: { path: "digitalagent/SKILL.md" },
+      },
+    );
+    consoleSpy.mockRestore();
   });
 });

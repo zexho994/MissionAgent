@@ -105,6 +105,47 @@ describe("createPiAgentLlmService", () => {
     expect(onStream).toHaveBeenCalledWith("more intermediate");
   });
 
+  it("labels owner tool logs from the system prompt", async () => {
+    let handler: ((event: any) => void) | undefined;
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const fakeAgent = {
+      prompt: vi.fn().mockImplementation(() => {
+        handler?.({
+          type: "tool_execution_start",
+          toolCallId: "tool-1",
+          toolName: "load_skill",
+          args: { path: "digitalagent/SKILL.md" },
+        });
+        return Promise.resolve();
+      }),
+      subscribe: vi.fn().mockImplementation((h: (event: any) => void) => {
+        handler = h;
+      }),
+      state: {
+        messages: [{ role: "assistant", content: [{ type: "text", text: "{\"status\":\"ready\"}" }] }],
+      },
+    };
+    const llm = createPiAgentLlmService({
+      apiKey: "k",
+      tools: [],
+      agentFactory: (() => fakeAgent) as never,
+    });
+
+    await llm.call([
+      { role: "system", content: "你是一位经验丰富的项目经理（Owner Agent）。" },
+      { role: "user", content: "x" },
+    ]);
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      "[pi-agent tool][Owner] start load_skill",
+      {
+        toolCallId: "tool-1",
+        args: { path: "digitalagent/SKILL.md" },
+      },
+    );
+    consoleSpy.mockRestore();
+  });
+
   it("fails fast when no user prompt exists", async () => {
     const llm = createPiAgentLlmService({ apiKey: "k", tools: [] });
 

@@ -40,6 +40,7 @@ export function createPiAgentLlmService(options: CreatePiAgentLlmServiceOptions)
         prompt: prepared.prompt,
         tools: options.tools,
         timeoutSeconds,
+        traceLabel: inferLlmTraceLabel(prepared.systemPrompt),
         ...(options.agentFactory ? { agentFactory: options.agentFactory } : {}),
         onEvent(event) {
           if (event.type !== "message_update") return;
@@ -128,6 +129,14 @@ function extractLastAssistantText(messages: unknown[]): string {
     }
   }
   return "";
+}
+
+function inferLlmTraceLabel(systemPrompt: string): string {
+  if (systemPrompt.includes("Owner planning workflow")) return "MissionPlan";
+  if (systemPrompt.includes("HR Agent")) return "HR";
+  if (systemPrompt.includes("Owner Agent") || systemPrompt.includes("项目经理")) return "Owner";
+  if (systemPrompt.includes("Negotiation")) return "Negotiation";
+  return "LLM";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
