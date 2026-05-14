@@ -965,6 +965,55 @@ describe("InMemoryMissionService", () => {
     expect(service.snapshot().agents.find((agent) => agent.role === "owner")?.status).toBe("blocked");
   });
 
+  it("keeps DigitalAgent collaboration test missions inside DigitalAgent instead of rewriting them as external projects", async () => {
+    const llm = new FakeLlmAdapter((messages) => {
+      const system = messages.map((message) => message.content).join("\n");
+      expect(system).toContain("digitalagent/SKILL.md");
+      return JSON.stringify({
+        goal: "验证 DigitalAgent mission 内 5 个 agent 能否协作完成 50 次成语接龙",
+        scope: "使用 DigitalAgent 内部 mission agents 轮流给出成语、推进轮次、校验规则并汇总结果",
+        constraints: ["每轮只能由一个 agent 给出下一个成语", "完成 50 次接龙才算成功"],
+        successMetrics: ["完成 50 次有效接龙", "agent 之间的交接和汇报链路可观察"],
+        keyAssumptions: ["DigitalAgent 可以创建 mission 内临时 agent 团队"],
+        targetAudience: "DigitalAgent 产品和测试团队",
+        timeline: "当前验收周期",
+      });
+    });
+    const service = new InMemoryMissionService({ llm });
+
+    const mission = await service.createMission({
+      goal: "5 个 agent 协作玩成语接龙,测试 mission 中 agent 协作是否通了,完成 50 次才算成功。",
+    });
+    await waitForBrief(service, mission.id);
+
+    const refreshed = service.snapshot().missions.find((candidate) => candidate.id === mission.id);
+    expect(refreshed?.brief?.goal).toContain("DigitalAgent mission");
+    expect(refreshed?.brief?.goal).not.toContain("框架");
+    expect(refreshed?.brief?.goal).not.toContain("Web App");
+  });
+
+  it("preserves explicit software build missions as build-artifact goals", async () => {
+    const llm = new FakeLlmAdapter(() => JSON.stringify({
+      goal: "实现一个成语接龙 Web App",
+      scope: "设计并实现可运行的 Web 应用，包含成语输入、接龙校验和结果展示",
+      constraints: ["需要可本地运行", "需要基础浏览器验证"],
+      successMetrics: ["Web App 可以启动", "用户可以完成至少 5 轮接龙"],
+      keyAssumptions: ["当前仓库允许新增或修改前端代码"],
+      targetAudience: "最终用户",
+      timeline: "当前开发周期",
+    }));
+    const service = new InMemoryMissionService({ llm });
+
+    const mission = await service.createMission({
+      goal: "帮我实现一个成语接龙 Web App",
+    });
+    await waitForBrief(service, mission.id);
+
+    const refreshed = service.snapshot().missions.find((candidate) => candidate.id === mission.id);
+    expect(refreshed?.brief?.goal).toBe("实现一个成语接龙 Web App");
+    expect(refreshed?.brief?.scope).toContain("Web 应用");
+  });
+
   it("diagnoses a new mission as briefing", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Grow GitHub repositories" });
