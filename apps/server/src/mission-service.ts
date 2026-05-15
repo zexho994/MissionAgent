@@ -29,7 +29,7 @@ import {
   type TaskFailureAnalysis,
   type TaskFailureType,
 } from "@digitalagent/core";
-import type { LlmService } from "@digitalagent/runtime";
+import type { LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
@@ -561,11 +561,12 @@ export interface MissionServiceOptions {
 }
 
 export type StreamEventListener = (event: {
-  type: "token" | "done" | "hr_progress" | "hr_progress_done";
+  type: "token" | "done" | "hr_progress" | "hr_progress_done" | "tool_call";
   content?: string;
   messageId?: string;
   tokensReceived?: number;
   phase?: string;
+  toolEvent?: ToolCallTraceEvent;
 }) => void;
 
 export interface StreamSubscription {
@@ -596,6 +597,7 @@ export class InMemoryMissionService {
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
   private readonly streamListeners = new Map<string, Set<StreamEventListener>>();
+  private readonly toolCallStreamBacklog = new Map<string, ToolCallTraceEvent[]>();
   private negotiationManager: NegotiationManager | undefined;
   private conversationBus: AgentConversationBus | undefined;
   private autonomyService: AgentAutonomyService | undefined;
@@ -1038,6 +1040,7 @@ export class InMemoryMissionService {
       {
         maxTokens: 3000,
         timeoutMs: 90000,
+        onToolEvent: (toolEvent) => this.notifyToolCall(mission.id, toolEvent),
       },
     );
     const draft = parseMissionPlanDraft(response.content);
@@ -1220,6 +1223,7 @@ export class InMemoryMissionService {
         timeoutSeconds: 300,
         sessionId: input.missionId,
         ...(systemPrompt ? { systemPrompt } : {}),
+        onToolEvent: (toolEvent) => this.notifyToolCall(input.missionId, toolEvent),
       })
       .then((result) => {
         const sources = extractSourcesFromPiOutput(result.output, result.sources ?? []);
@@ -1647,6 +1651,7 @@ export class InMemoryMissionService {
     this.schedulers.delete(missionId);
     this.autonomyService?.stopLoop(missionId);
     this.streamListeners.delete(missionId);
+    this.toolCallStreamBacklog.delete(missionId);
 
     this.missions.delete(missionId);
     for (const plan of this.plans.values()) {
@@ -2666,6 +2671,9 @@ export class InMemoryMissionService {
       this.streamListeners.set(missionId, new Set());
     }
     this.streamListeners.get(missionId)!.add(listener);
+    for (const toolEvent of this.toolCallStreamBacklog.get(missionId) ?? []) {
+      listener({ type: "tool_call", toolEvent });
+    }
 
     return {
       missionId,
@@ -2740,6 +2748,16 @@ export class InMemoryMissionService {
         }
       }
     }
+  }
+
+  private notifyToolCall(missionId: string, toolEvent: ToolCallTraceEvent): void {
+    const backlog = this.toolCallStreamBacklog.get(missionId) ?? [];
+    backlog.push(toolEvent);
+    this.toolCallStreamBacklog.set(missionId, backlog.slice(-100));
+    this.notifyStreamListeners(missionId, {
+      type: "tool_call",
+      toolEvent,
+    });
   }
 
   private createOwnerAgent(missionId: string): WarRoomAgent {
@@ -3466,6 +3484,7 @@ export class InMemoryMissionService {
       appendMessage: (msg) => this.appendMessage(msg as any),
       updateAgent: (id, patch) => this.updateAgent(id, patch as any),
       notifyStream: (id, event) => this.notifyStreamListeners(id, event as any),
+      notifyToolCall: (id, event) => this.notifyToolCall(id, event),
       persist: () => this.persist(),
     });
 

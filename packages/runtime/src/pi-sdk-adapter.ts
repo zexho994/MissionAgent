@@ -1,6 +1,7 @@
 import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
 import type { Source } from "@digitalagent/core";
 import { runPiAgent, type PiAgentConfig, type PiAgentLike } from "./pi-agent-runner.js";
+import type { ToolCallTraceEvent } from "./tool-call-trace.js";
 
 export interface PiSdkAdapterOptions {
   apiKey: string;
@@ -18,6 +19,7 @@ export interface RunAgentTaskInput {
   timeoutSeconds: number;
   systemPrompt?: string;
   sessionId?: string;
+  onToolEvent?: (event: ToolCallTraceEvent) => void;
 }
 
 export interface RunAgentTaskResult {
@@ -73,6 +75,7 @@ export class PiSdkAdapter {
         timeoutSeconds: input.timeoutSeconds,
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         traceLabel: inferRuntimeTraceLabel(input.systemPrompt),
+        ...(input.onToolEvent ? { onToolEvent: input.onToolEvent } : {}),
         onEvent: (event) => collectSourcesFromEvent(event, sources),
         agentFactory: this.agentFactory,
       });

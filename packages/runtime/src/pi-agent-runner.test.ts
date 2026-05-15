@@ -78,6 +78,7 @@ describe("runPiAgent", () => {
   it("logs tool start and end events with trace context", async () => {
     let handler: ((event: any) => void) | undefined;
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const onToolEvent = vi.fn();
     const fakeAgent = {
       prompt: vi.fn().mockImplementation(async () => {
         handler?.({
@@ -111,6 +112,7 @@ describe("runPiAgent", () => {
       sessionId: "mission-1",
       traceLabel: "Owner",
       timeoutSeconds: 5,
+      onToolEvent,
       agentFactory: (() => fakeAgent) as never,
     });
 
@@ -131,6 +133,23 @@ describe("runPiAgent", () => {
         details: { path: "digitalagent/SKILL.md" },
       },
     );
+    expect(onToolEvent).toHaveBeenCalledWith({
+      status: "start",
+      traceLabel: "Owner",
+      sessionId: "mission-1",
+      toolCallId: "tool-1",
+      toolName: "load_skill",
+      args: { path: "digitalagent/SKILL.md" },
+    });
+    expect(onToolEvent).toHaveBeenCalledWith({
+      status: "end",
+      traceLabel: "Owner",
+      sessionId: "mission-1",
+      toolCallId: "tool-1",
+      toolName: "load_skill",
+      ok: true,
+      details: { path: "digitalagent/SKILL.md" },
+    });
     consoleSpy.mockRestore();
   });
 });

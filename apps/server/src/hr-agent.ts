@@ -6,7 +6,7 @@ import {
   type ValidationResult,
   SchedulePlanGenerationError,
 } from "@digitalagent/core";
-import type { LlmMessage, LlmService } from "@digitalagent/runtime";
+import type { LlmMessage, LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
 
 export interface MissionAnalysis {
   missionGoal: string;
@@ -56,6 +56,7 @@ export interface HRAgentOptions {
   timeoutMs?: number;
   idleTimeoutMs?: number;
   onToken?: (token: string) => void;
+  onToolEvent?: (event: ToolCallTraceEvent) => void;
 }
 
 export interface ProposeTeamOptions {
@@ -70,6 +71,7 @@ export function createHRAgent(options: HRAgentOptions) {
     timeoutMs = 90000,
     idleTimeoutMs = 10000,
     onToken,
+    onToolEvent,
   } = options;
 
   return {
@@ -91,6 +93,7 @@ export function createHRAgent(options: HRAgentOptions) {
         content += token;
         onToken?.(token);
       },
+      ...(onToolEvent ? { onToolEvent } : {}),
     });
     return content;
   }

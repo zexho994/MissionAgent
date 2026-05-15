@@ -1,5 +1,5 @@
 import { createId, type Mission } from "@digitalagent/core";
-import type { LlmService } from "@digitalagent/runtime";
+import type { LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
 import { extractQuestionWithOptions, parseOwnerDecision } from "./owner/index.js";
 
 export interface OwnerStreamingDeps {
@@ -9,6 +9,7 @@ export interface OwnerStreamingDeps {
   appendMessage(msg: { missionId: string; fromAgentId: string; type: string; content: string; options?: unknown }): void;
   updateAgent(agentId: string, patch: { status: string; lastAction: string }): void;
   notifyStream(missionId: string, event: { type: string; content?: string; messageId?: string }): void;
+  notifyToolCall(missionId: string, event: ToolCallTraceEvent): void;
   persist(): void;
 }
 
@@ -42,6 +43,7 @@ export async function runOwnerLlmStreaming(
         fullContent += token;
         deps.notifyStream(missionId, { type: "token", content: token });
       },
+      onToolEvent: (event) => deps.notifyToolCall(missionId, event),
     });
 
     const finalContent = fullContent || response.content;

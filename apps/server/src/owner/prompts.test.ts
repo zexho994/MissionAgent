@@ -29,6 +29,20 @@ describe("buildOwnerSystemPrompt", () => {
     expect(prompt).toContain("digitalagent/SKILL.md");
     expect(prompt).toContain("Do not rewrite DigitalAgent internal mission execution into an external software-building project");
   });
+
+  it("anchors Owner identity to DigitalAgent instead of external multi-agent frameworks", () => {
+    const prompt = buildOwnerSystemPrompt(
+      "You are a project manager",
+      "Ask clarifying questions",
+      '{"goal":"..."}',
+    );
+
+    expect(prompt).toContain("You are the Owner Agent inside DigitalAgent");
+    expect(prompt).toContain("DigitalAgent is the current self-developed mission execution system");
+    expect(prompt).toContain("Do not ask whether the user is using CrewAI, AutoGen, or another external multi-agent framework");
+    expect(prompt).toContain("MUST call load_skill with digitalagent/SKILL.md before asking a follow-up");
+    expect(prompt).toContain("agent, mission, collaboration, 协作, 测试, 验证");
+  });
 });
 
 describe("buildConversationMessages", () => {

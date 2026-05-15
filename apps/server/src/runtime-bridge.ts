@@ -1,4 +1,5 @@
 import type { Source } from "@digitalagent/core";
+import type { ToolCallTraceEvent } from "@digitalagent/runtime";
 
 export interface MissionExecutionRuntime {
   runAgentTask(input: {
@@ -6,6 +7,7 @@ export interface MissionExecutionRuntime {
     timeoutSeconds: number;
     systemPrompt?: string;
     sessionId?: string;
+    onToolEvent?: (event: ToolCallTraceEvent) => void;
   }): Promise<{
     status: string;
     output: unknown;

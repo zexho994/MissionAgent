@@ -6,7 +6,7 @@ import {
   type Mission,
   type ScheduleRule,
 } from "@digitalagent/core";
-import type { LlmService } from "@digitalagent/runtime";
+import type { LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
 import { createHRAgent, type TeamProposal } from "./hr-agent.js";
 import { createAgentFactory } from "./agent-factory.js";
 import { createNegotiationService, type OwnerContext, type NegotiationSummary } from "./negotiation-service.js";
@@ -31,10 +31,11 @@ export interface NegotiationManagerOptions {
 type HrStreamNotifier = (
   missionId: string,
   event: {
-    type: "hr_progress" | "hr_progress_done";
-    messageId: string;
+    type: "hr_progress" | "hr_progress_done" | "tool_call";
+    messageId?: string;
     tokensReceived?: number;
     phase?: "analyzing" | "negotiating";
+    toolEvent?: ToolCallTraceEvent;
   },
 ) => void;
 
@@ -87,6 +88,7 @@ export class NegotiationManager {
       const hrAgent = createHRAgent({
         llm: this.llm,
         ...(stream.onToken === undefined ? {} : { onToken: stream.onToken }),
+        ...(stream.onToolEvent === undefined ? {} : { onToolEvent: stream.onToolEvent }),
       });
       try {
         const { analysis, roleSpecs } = await withRetry(
@@ -228,6 +230,7 @@ export class NegotiationManager {
       const hrAgent = createHRAgent({
         llm: this.llm,
         ...(stream.onToken === undefined ? {} : { onToken: stream.onToken }),
+        ...(stream.onToolEvent === undefined ? {} : { onToolEvent: stream.onToolEvent }),
       });
 
       const revisedSpecs = await Promise.all(
@@ -463,10 +466,14 @@ export class NegotiationManager {
   private startHrStream(
     missionId: string,
     phase: "analyzing" | "negotiating",
-  ): { onToken: ((token: string) => void) | undefined; done: () => void } {
+  ): {
+    onToken: ((token: string) => void) | undefined;
+    onToolEvent: ((event: ToolCallTraceEvent) => void) | undefined;
+    done: () => void;
+  } {
     const notifier = this.notifyStream;
     if (!notifier) {
-      return { onToken: undefined, done: () => undefined };
+      return { onToken: undefined, onToolEvent: undefined, done: () => undefined };
     }
 
     const messageId = createId("hr_thinking");
@@ -488,6 +495,9 @@ export class NegotiationManager {
         if (Date.now() - lastEmitAt >= throttleMs) {
           flush();
         }
+      },
+      onToolEvent: (toolEvent: ToolCallTraceEvent) => {
+        notifier(missionId, { type: "tool_call", toolEvent });
       },
       done: () => {
         if (alreadyDone) return;

@@ -48,6 +48,7 @@ describe("PiSdkAdapter", () => {
         if (captured) {
           captured({
             type: "tool_execution_end",
+            toolCallId: "tool-1",
             toolName: "web_search",
             result: {
               ok: true,
@@ -72,16 +73,32 @@ describe("PiSdkAdapter", () => {
       apiKey: "k",
       agentFactory: (() => fakeAgent) as never,
     });
+    const onToolEvent = vi.fn();
 
     const result = await adapter.runAgentTask({
       message: "search hello",
       timeoutSeconds: 5,
+      onToolEvent,
     });
 
     expect(result.sources).toEqual([
       { url: "https://a.example", title: "A", snippet: "snip-a", searchKeyword: "hello" },
       { url: "https://b.example", title: "B", searchKeyword: "hello" },
     ]);
+    expect(onToolEvent).toHaveBeenCalledWith({
+      status: "end",
+      traceLabel: "RuntimeAgent",
+      toolCallId: "tool-1",
+      toolName: "web_search",
+      ok: true,
+      details: {
+        results: [
+          { url: "https://a.example", title: "A", snippet: "snip-a" },
+          { url: "https://b.example", title: "B" },
+        ],
+        searchKeyword: "hello",
+      },
+    });
     consoleSpy.mockRestore();
   });
 

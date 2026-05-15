@@ -115,6 +115,42 @@ describe("runOwnerLlmStreaming", () => {
       }),
     ]);
   });
+
+  it("forwards owner LLM tool events to the mission stream", async () => {
+    const harness = createHarness();
+    const llm: LlmService = {
+      call: async (_messages, options) => {
+        options?.onToolEvent?.({
+          status: "start",
+          traceLabel: "Owner",
+          toolName: "load_skill",
+          toolCallId: "tool-1",
+          args: { path: "digitalagent/SKILL.md" },
+        });
+        const content = JSON.stringify({ status: "needs_info", question: "What should we test?" });
+        options?.onStream?.(content);
+        return {
+          content,
+          model: "test",
+          usage: { promptTokens: 0, completionTokens: content.length, totalTokens: content.length },
+          finishReason: "stop",
+        };
+      },
+      stats: () => ({ totalCalls: 1, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+    };
+
+    await runOwnerLlmStreaming(llm, baseInput(), harness.deps);
+
+    expect(harness.toolEvents).toEqual([
+      {
+        status: "start",
+        traceLabel: "Owner",
+        toolName: "load_skill",
+        toolCallId: "tool-1",
+        args: { path: "digitalagent/SKILL.md" },
+      },
+    ]);
+  });
 });
 
 function baseInput() {
@@ -139,6 +175,7 @@ function createHarness(options: { messages?: Array<{ type: string; createdAt: st
   };
   const messages: Array<{ type: string; content: string }> = [];
   const doneEvents: unknown[] = [];
+  const toolEvents: unknown[] = [];
   let agentPatch: { status: string; lastAction: string } | undefined;
   let persistCount = 0;
 
@@ -151,6 +188,9 @@ function createHarness(options: { messages?: Array<{ type: string; createdAt: st
     notifyStream: (_missionId, event) => {
       if (event.type === "done") doneEvents.push(event);
     },
+    notifyToolCall: (_missionId, event) => {
+      toolEvents.push(event);
+    },
     persist: () => { persistCount += 1; },
   };
 
@@ -158,6 +198,7 @@ function createHarness(options: { messages?: Array<{ type: string; createdAt: st
     get mission() { return mission; },
     messages,
     doneEvents,
+    toolEvents,
     get agentPatch() { return agentPatch; },
     get persistCount() { return persistCount; },
     deps,

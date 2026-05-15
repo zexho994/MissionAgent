@@ -1,3 +1,5 @@
+import type { ToolCallTraceEvent } from "../tool-call-trace.js";
+
 export interface LlmMessage {
   role: "system" | "user" | "assistant";
   content: string;
@@ -10,6 +12,7 @@ export interface LlmCallOptions {
   timeoutMs?: number;
   idleTimeoutMs?: number;
   onStream?: (token: string) => void;
+  onToolEvent?: (event: ToolCallTraceEvent) => void;
   extraBody?: Record<string, unknown>;
 }
 

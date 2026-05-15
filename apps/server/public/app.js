@@ -8,6 +8,8 @@ const state = {
   popoverOpen: false,
   streamingMissionId: undefined,
   hrStreamingMissionId: undefined,
+  toolConsoleMissionId: undefined,
+  toolConsoleEventSource: undefined,
   pollingInterval: undefined,
   automationSummaryByMissionId: {},
   feedbackSummaryByMissionId: {},
@@ -205,6 +207,7 @@ async function updateStrategyAdjustmentStatus(missionId, adjustmentId, newStatus
 async function runTask(missionId, taskId, message = "Execute the assigned task.") {
   state.scheduleActionPending = true;
   state.scheduleError = "";
+  streamToolCallConsole(missionId);
   renderAll();
   try {
     const result = await api(`/api/pi/run`, {
@@ -286,10 +289,14 @@ function syncSelectedMission() {
     state.selectedMissionId = undefined;
     state.draftMode = true;
     state.view = "home";
+    stopToolCallConsole();
     return;
   }
   if (!state.draftMode && (!state.selectedMissionId || !missions.some((mission) => mission.id === state.selectedMissionId))) {
     state.selectedMissionId = missions.at(-1).id;
+  }
+  if (!state.draftMode && state.selectedMissionId) {
+    streamToolCallConsole(state.selectedMissionId);
   }
 }
 
@@ -479,6 +486,7 @@ function renderMissionPopover() {
     button.addEventListener("click", async () => {
       state.selectedMissionId = button.dataset.selectMission;
       state.draftMode = false;
+      streamToolCallConsole(state.selectedMissionId);
       const willEnterWarRoom = missionHasWarRoomState(state.selectedMissionId);
       state.view = willEnterWarRoom ? "mission" : "home";
       state.popoverOpen = false;
@@ -1268,6 +1276,7 @@ document.addEventListener("submit", async (event) => {
 $("home-button").addEventListener("click", () => {
   state.view = "home";
   state.popoverOpen = false;
+  stopToolCallConsole();
   stopPolling();
   renderAll();
 });
@@ -1277,6 +1286,7 @@ $("new-chat-button").addEventListener("click", () => {
   state.draftMode = true;
   state.view = "home";
   state.popoverOpen = false;
+  stopToolCallConsole();
   stopPolling();
   renderAll();
 });
@@ -1330,10 +1340,53 @@ function showTopbarError(error) {
   $("openclaw-dot").classList.remove("ok");
 }
 
+function logToolCallToBrowserConsole(toolEvent) {
+  if (!toolEvent || typeof toolEvent !== "object") return;
+  const label = toolEvent.traceLabel || "unknown";
+  const status = toolEvent.status || "event";
+  const toolName = toolEvent.toolName || "unknown_tool";
+  console.log(`[pi-agent tool][${label}] ${status} ${toolName}`, toolEvent);
+}
+
+function streamToolCallConsole(missionId) {
+  if (!missionId) return;
+  if (state.toolConsoleMissionId === missionId && state.toolConsoleEventSource) return;
+  stopToolCallConsole();
+
+  const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
+  state.toolConsoleMissionId = missionId;
+  state.toolConsoleEventSource = eventSource;
+
+  eventSource.addEventListener("message", (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === "tool_call") {
+        logToolCallToBrowserConsole(data.toolEvent);
+      }
+    } catch (error) {
+      console.error("[ToolCall SSE] Parse error:", error);
+    }
+  });
+
+  eventSource.addEventListener("error", (error) => {
+    console.error("[ToolCall SSE] Connection error:", error);
+    stopToolCallConsole();
+  });
+}
+
+function stopToolCallConsole() {
+  if (state.toolConsoleEventSource) {
+    state.toolConsoleEventSource.close();
+  }
+  state.toolConsoleEventSource = undefined;
+  state.toolConsoleMissionId = undefined;
+}
+
 async function streamOwnerResponse(missionId, container) {
   if (state.streamingMissionId === missionId) return;
 
   state.streamingMissionId = missionId;
+  streamToolCallConsole(missionId);
   const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
 
   // Try to find the thinking bubble, but don't close SSE if it doesn't exist yet
@@ -1403,6 +1456,7 @@ async function streamOwnerResponse(missionId, container) {
 function streamHrProgress(missionId) {
   if (state.hrStreamingMissionId === missionId) return;
   state.hrStreamingMissionId = missionId;
+  streamToolCallConsole(missionId);
 
   const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
 

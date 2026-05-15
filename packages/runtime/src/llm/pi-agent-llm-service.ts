@@ -41,6 +41,7 @@ export function createPiAgentLlmService(options: CreatePiAgentLlmServiceOptions)
         tools: options.tools,
         timeoutSeconds,
         traceLabel: inferLlmTraceLabel(prepared.systemPrompt),
+        ...(callOptions?.onToolEvent ? { onToolEvent: callOptions.onToolEvent } : {}),
         ...(options.agentFactory ? { agentFactory: options.agentFactory } : {}),
         onEvent(event) {
           if (event.type !== "message_update") return;

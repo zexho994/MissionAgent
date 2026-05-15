@@ -1,5 +1,6 @@
 import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
 import { getModel, type Model } from "@earendil-works/pi-ai";
+import type { ToolCallTraceEvent } from "./tool-call-trace.js";
 
 export interface PiAgentMessage {
   role: "user" | "assistant";
@@ -36,6 +37,7 @@ export interface RunPiAgentInput {
   timeoutSeconds: number;
   sessionId?: string;
   traceLabel?: string;
+  onToolEvent?: (event: ToolCallTraceEvent) => void;
   onEvent?: (event: AgentEvent) => void;
   agentFactory?: (config: PiAgentConfig) => PiAgentLike;
 }
@@ -62,7 +64,11 @@ export async function runPiAgent(input: RunPiAgentInput): Promise<RunPiAgentResu
   const agentFactory = input.agentFactory ?? ((agentConfig) => new Agent(agentConfig as never) as unknown as PiAgentLike);
   const agent = agentFactory(config);
   agent.subscribe((event) => {
-    logToolEvent(event, input.traceLabel, input.sessionId);
+    const toolEvent = toToolTraceEvent(event, input.traceLabel, input.sessionId);
+    if (toolEvent) {
+      logToolEvent(toolEvent);
+      input.onToolEvent?.(toolEvent);
+    }
     input.onEvent?.(event);
   });
 
@@ -70,32 +76,49 @@ export async function runPiAgent(input: RunPiAgentInput): Promise<RunPiAgentResu
   return { messages: agent.state.messages };
 }
 
-function logToolEvent(event: AgentEvent, traceLabel = "unknown", sessionId?: string): void {
+function toToolTraceEvent(event: AgentEvent, traceLabel = "unknown", sessionId?: string): ToolCallTraceEvent | undefined {
   if (event.type === "tool_execution_start") {
-    console.log(
-      `[pi-agent tool][${traceLabel}] start ${event.toolName}`,
-      compactLogPayload({
-        sessionId,
-        toolCallId: event.toolCallId,
-        args: event.args,
-      }),
-    );
-    return;
+    const toolEvent: ToolCallTraceEvent = {
+      status: "start",
+      traceLabel,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+    };
+    if (sessionId !== undefined) toolEvent.sessionId = sessionId;
+    if (event.args !== undefined) toolEvent.args = event.args;
+    return toolEvent;
   }
 
   if (event.type === "tool_execution_end") {
     const result = event.result as Record<string, unknown> | undefined;
-    console.log(
-      `[pi-agent tool][${traceLabel}] end ${event.toolName}`,
-      compactLogPayload({
-        sessionId,
-        toolCallId: event.toolCallId,
-        ok: !event.isError,
-        error: event.isError ? result?.error ?? result : undefined,
-        details: result?.details,
-      }),
-    );
+    const toolEvent: ToolCallTraceEvent = {
+      status: "end",
+      traceLabel,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      ok: !event.isError,
+    };
+    if (sessionId !== undefined) toolEvent.sessionId = sessionId;
+    if (event.isError) toolEvent.error = result?.error ?? result;
+    if (result?.details !== undefined) toolEvent.details = result.details;
+    return toolEvent;
   }
+
+  return undefined;
+}
+
+function logToolEvent(event: ToolCallTraceEvent): void {
+  console.log(
+    `[pi-agent tool][${event.traceLabel}] ${event.status} ${event.toolName}`,
+    compactLogPayload({
+      sessionId: event.sessionId,
+      toolCallId: event.toolCallId,
+      args: event.args,
+      ok: event.ok,
+      error: event.error,
+      details: event.details,
+    }),
+  );
 }
 
 function compactLogPayload(value: Record<string, unknown>): Record<string, unknown> {

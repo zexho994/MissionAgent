@@ -311,6 +311,74 @@ describe("InMemoryMissionService", () => {
     expect(finalExecution?.status).toBe("completed");
   });
 
+  it("streams runtime tool events to mission subscribers", async () => {
+    const runtime: MissionExecutionRuntime = {
+      async runAgentTask(input) {
+        input.onToolEvent?.({
+          status: "start",
+          traceLabel: "RuntimeAgent",
+          toolName: "load_skill",
+          toolCallId: "tool-1",
+          args: { path: "digitalagent/SKILL.md" },
+        });
+        return {
+          status: "completed",
+          output: {
+            payloads: [
+              { text: "Auto run a mission completed successfully with all deliverables produced." },
+            ],
+          },
+          stderr: "",
+        };
+      },
+    };
+    const service = new InMemoryMissionService({ runtime });
+    const mission = await service.createMission({ goal: "Auto run a mission" });
+    await service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+    if (!task) throw new Error("missing initial task");
+
+    const events: Array<{ type: string; toolEvent?: unknown }> = [];
+    const subscription = service.subscribeToMissionStream(mission.id, (event) => {
+      events.push(event);
+    });
+
+    service.executeTask({
+      missionId: mission.id,
+      taskId: task.id,
+      message: "auto",
+    });
+    await new Promise((r) => setImmediate(r));
+    subscription.unsubscribe();
+
+    expect(events).toContainEqual({
+      type: "tool_call",
+      toolEvent: {
+        status: "start",
+        traceLabel: "RuntimeAgent",
+        toolName: "load_skill",
+        toolCallId: "tool-1",
+        args: { path: "digitalagent/SKILL.md" },
+      },
+    });
+
+    const replayed: Array<{ type: string; toolEvent?: unknown }> = [];
+    const replaySubscription = service.subscribeToMissionStream(mission.id, (event) => {
+      replayed.push(event);
+    });
+    replaySubscription.unsubscribe();
+    expect(replayed).toContainEqual({
+      type: "tool_call",
+      toolEvent: {
+        status: "start",
+        traceLabel: "RuntimeAgent",
+        toolName: "load_skill",
+        toolCallId: "tool-1",
+        args: { path: "digitalagent/SKILL.md" },
+      },
+    });
+  });
+
   it("executeTask without runtime injected throws a clear error", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Need runtime" });
