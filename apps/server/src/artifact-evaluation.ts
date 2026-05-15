@@ -10,7 +10,7 @@ export function evaluateArtifactQuality(
 
   const pi = content.pi as Record<string, unknown> | undefined;
   if (!pi) {
-    return { score: 0.1, decision: "reject", comments: ["Artifact has no OpenClaw output"] };
+    return { score: 0.1, decision: "reject", comments: ["Artifact has no pi-agent output"] };
   }
 
   const payloads = pi.payloads as Array<Record<string, unknown>> | undefined;
@@ -116,8 +116,7 @@ export function evaluateArtifactQuality(
 }
 
 /**
- * Extracts source information from OpenClaw output content.
- * Supports the same formats as extractSourcesFromOpenClawOutput in api.ts.
+ * Extracts source information from pi-agent output content.
  */
 function extractSourcesFromContent(pi: Record<string, unknown>): Source[] {
   const sources: Source[] = [];

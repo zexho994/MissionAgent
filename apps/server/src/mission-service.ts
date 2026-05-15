@@ -1183,14 +1183,14 @@ export class InMemoryMissionService {
       missionId: mission.id,
       fromAgentId: worker.id,
       type: "execution_started",
-      content: "Started local OpenClaw execution for the current task.",
+      content: "Started local pi-agent execution for the current task.",
     });
     this.appendTaskEvent({
       missionId: mission.id,
       taskId: runningTask.id,
       actorAgentId: worker.id,
       type: "execution.started",
-      summary: `${worker.name} invoked OpenClaw local agent.`,
+      summary: `${worker.name} invoked local pi-agent runtime.`,
     });
     this.persist();
     return execution;
@@ -3502,7 +3502,7 @@ export class InMemoryMissionService {
     const migration = migrateOpenClawToPi(raw);
     if (migration.migrated) {
       writeFileSync(this.storageFile, migration.json, "utf8");
-      console.log("[store-migration] rewrote openclaw -> pi keys in", this.storageFile);
+      console.log("[store-migration] rewrote pi legacy store entries in", this.storageFile);
     }
     const json = migration.migrated ? migration.json : raw;
     const stored = JSON.parse(json) as StoredMissionSnapshot;

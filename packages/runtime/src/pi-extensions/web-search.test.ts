@@ -81,11 +81,11 @@ describe("searchWeb", () => {
     ).rejects.toThrow(/503|Service Unavailable/);
   });
 
-  it("returns empty results without calling fetch when apiKey is missing", async () => {
+  it("throws without calling fetch when apiKey is missing", async () => {
     const fetchMock = vi.fn();
-    const result = await searchWeb({ query: "x", fetch: fetchMock });
-    expect(result.results).toEqual([]);
-    expect(result.note).toMatch(/api key/i);
+    await expect(searchWeb({ query: "x", fetch: fetchMock })).rejects.toThrow(
+      /WEB_SEARCH_API_KEY is required/,
+    );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

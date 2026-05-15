@@ -38,6 +38,16 @@ function currentStrategy(mission: Mission): string {
   return mission.brief?.scope || mission.goal;
 }
 
+function readableFailureReason(rootCause: string): string {
+  if (rootCause === "Agent output is empty or too short") {
+    return "Agent 输出为空或过短，无法作为有效结果验收。";
+  }
+  if (rootCause === "Artifact has no pi-agent output" || rootCause === "Artifact has no OpenClaw output") {
+    return "执行产物缺少 pi-agent 输出，无法判断任务是否产生了真实进展。";
+  }
+  return rootCause;
+}
+
 export function buildExecutionResultFeedback(input: {
   mission: Mission;
   task: Task;
@@ -102,8 +112,8 @@ export function buildExecutionResultFeedback(input: {
     triggeredByFailureAnalysisId: failureAnalysis.id,
     status: "proposed",
     previousStrategy: currentStrategy(input.mission),
-    proposedStrategy: `Reassess strategy after "${input.task.title}" failed to produce usable Mission progress.`,
-    rationale: failureAnalysis.rootCause,
+    proposedStrategy: `重新评估任务策略：当前任务“${input.task.title}”没有产出可验收的 Mission 进展。`,
+    rationale: readableFailureReason(failureAnalysis.rootCause),
     affectedAgentRoles: [],
     proposedTaskGoals: failureAnalysis.recommendedNextActions,
     requiresHrReview: true,

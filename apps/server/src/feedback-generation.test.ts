@@ -88,7 +88,7 @@ describe("feedback generation", () => {
       artifactId: "artifact_1",
       reviewerAgentId: "agent_reviewer",
       decision: "reject",
-      comments: ["Artifact has no OpenClaw output"],
+      comments: ["Agent output is empty or too short"],
       createdAt: new Date("2026-05-05T00:02:00.000Z"),
     };
 
@@ -98,6 +98,13 @@ describe("feedback generation", () => {
     expect(feedback.failureAnalysis?.recommendedRecovery).toBe("adjust_strategy");
     expect(feedback.strategyAdjustment?.status).toBe("proposed");
     expect(feedback.strategyAdjustment?.requiresHrReview).toBe(true);
+    expect(feedback.strategyAdjustment?.proposedStrategy).toBe(
+      "重新评估任务策略：当前任务“Draft repository growth plan”没有产出可验收的 Mission 进展。",
+    );
+    expect(feedback.strategyAdjustment?.rationale).toBe(
+      "Agent 输出为空或过短，无法作为有效结果验收。",
+    );
+    expect(feedback.strategyAdjustment?.proposedStrategy).not.toContain("Reassess strategy");
   });
 
   it("builds blocked feedback for execution failure", () => {

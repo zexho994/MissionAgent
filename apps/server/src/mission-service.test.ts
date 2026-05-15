@@ -620,6 +620,11 @@ describe("InMemoryMissionService", () => {
       missionId: mission.id,
       taskId: task.id,
     });
+    const startSnapshot = service.snapshot();
+    expect(startSnapshot.agentMessages.at(-1)?.content).toBe(
+      "Started local pi-agent execution for the current task.",
+    );
+    expect(startSnapshot.taskEvents.at(-1)?.summary).toContain("invoked local pi-agent runtime");
 
     const result = service.submitExecutionResult({
       executionId: execution.id,
