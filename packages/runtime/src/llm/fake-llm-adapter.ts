@@ -72,8 +72,5 @@ function isMissionContractExtraction(messages: LlmMessage[]): boolean {
 }
 
 function isMissionBriefContractValidation(messages: LlmMessage[]): boolean {
-  return messages.some((message) =>
-    message.content.includes("MissionBrief contract validation") ||
-    message.content.includes("MissionPlan contract validation")
-  );
+  return messages.some((message) => message.content.includes("MissionBrief contract validation"));
 }

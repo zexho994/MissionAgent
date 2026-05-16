@@ -35,14 +35,11 @@ import { dirname } from "node:path";
 import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
 import {
   buildMissionPlanMessages,
-  buildMissionPlanContractValidationMessages,
   buildMissionPlanMessagesWithRepair,
-  buildMissionPlanSemanticRepairMessages,
   buildOwnerSystemPrompt,
   buildConversationMessages,
   buildSummaryRequest,
   parseMissionPlanDraft,
-  parseMissionPlanContractValidation,
 } from "./owner/index.js";
 import type { TeamProposal } from "./hr-agent.js";
 import { NegotiationManager, type NegotiationSummary, type StoredNegotiationState } from "./negotiation-manager.js";
@@ -1056,31 +1053,6 @@ export class InMemoryMissionService {
         callOptions,
       );
       draft = parseMissionPlanDraft(repairResponse.content);
-    }
-    const contractValidationResponse = await this.llm.call(
-      buildMissionPlanContractValidationMessages({ brief: mission.brief, draft }),
-      callOptions,
-    );
-    const contractValidation = parseMissionPlanContractValidation(contractValidationResponse.content);
-    if (contractValidation.status === "fail") {
-      const repairResponse = await this.llm.call(
-        buildMissionPlanSemanticRepairMessages({
-          brief: mission.brief,
-          draft,
-          reasons: contractValidation.reasons,
-          ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
-        }),
-        callOptions,
-      );
-      draft = parseMissionPlanDraft(repairResponse.content);
-      const repairedValidationResponse = await this.llm.call(
-        buildMissionPlanContractValidationMessages({ brief: mission.brief, draft }),
-        callOptions,
-      );
-      const repairedValidation = parseMissionPlanContractValidation(repairedValidationResponse.content);
-      if (repairedValidation.status === "fail") {
-        throw new Error(`MissionPlan contract validation failed after repair retry: ${repairedValidation.reasons.join("; ")}`);
-      }
     }
     const existingPlans = [...this.plans.values()].filter((plan) => plan.missionId === mission.id);
     const revision = existingPlans.length + 1;

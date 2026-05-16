@@ -6,10 +6,6 @@ export type MissionPlanDraft = Omit<
   "id" | "missionId" | "status" | "createdAt" | "confirmedAt" | "revision" | "feedback"
 >;
 
-export type MissionPlanContractValidation =
-  | { status: "pass"; reasons: string[] }
-  | { status: "fail"; reasons: string[] };
-
 export function buildMissionPlanMessages(input: { brief: MissionBrief; feedback?: string }): LlmMessage[] {
   return buildMissionPlanMessagesWithRepair(input);
 }
@@ -88,83 +84,6 @@ export function parseMissionPlanDraft(text: string): MissionPlanDraft {
     ),
     checkpoints: requireNonEmptyStringArray(parsed.checkpoints, "MissionPlan.checkpoints"),
   };
-}
-
-export function buildMissionPlanContractValidationMessages(input: {
-  brief: MissionBrief;
-  draft: MissionPlanDraft;
-}): LlmMessage[] {
-  return [
-    {
-      role: "system",
-      content: [
-        "You are a strict MissionPlan contract validation reviewer.",
-        "Your job is semantic preservation from MissionBrief to MissionPlan, not domain solving.",
-        "Treat the MissionBrief as the contract.",
-        "Check whether the candidate MissionPlan preserves every concrete requirement from the MissionBrief, including exact quantities, participant counts, round counts, ordering requirements, deliverables, exclusions, validation expectations, and completion criteria.",
-        "Fail if the plan omits, softens, generalizes, or changes a requirement.",
-        "Fail if the plan adds mandatory runtime actors, tools, workstreams, or acceptance conditions that violate a fixed count or other constraint in the MissionBrief.",
-        "When participant count is fixed, extra requiredRole entries, reporting roles, reviewer/coordinator/tracker/validator roles, or schedule owner roles count as added mandatory runtime actors unless the MissionBrief explicitly allows them.",
-        "Do not invent requirements that the MissionBrief did not state.",
-        "Return ONLY strict JSON: {\"status\":\"pass\",\"reasons\":[]} or {\"status\":\"fail\",\"reasons\":[\"specific actionable reason\"]}.",
-      ].join("\n"),
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        task: "MissionPlan contract validation",
-        MissionBrief: input.brief,
-        candidateMissionPlan: input.draft,
-      }),
-    },
-  ];
-}
-
-export function parseMissionPlanContractValidation(text: string): MissionPlanContractValidation {
-  const candidate = extractJsonObject(text);
-  if (!candidate) {
-    throw new Error("No JSON object found in MissionPlan contract validation response");
-  }
-  const parsed = JSON.parse(candidate) as Record<string, unknown>;
-  const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.map(String).filter((reason) => reason.trim()) : [];
-  if (parsed.status === "pass") return { status: "pass", reasons };
-  if (parsed.status === "fail") {
-    return {
-      status: "fail",
-      reasons: reasons.length ? reasons : ["MissionPlan contract validation failed without a reason."],
-    };
-  }
-  throw new Error(`MissionPlan contract validation returned invalid status: ${String(parsed.status)}`);
-}
-
-export function buildMissionPlanSemanticRepairMessages(input: {
-  brief: MissionBrief;
-  draft: MissionPlanDraft;
-  reasons: string[];
-  feedback?: string;
-}): LlmMessage[] {
-  return [
-    {
-      role: "system",
-      content: `You are the Owner planning workflow for DigitalAgent.
-Return ONLY one valid MissionPlan JSON object. No markdown, no explanation.
-The JSON must contain: goal, successMetrics, phases, workstreams, reportingLines, scheduleRhythms, risks, checkpoints.
-Rewrite the MissionPlan so it preserves the MissionBrief contract exactly.
-Do not add mandatory runtime actors, tools, workstreams, or acceptance conditions that violate a fixed count or other constraint in the MissionBrief.
-When participant count is fixed, validation, tracking, and coordination responsibilities must be assigned to the fixed participants or the Owner, not to extra reviewer/coordinator/tracker/validator roles.
-Do not soften exact quantities, participant counts, turn counts, ordering requirements, validation requirements, deliverables, exclusions, or completion criteria.`,
-    },
-    {
-      role: "user",
-      content: JSON.stringify({
-        task: "Repair MissionPlan after contract validation failure",
-        MissionBrief: input.brief,
-        rejectedMissionPlan: input.draft,
-        validationReasons: input.reasons,
-        revisionFeedback: input.feedback ?? "",
-      }),
-    },
-  ];
 }
 
 function parsePhase(value: unknown) {
