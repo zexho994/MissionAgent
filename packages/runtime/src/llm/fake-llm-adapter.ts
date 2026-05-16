@@ -20,7 +20,11 @@ export class FakeLlmAdapter implements LlmService {
     this.lastMessages = [...messages];
     this.lastOptions = options;
 
-    const content = this.handler(messages);
+    const content = isMissionContractExtraction(messages)
+      ? JSON.stringify({ requirements: [] })
+      : isMissionBriefContractValidation(messages)
+      ? JSON.stringify({ status: "pass", reasons: [] })
+      : this.handler(messages);
     const promptTokens = messages.reduce((sum, message) => sum + message.content.length, 0);
     const completionTokens = content.length;
 
@@ -61,4 +65,15 @@ export class FakeLlmAdapter implements LlmService {
   getLastOptions(): LlmCallOptions | undefined {
     return this.lastOptions;
   }
+}
+
+function isMissionContractExtraction(messages: LlmMessage[]): boolean {
+  return messages.some((message) => message.content.includes("Mission contract extraction"));
+}
+
+function isMissionBriefContractValidation(messages: LlmMessage[]): boolean {
+  return messages.some((message) =>
+    message.content.includes("MissionBrief contract validation") ||
+    message.content.includes("MissionPlan contract validation")
+  );
 }

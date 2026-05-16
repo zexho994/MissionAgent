@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { createScheduleRule } from "@digitalagent/core";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
-import { FakeLlmAdapter } from "@digitalagent/runtime";
+import { FakeLlmAdapter, type LlmService } from "@digitalagent/runtime";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -890,6 +890,7 @@ describe("InMemoryMissionService", () => {
     const service = new InMemoryMissionService({ llm: fake });
 
     const mission = await service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(mission.goal).toBe("运营小红书账号");
     expect(fake.stats().totalCalls).toBe(1);
@@ -945,8 +946,10 @@ describe("InMemoryMissionService", () => {
     const service = new InMemoryMissionService({ llm: fake });
 
     await service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     await service.continueMission({ missionId: service.snapshot().missions[0]!.id, message: "目标人群是年轻女性" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     const snapshot = service.snapshot();
     const updatedMission = snapshot.missions[0];
@@ -966,8 +969,10 @@ describe("InMemoryMissionService", () => {
     const service = new InMemoryMissionService({ llm: fake });
 
     await service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     await service.continueMission({ missionId: service.snapshot().missions[0]!.id, message: "补充信息" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     const withBrief = service.snapshot().missions[0];
     if (!withBrief?.brief) throw new Error("brief should exist");
@@ -1012,6 +1017,7 @@ describe("InMemoryMissionService", () => {
     await service.continueMission({ missionId, message: "补充3" });
     await service.continueMission({ missionId, message: "补充4" });
     await service.continueMission({ missionId, message: "补充5" });
+    await waitForBrief(service, missionId);
 
     const snapshot = service.snapshot();
     expect(snapshot.missions[0]?.brief).toBeDefined();
@@ -1184,6 +1190,112 @@ describe("InMemoryMissionService", () => {
         maxTokens: 3000,
         timeoutMs: 90000,
       });
+    });
+
+    it("retries MissionPlan generation once with parse feedback when the first JSON is invalid", async () => {
+      const prompts: string[] = [];
+      let planCallCount = 0;
+      const fake = new FakeLlmAdapter((messages) => {
+        if (messages[0]?.content.includes("Owner planning workflow")) {
+          planCallCount += 1;
+          prompts.push(messages[messages.length - 1]!.content);
+          if (planCallCount === 1) return "{\"goal\":\"Run a mission\",\"successMetrics\":[\"ok\"";
+          return missionPlanJson("Run a mission after repair");
+        }
+        return JSON.stringify({
+          goal: "Run a mission",
+          scope: "Execution test",
+          constraints: [],
+          successMetrics: ["Mission is runnable"],
+          keyAssumptions: [],
+        });
+      });
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await createConfirmedMission(service);
+
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+
+      expect(plan.goal).toBe("Run a mission after repair");
+      expect(planCallCount).toBe(2);
+      expect(prompts[1]).toContain("Previous MissionPlan JSON parse error");
+      expect(prompts[1]).toContain("MissionBrief");
+    });
+
+    it("repairs a MissionPlan once when semantic review finds it violates the confirmed brief", async () => {
+      const briefJson = JSON.stringify({
+        goal: "Run exactly 5 agents for 50 turns",
+        scope: "Five runtime agents rotate through the task",
+        constraints: ["Fixed participant count is 5 agents"],
+        successMetrics: ["Complete 50 turns"],
+        keyAssumptions: [],
+      });
+      const badPlan = JSON.stringify({
+        goal: "Run 5 player agents for 50 turns",
+        successMetrics: ["Complete 50 turns"],
+        phases: [{
+          name: "Setup",
+          objective: "Recruit 5 players and 1 reviewer",
+          deliverables: ["5 players", "1 reviewer"],
+          successCriteria: ["All 6 agents ready"],
+        }],
+        workstreams: [{
+          name: "Players",
+          objective: "Take turns",
+          requiredRole: "Player Agent (5 instances)",
+          responsibilities: ["Produce turns"],
+          firstTaskGoal: "Start turn 1",
+        }, {
+          name: "Reviewer",
+          objective: "Review every turn",
+          requiredRole: "Reviewer Agent",
+          responsibilities: ["Approve turns"],
+          firstTaskGoal: "Review turn 1",
+        }],
+        reportingLines: [],
+        scheduleRhythms: [{ name: "Turns", cadence: "per turn", ownerRole: "Reviewer", purpose: "Validate" }],
+        risks: [],
+        checkpoints: ["50 turns complete"],
+      });
+      const repairedPlan = missionPlanJson("Run exactly 5 agents for 50 turns");
+      const calls: Array<{ role: string; content: string }[]> = [];
+      const responses = [
+        briefJson,
+        JSON.stringify({ requirements: ["Use exactly 5 agents.", "Complete 50 turns."] }),
+        JSON.stringify({ status: "pass", reasons: [] }),
+        badPlan,
+        JSON.stringify({
+          status: "fail",
+          reasons: ["Plan adds a mandatory reviewer, producing 6 agents despite the brief's fixed count of 5 agents."],
+        }),
+        repairedPlan,
+        JSON.stringify({ status: "pass", reasons: [] }),
+      ];
+      const llm: LlmService = {
+        call: async (messages, options) => {
+          calls.push(messages);
+          const content = responses[calls.length - 1];
+          if (!content) throw new Error(`Unexpected LLM call ${calls.length}`);
+          options?.onStream?.(content);
+          return {
+            content,
+            model: "test",
+            usage: { promptTokens: 0, completionTokens: content.length, totalTokens: content.length },
+            finishReason: "stop",
+          };
+        },
+        stats: () => ({ totalCalls: calls.length, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+      };
+      const service = new InMemoryMissionService({ llm });
+      const mission = await service.createMission({ goal: "Run exactly 5 agents for 50 turns" });
+      await waitForBrief(service, mission.id);
+      service.confirmBrief({ missionId: mission.id });
+
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+
+      expect(plan.goal).toBe("Run exactly 5 agents for 50 turns");
+      expect(calls).toHaveLength(7);
+      expect(calls[4]?.at(-1)?.content).toContain("MissionPlan contract validation");
+      expect(calls[5]?.at(-1)?.content).toContain("Plan adds a mandatory reviewer");
     });
 
     it("fails fast when plan generation prerequisites or parser output are invalid", async () => {
@@ -2385,7 +2497,9 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
 
@@ -2408,7 +2522,9 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
 
@@ -2436,7 +2552,9 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
 
@@ -2460,7 +2578,9 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "补充信息" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
       await service.activateMission({ missionId: mission.id });
@@ -2482,7 +2602,9 @@ describe("InMemoryMissionService", () => {
           successMetrics: ["followers >= 1000"],
           constraints: ["1 month"],
         });
+        await new Promise((resolve) => setImmediate(resolve));
         await service.continueMission({ missionId: mission.id, message: "补充信息" });
+        await waitForBrief(service, mission.id);
         service.confirmBrief({ missionId: mission.id });
         await confirmPlanForMission(service, mission.id);
         await service.activateMission({ missionId: mission.id });
@@ -2507,6 +2629,7 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["image prompt"],
         constraints: ["concise"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "目标人群是开发者,周期一个月" });
       await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });

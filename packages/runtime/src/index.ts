@@ -1,6 +1,7 @@
 export * from "./pi-sdk-adapter.js";
 export * from "./pi-agent-runner.js";
 export * from "./pi-hooks.js";
+export type { AgentTool } from "@earendil-works/pi-agent-core";
 export type { ToolCallTraceEvent } from "./tool-call-trace.js";
 export { createWebSearchTool, searchWeb } from "./pi-extensions/web-search.js";
 export type { WebSearchToolOptions, SearchOptions, SearchResult, SearchResponse } from "./pi-extensions/web-search.js";

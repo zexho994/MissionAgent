@@ -29,6 +29,7 @@ B. Second option
 C. Third option
 
 When you are ready to produce a MissionBrief, respond with ONLY a JSON object matching this schema (no markdown, no explanation):
+Preserve all concrete user requirements exactly in the MissionBrief. Exact quantities, units, actor types, turn counts, participant counts, ordering requirements, exclusions, and completion criteria are hard contract terms unless the user explicitly changes them later. Do not replace a requested count with a smaller sample, estimate, or timeline.
 ${briefSchema}`;
 }
 

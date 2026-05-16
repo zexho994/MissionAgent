@@ -13,8 +13,8 @@ export function evaluateArtifactQuality(
     return { score: 0.1, decision: "reject", comments: ["Artifact has no pi-agent output"] };
   }
 
-  const payloads = pi.payloads as Array<Record<string, unknown>> | undefined;
-  const agentText = payloads?.[0]?.text as string | undefined;
+  const payloads = normalizePayloads(pi, content);
+  const agentText = payloads.map((payload) => typeof payload.text === "string" ? payload.text : "").join("\n").trim();
 
   if (!agentText || agentText.trim().length < 20) {
     return { score: 0.1, decision: "reject", comments: ["Agent output is empty or too short"] };
@@ -113,6 +113,41 @@ export function evaluateArtifactQuality(
   }
 
   return { score: Math.round(score * 100) / 100, decision, comments };
+}
+
+function normalizePayloads(pi: Record<string, unknown>, content: Record<string, unknown>): Array<Record<string, unknown>> {
+  const payloads = pi.payloads as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(payloads) && payloads.length > 0) return payloads;
+
+  const directPayloads = content.payloads as Array<Record<string, unknown>> | undefined;
+  if (Array.isArray(directPayloads) && directPayloads.length > 0) return directPayloads;
+
+  const directSummary = typeof content.summary === "string" ? content.summary : undefined;
+  if (directSummary) return [{ text: directSummary }];
+
+  const messageText = extractAssistantText(pi.messages);
+  return messageText ? [{ text: messageText }] : [];
+}
+
+function extractAssistantText(messages: unknown): string {
+  if (!Array.isArray(messages)) return "";
+  return messages
+    .filter((message): message is Record<string, unknown> => Boolean(message) && typeof message === "object")
+    .filter((message) => message.role === "assistant")
+    .map((message) => {
+      const raw = message.content;
+      if (typeof raw === "string") return raw;
+      if (Array.isArray(raw)) {
+        return raw
+          .map((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).text === "string"
+            ? String((item as Record<string, unknown>).text)
+            : "")
+          .join("");
+      }
+      return "";
+    })
+    .join("\n")
+    .trim();
 }
 
 /**

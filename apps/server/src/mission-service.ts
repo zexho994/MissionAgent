@@ -35,10 +35,14 @@ import { dirname } from "node:path";
 import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
 import {
   buildMissionPlanMessages,
+  buildMissionPlanContractValidationMessages,
+  buildMissionPlanMessagesWithRepair,
+  buildMissionPlanSemanticRepairMessages,
   buildOwnerSystemPrompt,
   buildConversationMessages,
   buildSummaryRequest,
   parseMissionPlanDraft,
+  parseMissionPlanContractValidation,
 } from "./owner/index.js";
 import type { TeamProposal } from "./hr-agent.js";
 import { NegotiationManager, type NegotiationSummary, type StoredNegotiationState } from "./negotiation-manager.js";
@@ -1032,18 +1036,52 @@ export class InMemoryMissionService {
       throw new Error("LLM is required to generate a MissionPlan");
     }
 
-    const response = await this.llm.call(
-      buildMissionPlanMessages({
-        brief: mission.brief,
-        ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
-      }),
-      {
-        maxTokens: 3000,
-        timeoutMs: 90000,
-        onToolEvent: (toolEvent) => this.notifyToolCall(mission.id, toolEvent),
-      },
+    const callOptions = {
+      maxTokens: 3000,
+      timeoutMs: 90000,
+      onToolEvent: (toolEvent: ToolCallTraceEvent) => this.notifyToolCall(mission.id, toolEvent),
+    };
+    const baseInput = {
+      brief: mission.brief,
+      ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+    };
+    const firstResponse = await this.llm.call(buildMissionPlanMessages(baseInput), callOptions);
+    let draft;
+    try {
+      draft = parseMissionPlanDraft(firstResponse.content);
+    } catch (error) {
+      const parseError = error instanceof Error ? error.message : String(error);
+      const repairResponse = await this.llm.call(
+        buildMissionPlanMessagesWithRepair({ ...baseInput, parseError }),
+        callOptions,
+      );
+      draft = parseMissionPlanDraft(repairResponse.content);
+    }
+    const contractValidationResponse = await this.llm.call(
+      buildMissionPlanContractValidationMessages({ brief: mission.brief, draft }),
+      callOptions,
     );
-    const draft = parseMissionPlanDraft(response.content);
+    const contractValidation = parseMissionPlanContractValidation(contractValidationResponse.content);
+    if (contractValidation.status === "fail") {
+      const repairResponse = await this.llm.call(
+        buildMissionPlanSemanticRepairMessages({
+          brief: mission.brief,
+          draft,
+          reasons: contractValidation.reasons,
+          ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+        }),
+        callOptions,
+      );
+      draft = parseMissionPlanDraft(repairResponse.content);
+      const repairedValidationResponse = await this.llm.call(
+        buildMissionPlanContractValidationMessages({ brief: mission.brief, draft }),
+        callOptions,
+      );
+      const repairedValidation = parseMissionPlanContractValidation(repairedValidationResponse.content);
+      if (repairedValidation.status === "fail") {
+        throw new Error(`MissionPlan contract validation failed after repair retry: ${repairedValidation.reasons.join("; ")}`);
+      }
+    }
     const existingPlans = [...this.plans.values()].filter((plan) => plan.missionId === mission.id);
     const revision = existingPlans.length + 1;
 
@@ -1197,9 +1235,6 @@ export class InMemoryMissionService {
   }
 
   executeTask(input: { missionId: string; taskId: string; message: string }): Execution {
-    if (!this.runtime) {
-      throw new Error("MissionService.executeTask requires a runtime to be injected");
-    }
     const mission = this.missions.get(input.missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
@@ -1207,6 +1242,9 @@ export class InMemoryMissionService {
     const task = this.tasks.get(input.taskId);
     if (!task || task.missionId !== mission.id) {
       throw new Error(`Task not found in mission: ${input.taskId}`);
+    }
+    if (!this.runtime) {
+      throw new Error("MissionService.executeTask requires a runtime to be injected");
     }
 
     const execution = this.startExecution({
@@ -1222,6 +1260,8 @@ export class InMemoryMissionService {
         message: buildAgentMessage({ message: input.message, mission, task }),
         timeoutSeconds: 300,
         sessionId: input.missionId,
+        missionId: input.missionId,
+        agentId: executor.id,
         ...(systemPrompt ? { systemPrompt } : {}),
         onToolEvent: (toolEvent) => this.notifyToolCall(input.missionId, toolEvent),
       })

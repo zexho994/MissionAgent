@@ -112,6 +112,7 @@ async function createMissionWithConfirmedPlan(missions: InMemoryMissionService):
     missionId: mission.id,
     message: "Audience is developers. Timeline is one month.",
   });
+  await waitForBrief(missions, mission.id);
   missions.confirmBrief({ missionId: mission.id });
   const plan = await missions.generateMissionPlan({ missionId: mission.id });
   missions.confirmMissionPlan({ missionId: mission.id, planId: plan.id });
@@ -124,8 +125,17 @@ async function createMissionWithConfirmedBrief(missions: InMemoryMissionService)
     missionId: mission.id,
     message: "Audience is developers. Timeline is one month.",
   });
+  await waitForBrief(missions, mission.id);
   missions.confirmBrief({ missionId: mission.id });
   return mission.id;
+}
+
+async function waitForBrief(missions: InMemoryMissionService, missionId: string): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (missions.snapshot().missions.some((mission) => mission.id === missionId && mission.brief)) return;
+    await Promise.resolve();
+  }
+  throw new Error("Mission has no brief to confirm");
 }
 
 afterEach(() => {
@@ -566,6 +576,32 @@ describe("handleApiRequest", () => {
     expect((diagnosisResponse.body as { diagnosis: { signals: { hasPlan: boolean } } }).diagnosis.signals.hasPlan).toBe(true);
   });
 
+  it("starts HR activation when a MissionPlan is confirmed", async () => {
+    const missions = new InMemoryMissionService({ llm: apiLlmWithPlan(), runtime: fakeRuntime() });
+    const missionId = await createMissionWithConfirmedBrief(missions);
+    const plan = await missions.generateMissionPlan({ missionId });
+
+    const response = await handleApiRequest(
+      {
+        method: "POST",
+        path: `/api/missions/${missionId}/plan/confirm`,
+        body: { planId: plan.id },
+      },
+      { missions, runtime: fakeOpenClaw() },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      activation: { status: "started" },
+    });
+    const snapshot = (response.body as { snapshot: MissionSnapshot }).snapshot;
+    expect(snapshot.agents).toContainEqual(expect.objectContaining({
+      missionId,
+      role: "hr",
+      status: "running",
+    }));
+  });
+
   it("rejects malformed MissionPlan API inputs", async () => {
     const missions = new InMemoryMissionService({ llm: apiLlmWithPlan() });
     const missionId = await createMissionWithConfirmedBrief(missions);
@@ -615,6 +651,7 @@ describe("handleApiRequest", () => {
       { method: "POST", path: "/api/missions/continue", body: { missionId, message: "目标人群是年轻女性" } },
       { missions, runtime: fakeOpenClaw() },
     );
+    await waitForBrief(missions, missionId);
 
     const confirmResponse = await handleApiRequest(
       { method: "POST", path: "/api/missions/confirm-brief", body: { missionId } },

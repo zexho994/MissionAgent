@@ -793,7 +793,7 @@ function renderMissionPlanReview(data) {
       ${error}
       ${plan.status === "draft" ? `
         <div class="choice-row">
-          <button type="button" data-confirm-plan="${esc(plan.id)}" ${pending ? "disabled" : ""}>确认 MissionPlan</button>
+          <button type="button" data-confirm-plan="${esc(plan.id)}" ${pending ? "disabled" : ""}>确认 MissionPlan 并招募团队</button>
           <button type="button" data-toggle-plan-revision ${pending ? "disabled" : ""}>提出修改建议</button>
         </div>
         ${planUi.revisionOpen ? `
@@ -931,6 +931,7 @@ function bindChoiceButtons() {
         const result = await api(`/api/missions/${mission.id}/plan/confirm`, { method: "POST", body: { planId } });
         state.snapshot = result.snapshot;
         await loadAutopilotDiagnosis(mission.id);
+        startPolling();
       } catch (error) {
         planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
       } finally {

@@ -642,6 +642,8 @@ describe("HRAgent", () => {
       expect(calls[0]?.[0]?.content).toContain("list_skill_files");
       expect(calls[0]?.[0]?.content).toContain("load_skill");
       expect(calls[0]?.[0]?.content).toContain("DigitalAgent mission execution system");
+      expect(calls[0]?.[0]?.content).toContain("multiple real runtime agents");
+      expect(calls[0]?.[0]?.content).toContain("Do not replace required participant agents");
     });
 
     it("throws when LLM output is unparseable", async () => {

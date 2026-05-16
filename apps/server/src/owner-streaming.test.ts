@@ -26,7 +26,7 @@ describe("runOwnerLlmStreaming", () => {
 
   it("treats structured ready decision with a valid brief as MissionBrief readiness", async () => {
     const harness = createHarness();
-    const llm = staticLlm(JSON.stringify({
+    const llm = sequencedLlm([JSON.stringify({
       status: "ready",
       brief: {
         goal: "Grow Xiaohongshu to 1000 followers",
@@ -35,7 +35,7 @@ describe("runOwnerLlmStreaming", () => {
         successMetrics: ["followers >= 1000"],
         keyAssumptions: ["existing account"],
       },
-    }));
+    }), JSON.stringify({ requirements: [] }), JSON.stringify({ status: "pass", reasons: [] })], []);
 
     await runOwnerLlmStreaming(llm, baseInput(), harness.deps);
 
@@ -79,7 +79,7 @@ describe("runOwnerLlmStreaming", () => {
         { type: "user_message", createdAt: "2026-05-07T10:01:00.000Z" },
       ],
     });
-    const llm = staticLlm(JSON.stringify({
+    const llm = sequencedLlm([JSON.stringify({
       status: "ready",
       brief: {
         goal: "Build an HTML knowledge map",
@@ -88,7 +88,7 @@ describe("runOwnerLlmStreaming", () => {
         successMetrics: ["HTML created"],
         keyAssumptions: [],
       },
-    }));
+    }), JSON.stringify({ requirements: [] }), JSON.stringify({ status: "pass", reasons: [] })], []);
 
     await runOwnerLlmStreaming(llm, baseInput(), harness.deps);
 
@@ -114,6 +114,140 @@ describe("runOwnerLlmStreaming", () => {
         content: "Who is the target audience?",
       }),
     ]);
+  });
+
+  it("retries once with parse feedback when Owner returns invalid MissionBrief JSON", async () => {
+    const harness = createHarness({
+      messages: [
+        { type: "owner_followup", createdAt: "2026-05-07T10:00:00.000Z" },
+        { type: "user_message", createdAt: "2026-05-07T10:01:00.000Z" },
+      ],
+    });
+    const invalidJson = '{"goal":"Run 5 agents","scope":"Mission","constraints":["5 agents"]，"successMetrics":["50 turns"],"keyAssumptions":[]}';
+    const validJson = JSON.stringify({
+      goal: "Run 5 agents",
+      scope: "Mission",
+      constraints: ["5 agents"],
+      successMetrics: ["50 turns"],
+      keyAssumptions: [],
+    });
+    const calls: Array<{ role: string; content: string }[]> = [];
+    const llm = sequencedLlm([
+      invalidJson,
+      validJson,
+      JSON.stringify({ requirements: [] }),
+      JSON.stringify({ status: "pass", reasons: [] }),
+    ], calls);
+
+    await runOwnerLlmStreaming(llm, baseInput(), harness.deps);
+
+    expect(calls).toHaveLength(4);
+    expect(calls[1]?.at(-1)?.content).toContain("Previous Owner response JSON parse error");
+    expect(calls[1]?.at(-1)?.content).toContain(invalidJson);
+    expect(calls[2]?.at(-1)?.content).toContain("Mission contract extraction");
+    expect(calls[3]?.at(-1)?.content).toContain("MissionBrief contract validation");
+    expect(harness.mission.brief?.goal).toBe("Run 5 agents");
+    expect(harness.messages).toEqual([
+      expect.objectContaining({ type: "mission_brief" }),
+    ]);
+  });
+
+  it("repairs a MissionBrief once when LLM semantic review finds omitted user constraints", async () => {
+    const harness = createHarness();
+    const weakBrief = JSON.stringify({
+      status: "ready",
+      brief: {
+        goal: "Organize a group idiom-chain game",
+        scope: "Family entertainment activity",
+        constraints: ["5 or more people can participate"],
+        successMetrics: ["Players enjoy the game"],
+        keyAssumptions: [],
+      },
+    });
+    const repairedBrief = JSON.stringify({
+      status: "ready",
+      brief: {
+        goal: "Run a 5-agent collaborative idiom-chain mission",
+        scope: "5 runtime agents take turns producing the next idiom",
+        constraints: ["Must use exactly 5 participating agents", "Agents must take turns"],
+        successMetrics: ["Complete 50 idiom-chain turns"],
+        keyAssumptions: [],
+      },
+    });
+    const calls: Array<{ role: string; content: string }[]> = [];
+    const responses = [
+      weakBrief,
+      JSON.stringify({ requirements: ["The mission must use exactly 5 agents.", "The chain must complete 50 turns."] }),
+      JSON.stringify({
+        status: "fail",
+        reasons: [
+          "The candidate softened the user requirement from 5 agents to 5 or more people.",
+          "The candidate omitted the required 50 turns.",
+        ],
+      }),
+      repairedBrief,
+      JSON.stringify({ status: "pass", reasons: [] }),
+    ];
+    const llm = sequencedLlm(responses, calls);
+
+    await runOwnerLlmStreaming(llm, {
+      ...baseInput(),
+      userMessage: "5 个 agent 协作玩成语接龙,每个 agent 轮流给出下一个成语,完成 50 次接龙才算成功。",
+    }, harness.deps);
+
+    expect(calls).toHaveLength(5);
+    expect(calls[1]?.at(-1)?.content).toContain("Mission contract extraction");
+    expect(calls[2]?.at(-1)?.content).toContain("MissionBrief contract validation");
+    expect(calls[3]?.at(-1)?.content).toContain("The candidate omitted the required 50 turns.");
+    expect(calls[3]?.at(-1)?.content).toContain("The chain must complete 50 turns.");
+    expect(harness.mission.brief?.constraints).toContain("Must use exactly 5 participating agents");
+    expect(harness.mission.brief?.successMetrics).toContain("Complete 50 idiom-chain turns");
+    expect(harness.messages).toEqual([
+      expect.objectContaining({
+        type: "mission_brief",
+        content: repairedBrief,
+      }),
+    ]);
+  });
+
+  it("fastfails when MissionBrief semantic review still fails after one repair", async () => {
+    const harness = createHarness();
+    const weakBrief = JSON.stringify({
+      status: "ready",
+      brief: {
+        goal: "Organize a group game",
+        scope: "Entertainment",
+        constraints: ["5 or more people"],
+        successMetrics: ["Have fun"],
+        keyAssumptions: [],
+      },
+    });
+    const calls: Array<{ role: string; content: string }[]> = [];
+    const llm = sequencedLlm([
+      weakBrief,
+      JSON.stringify({ requirements: ["The mission must use exactly 5 agents.", "The chain must complete 50 turns."] }),
+      JSON.stringify({ status: "fail", reasons: ["Missing required 50 turns."] }),
+      weakBrief,
+      JSON.stringify({ status: "fail", reasons: ["Still missing required 50 turns."] }),
+    ], calls);
+
+    await runOwnerLlmStreaming(llm, {
+      ...baseInput(),
+      userMessage: "5 个 agent 协作玩成语接龙,每个 agent 轮流给出下一个成语,完成 50 次接龙才算成功。",
+    }, harness.deps);
+
+    expect(calls).toHaveLength(5);
+    expect(harness.mission.brief).toBeUndefined();
+    expect(harness.messages).toEqual([
+      expect.objectContaining({
+        type: "owner_error",
+        content: expect.stringContaining("Owner MissionBrief contract validation failed after repair retry: Still missing required 50 turns."),
+      }),
+    ]);
+    expect(harness.agentPatch).toEqual({
+      status: "blocked",
+      lastAction: expect.stringContaining("Owner MissionBrief contract validation failed after repair retry: Still missing required 50 turns."),
+    });
   });
 
   it("forwards owner LLM tool events to the mission stream", async () => {
@@ -217,6 +351,27 @@ function staticLlm(content: string): LlmService {
       };
     },
     stats: () => ({ totalCalls: 1, totalPromptTokens: 0, totalCompletionTokens: 0 }),
+  };
+}
+
+function sequencedLlm(
+  responses: string[],
+  calls: Array<{ role: string; content: string }[]>,
+): LlmService {
+  return {
+    call: async (messages, options) => {
+      calls.push(messages);
+      const content = responses[calls.length - 1];
+      if (!content) throw new Error(`Unexpected LLM call ${calls.length}`);
+      options?.onStream?.(content);
+      return {
+        content,
+        model: "test",
+        usage: { promptTokens: 0, completionTokens: content.length, totalTokens: content.length },
+        finishReason: "stop",
+      };
+    },
+    stats: () => ({ totalCalls: calls.length, totalPromptTokens: 0, totalCompletionTokens: 0 }),
   };
 }
 

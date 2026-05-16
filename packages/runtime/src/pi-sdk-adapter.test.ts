@@ -102,6 +102,37 @@ describe("PiSdkAdapter", () => {
     consoleSpy.mockRestore();
   });
 
+  it("merges base tools with per-task tools for agent execution", async () => {
+    const baseTool = { name: "load_skill" };
+    const taskTool = { name: "task_specific_tool" };
+    const fakeAgent = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+      state: { messages: [{ role: "assistant", content: "done" }] },
+    };
+    const agentFactory = vi.fn().mockReturnValue(fakeAgent);
+
+    const adapter = new PiSdkAdapter({
+      apiKey: "k",
+      tools: [baseTool as never],
+      agentFactory: agentFactory as never,
+    });
+
+    await adapter.runAgentTask({
+      message: "do it",
+      timeoutSeconds: 5,
+      tools: [taskTool as never],
+    });
+
+    expect(agentFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialState: expect.objectContaining({
+          tools: [baseTool, taskTool],
+        }),
+      }),
+    );
+  });
+
   it("uses the configured pi-ai provider directly for agent execution", async () => {
     const fakeAgent = {
       prompt: vi.fn().mockResolvedValue(undefined),

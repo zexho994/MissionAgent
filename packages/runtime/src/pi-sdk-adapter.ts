@@ -19,6 +19,9 @@ export interface RunAgentTaskInput {
   timeoutSeconds: number;
   systemPrompt?: string;
   sessionId?: string;
+  missionId?: string;
+  agentId?: string;
+  tools?: AgentTool<any>[];
   onToolEvent?: (event: ToolCallTraceEvent) => void;
 }
 
@@ -71,7 +74,7 @@ export class PiSdkAdapter {
         systemPrompt: input.systemPrompt ?? "",
         messages: [],
         prompt: input.message,
-        tools: this.tools,
+        tools: [...this.tools, ...(input.tools ?? [])],
         timeoutSeconds: input.timeoutSeconds,
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         traceLabel: inferRuntimeTraceLabel(input.systemPrompt),

@@ -315,6 +315,11 @@ function buildHRAgentSystemPrompt(): string {
     "- Budget limitations",
     "- Role dependencies and collaboration needs",
     "- Risk factors and mitigation strategies",
+    "- The platform can deploy multiple real runtime agents inside one mission.",
+    "- If the mission asks for N agents to collaborate, propose N actual runtime participant roles unless the user explicitly asks for manager/coordinator-only roles.",
+    "- Do not replace required participant agents with coordinators, supervisors, validators, or other meta roles.",
+    "- Coordinator/reviewer roles may be added only when they do not reduce the required participant count.",
+    "- Agents can coordinate through agent_send_message, agent_read_messages, and turn_record when the mission needs multi-agent handoff evidence.",
     "",
     "When proposing teams, ensure:",
     "- Each role has clear responsibilities",
@@ -416,6 +421,9 @@ function buildAnalyzeAndPlanPrompt(brief: MissionBrief): string {
     "Constraints:",
     "- The roleSpecs MUST cover the priorityRoles from the analysis (one role per priority role).",
     "- Keep team size between 2 and 5 unless the brief clearly demands otherwise.",
+    "- If the brief explicitly asks for N participating agents, roleSpecs must contain N actual participant roles for that collaboration, not fewer meta roles.",
+    "- Use coordinator, supervisor, validator, or reviewer roles only as additional roles when they do not replace required participants.",
+    "- For collaborative tasks, include agent_send_message, agent_read_messages, or turn_record in allowedTools when those tools help make handoffs observable.",
     "- Each role must have non-empty responsibilities, allowedTools, successCriteria, and a positive budget.",
   ].join("\n");
 }

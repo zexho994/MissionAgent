@@ -293,7 +293,24 @@ export async function handleApiRequest(
         const planId = expectString(body.planId, "planId");
         const mission = deps.missions.confirmMissionPlan({ missionId, planId });
         const plan = deps.missions.getMissionPlan({ missionId });
-        return json(200, { mission, plan, snapshot: deps.missions.snapshot() });
+        const snapshotBeforeActivation = deps.missions.snapshot();
+        const activationAlreadyStarted = hasMissionActivationStarted(snapshotBeforeActivation, missionId);
+        const activatedMission = activationAlreadyStarted
+          ? mission
+          : deps.missions.beginMissionActivation({ missionId });
+        if (!activationAlreadyStarted) {
+          setTimeout(() => {
+            void deps.missions.activateMission({ missionId }).catch((error: unknown) => {
+              console.error("[API] MissionPlan confirmation activation failed:", error instanceof Error ? error.message : String(error));
+            });
+          }, 0);
+        }
+        return json(200, {
+          mission: activatedMission,
+          plan,
+          activation: { status: activationAlreadyStarted ? "already_started" : "started" },
+          snapshot: deps.missions.snapshot(),
+        });
       }
     }
 
@@ -697,6 +714,21 @@ function firstRunnableMissionTask(snapshot: ReturnType<InMemoryMissionService["s
   return snapshot.tasks
     .filter((task) => task.missionId === missionId && statusOrder.has(task.status))
     .sort((a, b) => (statusOrder.get(a.status) ?? 99) - (statusOrder.get(b.status) ?? 99))[0];
+}
+
+function hasMissionActivationStarted(snapshot: ReturnType<InMemoryMissionService["snapshot"]>, missionId: string): boolean {
+  const hasTask = snapshot.tasks.some((task) => task.missionId === missionId);
+  const hasExecutionTeam = snapshot.agents.some((agent) => (
+    agent.missionId === missionId &&
+    agent.role !== "owner" &&
+    agent.role !== "hr"
+  ));
+  const hasActiveHr = snapshot.agents.some((agent) => (
+    agent.missionId === missionId &&
+    agent.role === "hr" &&
+    (agent.status === "running" || agent.status === "thinking" || agent.status === "done")
+  ));
+  return hasTask || hasExecutionTeam || hasActiveHr;
 }
 
 function expectRecord(value: unknown, field: string): Record<string, unknown> {
