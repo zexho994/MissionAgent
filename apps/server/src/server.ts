@@ -18,6 +18,7 @@ const port = Number(process.env.PORT ?? 3000);
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
 const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data", "mission-store.json");
+const workspaceRoot = process.env.DIGITALAGENT_WORKSPACE_ROOT ?? join(root, "..", "data", "workspaces");
 
 const configFile = join(root, "..", "config", "agent-system.json");
 const agentConfig = loadAgentSystemConfig(configFile);
@@ -51,7 +52,7 @@ const runtime: MissionExecutionRuntime = {
   runAgentTask: (input) => pi.runAgentTask(input),
 };
 
-const missions = new InMemoryMissionService({ storageFile: dataFile, llm, runtime });
+const missions = new InMemoryMissionService({ storageFile: dataFile, workspaceRoot, llm, runtime });
 missions.restoreSchedulers();
 
 const server = createServer(async (req, res) => {
