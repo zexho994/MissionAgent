@@ -29,7 +29,8 @@ import {
   type TaskFailureAnalysis,
   type TaskFailureType,
 } from "@digitalagent/core";
-import type { LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
+import type { AgentTool, LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
+import { createFileTools, createPassToNextAgentTool } from "@digitalagent/runtime";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, promises as fsPromises } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
@@ -1228,6 +1229,11 @@ export class InMemoryMissionService {
     const runtime = this.runtime;
     const executor = this.executionAgent(mission.id);
     const systemPrompt = getRoleSystemPrompt(executor.role, this.config);
+    const perCallTools = this.buildPerCallTools({
+      missionId: input.missionId,
+      sourceTaskId: input.taskId,
+      sourceAgentId: executor.id,
+    });
 
     void runtime
       .runAgentTask({
@@ -1237,6 +1243,7 @@ export class InMemoryMissionService {
         missionId: input.missionId,
         agentId: executor.id,
         ...(systemPrompt ? { systemPrompt } : {}),
+        tools: perCallTools,
         onToolEvent: (toolEvent) => this.notifyToolCall(input.missionId, toolEvent),
       })
       .then((result) => {
@@ -1258,6 +1265,38 @@ export class InMemoryMissionService {
       });
 
     return execution;
+  }
+
+  private buildPerCallTools(ctx: {
+    missionId: string;
+    sourceTaskId: string;
+    sourceAgentId: string;
+  }): AgentTool<any>[] {
+    const tools: AgentTool<any>[] = [];
+
+    if (this.workspaceRoot) {
+      const missionWorkspace = join(this.workspaceRoot, ctx.missionId);
+      tools.push(...createFileTools({ workspaceRoot: missionWorkspace }));
+    }
+
+    tools.push(
+      createPassToNextAgentTool({
+        missionId: ctx.missionId,
+        sourceTaskId: ctx.sourceTaskId,
+        sourceAgentId: ctx.sourceAgentId,
+        createFollowupTask: (input) => this.createFollowupTask(input),
+        appendMessage: (msg) => {
+          this.appendMessage({
+            missionId: msg.missionId,
+            fromAgentId: msg.fromAgentId,
+            type: msg.type,
+            content: msg.content,
+          });
+        },
+      }),
+    );
+
+    return tools;
   }
 
   submitExecutionResult(input: SubmitExecutionResultRequest): { artifact: Artifact; review: Review } {

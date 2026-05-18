@@ -3324,4 +3324,52 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("executeTask tool injection", () => {
+    it("passes file_read, file_write, pass_to_next_agent tools to runtime", async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "v1-inject-"));
+      const recordedTools: string[] = [];
+      const runtime: MissionExecutionRuntime = {
+        async runAgentTask(input) {
+          for (const t of input.tools ?? []) recordedTools.push(t.name);
+          return {
+            status: "completed",
+            output: {
+              payloads: [
+                { text: "Auto run a mission completed successfully with all deliverables produced." },
+              ],
+            },
+            stderr: "",
+          };
+        },
+      };
+
+      const missions = new InMemoryMissionService({
+        storageFile: join(workspaceRoot, "store.json"),
+        workspaceRoot,
+        runtime,
+      });
+
+      const mission = await missions.createMission({ goal: "Auto run a mission" });
+      await missions.activateMission({ missionId: mission.id });
+      const task = missions.snapshot().tasks.find((t) => t.missionId === mission.id);
+      if (!task) throw new Error("missing initial task");
+
+      missions.executeTask({
+        missionId: mission.id,
+        taskId: task.id,
+        message: "go",
+      });
+
+      // Drain fire-and-forget runtime promise
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      expect(recordedTools).toContain("file_read");
+      expect(recordedTools).toContain("file_write");
+      expect(recordedTools).toContain("pass_to_next_agent");
+
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    });
+  });
+
 });
