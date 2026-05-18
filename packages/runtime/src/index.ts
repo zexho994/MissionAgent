@@ -9,4 +9,11 @@ export { createSkillTools, listSkillFiles, loadSkillFile } from "./pi-extensions
 export type { SkillFileInfo, SkillToolOptions } from "./pi-extensions/skills.js";
 export { createFileTools } from "./pi-extensions/file-io.js";
 export type { FileToolOptions } from "./pi-extensions/file-io.js";
+export { createPassToNextAgentTool } from "./pi-extensions/agent-handoff.js";
+export type {
+  PassToNextAgentDeps,
+  CreateFollowupTaskInput,
+  CreateFollowupTaskResult,
+  AppendMessageInput,
+} from "./pi-extensions/agent-handoff.js";
 export * from "./llm/index.js";
