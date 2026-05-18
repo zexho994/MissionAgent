@@ -678,9 +678,7 @@ export class InMemoryMissionService {
       budget: {
         maxRuntimeMinutes: input.budget?.maxRuntimeMinutes ?? 180,
         maxTokenSpendUsd: input.budget?.maxTokenSpendUsd ?? 20,
-        ...(input.budget?.maxFollowupTasks === undefined
-          ? {}
-          : { maxFollowupTasks: input.budget.maxFollowupTasks }),
+        maxFollowupTasks: input.budget?.maxFollowupTasks ?? 30,
       },
     });
 

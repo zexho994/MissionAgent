@@ -3372,4 +3372,27 @@ describe("knowledge base", () => {
     });
   });
 
+  describe("mission budget defaults", () => {
+    it("createMission defaults maxFollowupTasks to 30 when not provided", async () => {
+      const missions = new InMemoryMissionService({});
+      const m = await missions.createMission({
+        goal: "g",
+        successMetrics: ["m"],
+        constraints: [],
+      });
+      expect(m.budget.maxFollowupTasks).toBe(30);
+    });
+
+    it("createMission respects explicit maxFollowupTasks", async () => {
+      const missions = new InMemoryMissionService({});
+      const m = await missions.createMission({
+        goal: "g",
+        successMetrics: ["m"],
+        constraints: [],
+        budget: { maxFollowupTasks: 5 },
+      });
+      expect(m.budget.maxFollowupTasks).toBe(5);
+    });
+  });
+
 });
