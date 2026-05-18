@@ -89,8 +89,9 @@ const RUNTIME_SKILL_TOOL_DIRECTIVE = [
   "",
   "DigitalAgent capability context:",
   "You have access to skill loading tools: list_skill_files and load_skill.",
-  "Use load_skill with digitalagent/SKILL.md when you need capability guidance for a mission.",
-  "Load more specific skill files (e.g., digitalagent/capabilities/*.md) only when the mission requires specific capability context.",
+  "When you receive a task, load digitalagent/SKILL.md first to discover available runtime tools and capabilities.",
+  "Then load the specific capability files relevant to your task (e.g., digitalagent/capabilities/file-io.md, digitalagent/capabilities/agent-collaboration.md) before acting.",
+  "These skill files are the authoritative source for tool names and signatures — do not invent or assume tool names that are not listed there.",
   "Do not expose skill loading details to the user.",
 ].join("\n");
 
