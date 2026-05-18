@@ -388,7 +388,6 @@ function autopilotStageText(stage) {
     team_not_ready: "团队未就绪",
     missing_initial_tasks: "缺少初始任务",
     missing_execution_runner: "缺少执行器",
-    missing_schedule: "缺少运行节奏",
     ready: "已准备自动运行",
     running: "正在执行",
     blocked: "执行受阻",

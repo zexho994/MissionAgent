@@ -200,7 +200,7 @@ describe("InMemoryMissionService", () => {
     expect(hr?.status).toBe("running");
     expect(hr?.lastAction).toContain("招募团队");
     expect(snapshot.tasks.filter((task) => task.missionId === mission.id)).toHaveLength(0);
-    expect(snapshot.agentMessages.some((message) => message.missionId === mission.id && message.content.includes("正在分析 MissionBrief"))).toBe(true);
+    expect(snapshot.agentMessages.some((message) => message.missionId === mission.id && message.content.includes("基于 MissionPlan 分析"))).toBe(true);
   });
 
   it("does not re-activate a mission that already has tasks", async () => {
@@ -1517,7 +1517,7 @@ describe("InMemoryMissionService", () => {
     });
 
     expect(diagnosis.stage).toBe("ready");
-    expect(diagnosis.blockers.some((blocker) => blocker.code === "schedule_rules_missing")).toBe(false);
+    expect(diagnosis.blockers).toEqual([]);
   });
 
   it("does not keep diagnosis blocked after a failed task is retried successfully", async () => {

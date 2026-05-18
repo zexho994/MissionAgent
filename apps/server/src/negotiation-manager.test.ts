@@ -395,7 +395,8 @@ describe("NegotiationManager", () => {
       expect(hrAgent?.name).toBe("HR Agent");
       expect(hrAgent?.status).toBe("done");
       expect([...deps.tasks.values()]).toHaveLength(1);
-      expect(deps.missions.get(mission.id)?.scheduleRules.length).toBeGreaterThan(0);
+      // HR no longer auto-generates scheduleRules — user adds them manually if needed.
+      expect(deps.missions.get(mission.id)?.scheduleRules).toEqual([]);
     });
 
     it("renders HR team proposal messages in Chinese from structured proposal data", async () => {
@@ -410,17 +411,6 @@ describe("NegotiationManager", () => {
       expect(proposalMessage?.content).toContain("团队规模");
       expect(proposalMessage?.content).toContain("角色分工");
       expect(proposalMessage?.content).not.toContain("HR Agent proposes");
-    });
-
-    it("uses configured default timezone for schedule rules", async () => {
-      deps.config.scheduler = { defaultTimezone: "UTC" };
-      const manager = new NegotiationManager(deps);
-      await manager.startNegotiation({ missionId: mission.id }, mission);
-
-      manager.confirmNegotiation({ missionId: mission.id }, mission);
-
-      const cronRule = deps.missions.get(mission.id)?.scheduleRules.find((rule) => rule.trigger.type === "cron");
-      expect(cronRule?.trigger).toMatchObject({ timezone: "UTC" });
     });
 
     it("should propagate toolPermissions from RoleSpec to worker agents", async () => {

@@ -742,7 +742,9 @@ function renderTeamProposalCard(message, data) {
 }
 
 function isRecruitingTeamMessage(message) {
-  return message.content.includes("正在分析 MissionBrief")
+  return message.content.includes("基于 MissionPlan 分析")
+    || message.content.includes("Analyzing MissionPlan")
+    || message.content.includes("正在分析 MissionBrief")
     || message.content.includes("Analyzing MissionBrief");
 }
 
@@ -1165,7 +1167,7 @@ function agentOutputText(data, agent) {
     const message = data.messages.filter((item) => {
       return agent.id === item.fromAgentId
         && item.type === "team_created"
-        && !item.content.includes("正在分析 MissionBrief");
+        && !isRecruitingTeamMessage(item);
     }).at(-1);
     return message?.content;
   }
@@ -1203,7 +1205,7 @@ function shortAgentName(name) {
 
 function nextTaskText(data) {
   if (data.tasks.length === 0 && data.agents.some((agent) => agent.role === "hr" && agent.status === "running")) {
-    return "HR 正在分析 MissionBrief 并招募团队。";
+    return "HR 正在基于 MissionPlan 分析团队需求并招募团队。";
   }
   const runningTask = data.tasks.find((task) => task.status === "running");
   if (runningTask) return runningTask.title;

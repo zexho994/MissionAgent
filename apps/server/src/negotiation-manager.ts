@@ -4,6 +4,7 @@ import {
   createTask,
   findTemplateById,
   type Mission,
+  type MissionPlan,
   type ScheduleRule,
 } from "@digitalagent/core";
 import type { LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
@@ -22,6 +23,7 @@ export interface NegotiationManagerOptions {
   agents: Map<string, WarRoomAgent>;
   agentRelations: Map<string, AgentRelation>;
   missions: Map<string, Mission>;
+  plans?: Map<string, MissionPlan>;
   tasks: Map<string, import("@digitalagent/core").Task>;
   agentMessages: Map<string, AgentMessage>;
   maxRounds?: number;
@@ -58,6 +60,7 @@ export class NegotiationManager {
   private readonly missions: Map<string, Mission>;
   private readonly tasks: Map<string, import("@digitalagent/core").Task>;
   private readonly agentMessages: Map<string, AgentMessage>;
+  private readonly plans: Map<string, MissionPlan> | undefined;
   private readonly maxRounds: number;
   private readonly notifyStream: HrStreamNotifier | undefined;
   private readonly activeNegotiations = new Map<string, { proposal: TeamProposal; ownerContext: OwnerContext; roundCount: number; hrAgentId: string }>();
@@ -70,8 +73,16 @@ export class NegotiationManager {
     this.missions = options.missions;
     this.tasks = options.tasks;
     this.agentMessages = options.agentMessages;
+    this.plans = options.plans;
     this.maxRounds = options.maxRounds ?? 3;
     this.notifyStream = options.notifyStream;
+  }
+
+  private resolveConfirmedPlan(mission: Mission): MissionPlan | undefined {
+    if (!this.plans || !mission.confirmedPlanId) return undefined;
+    const plan = this.plans.get(mission.confirmedPlanId);
+    if (!plan || plan.status !== "confirmed") return undefined;
+    return plan;
   }
 
   async startNegotiation(input: { missionId: string }, mission: Mission): Promise<TeamProposal> {
@@ -90,9 +101,11 @@ export class NegotiationManager {
         ...(stream.onToken === undefined ? {} : { onToken: stream.onToken }),
         ...(stream.onToolEvent === undefined ? {} : { onToolEvent: stream.onToolEvent }),
       });
+      const confirmedPlan = this.resolveConfirmedPlan(mission);
+      const analysisSource = confirmedPlan ? "MissionPlan" : "MissionBrief";
       try {
         const { analysis, roleSpecs } = await withRetry(
-          () => hrAgent.analyzeAndPlan(mission.id, mission.brief!),
+          () => hrAgent.analyzeAndPlan(mission.id, mission.brief!, confirmedPlan),
           {
             maxAttempts: HR_MAX_ATTEMPTS,
             delaysMs: HR_RETRY_DELAYS_MS,
@@ -113,7 +126,7 @@ export class NegotiationManager {
           missionId: mission.id,
           fromAgentId: hrAgentId,
           type: "agent_notify",
-          content: `HR 已完成 MissionBrief 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
+          content: `HR 已完成 ${analysisSource} 分析并生成 ${roleSpecs.length} 个角色规格（共 ${analysis.estimatedTeamSize} 个核心角色，复杂度 ${analysis.complexity}），正在整理团队提案。`,
         });
         proposal = await hrAgent.proposeTeam(mission.id, roleSpecs, mission.brief);
       } catch (error) {
@@ -168,6 +181,11 @@ export class NegotiationManager {
     for (const duplicate of existingAgents.slice(1)) {
       this.agents.delete(duplicate.id);
     }
+    const mission = this.missions.get(missionId);
+    const hasPlan = mission ? Boolean(this.resolveConfirmedPlan(mission)) : false;
+    const lastAction = hasPlan
+      ? "Analyzing MissionPlan and proposing team"
+      : "Analyzing MissionBrief and proposing team";
     const hrAgentRecord: WarRoomAgent = {
       ...(existing ?? {
         id: createId("agent"),
@@ -180,7 +198,7 @@ export class NegotiationManager {
         sortOrder: 99,
       }),
       status: "running",
-      lastAction: "Analyzing MissionBrief and proposing team",
+      lastAction,
     };
     this.agents.set(hrAgentRecord.id, hrAgentRecord);
     return hrAgentRecord;

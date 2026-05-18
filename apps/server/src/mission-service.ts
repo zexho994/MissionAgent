@@ -281,7 +281,6 @@ export type AutopilotStage =
   | "team_not_ready"
   | "missing_initial_tasks"
   | "missing_execution_runner"
-  | "missing_schedule"
   | "ready"
   | "running"
   | "blocked";
@@ -292,7 +291,6 @@ export type AutopilotBlockerCode =
   | "team_not_ready"
   | "initial_tasks_missing"
   | "execution_runner_missing"
-  | "schedule_rules_missing"
   | "execution_blocked";
 
 export interface AutopilotBlocker {
@@ -658,6 +656,7 @@ export class InMemoryMissionService {
         agents: this.agents,
         agentRelations: this.agentRelations,
         missions: this.missions,
+        plans: this.plans,
         tasks: this.tasks,
         agentMessages: this.agentMessages,
         notifyStream: (missionId, event) => this.notifyStreamListeners(missionId, event),
@@ -740,20 +739,20 @@ export class InMemoryMissionService {
 
     const hr = this.createBaseAgent(mission.id, "hr", {
       status: "running",
-      lastAction: "正在分析 MissionBrief 并招募团队",
+      lastAction: "正在基于 MissionPlan 分析团队需求并招募团队",
     });
     const alreadyAnnounced = [...this.agentMessages.values()].some(
       (message) => message.missionId === mission.id
         && message.fromAgentId === hr.id
         && message.type === "team_created"
-        && message.content.includes("正在分析 MissionBrief"),
+        && message.content.includes("基于 MissionPlan 分析"),
     );
     if (!alreadyAnnounced) {
       this.appendMessage({
         missionId: mission.id,
         fromAgentId: hr.id,
         type: "team_created",
-        content: "HR Agent 正在分析 MissionBrief、拆解需要的角色，并招募 Mission 团队。",
+        content: "HR Agent 正在基于 MissionPlan 分析团队需求、拆解角色，并招募 Mission 团队。",
       });
     }
     this.persist();
@@ -1527,8 +1526,7 @@ export class InMemoryMissionService {
       signals.hasPlan &&
       signals.teamReady &&
       signals.hasInitialTasks &&
-      signals.hasExecutionRunner &&
-      signals.hasScheduleRules;
+      signals.hasExecutionRunner;
 
     const blockers: AutopilotBlocker[] = [];
     if (prerequisitesReady && (hasFailedExecution || hasBlockedExecutionAgent)) {
@@ -1573,20 +1571,6 @@ export class InMemoryMissionService {
         nextAction: "Provide an execution runner availability signal before launching autopilot execution.",
       });
     }
-    if (
-      signals.briefConfirmed &&
-      signals.hasPlan &&
-      signals.teamReady &&
-      signals.hasInitialTasks &&
-      signals.hasExecutionRunner &&
-      !signals.hasScheduleRules
-    ) {
-      blockers.push({
-        code: "schedule_rules_missing",
-        message: "No schedule rules are registered for this mission.",
-        nextAction: "Register at least one schedule rule after the mission is otherwise ready.",
-      });
-    }
 
     let stage: AutopilotStage = "ready";
     if (!signals.briefConfirmed) {
@@ -1599,8 +1583,6 @@ export class InMemoryMissionService {
       stage = "missing_initial_tasks";
     } else if (!signals.hasExecutionRunner) {
       stage = "missing_execution_runner";
-    } else if (!signals.hasScheduleRules) {
-      stage = "missing_schedule";
     } else if (hasFailedExecution || hasBlockedExecutionAgent) {
       stage = "blocked";
     } else if (signals.hasRunningExecution) {
