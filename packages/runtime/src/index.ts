@@ -7,4 +7,6 @@ export { createWebSearchTool, searchWeb } from "./pi-extensions/web-search.js";
 export type { WebSearchToolOptions, SearchOptions, SearchResult, SearchResponse } from "./pi-extensions/web-search.js";
 export { createSkillTools, listSkillFiles, loadSkillFile } from "./pi-extensions/skills.js";
 export type { SkillFileInfo, SkillToolOptions } from "./pi-extensions/skills.js";
+export { createFileTools } from "./pi-extensions/file-io.js";
+export type { FileToolOptions } from "./pi-extensions/file-io.js";
 export * from "./llm/index.js";
