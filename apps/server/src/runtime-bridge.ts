@@ -24,20 +24,22 @@ export function buildAgentMessage(input: {
   mission: unknown;
   task: unknown;
 }): string {
-  return [
+  const lines: string[] = [
     "Mission context:",
-    JSON.stringify(
-      {
-        mission: input.mission,
-        task: input.task,
-      },
-      null,
-      2,
-    ),
-    "",
-    "User instruction:",
-    input.message,
-  ].join("\n");
+    JSON.stringify({ mission: input.mission, task: input.task }, null, 2),
+  ];
+
+  const taskRecord = (input.task && typeof input.task === "object" ? input.task : {}) as Record<string, unknown>;
+  const origin = taskRecord.origin as { type?: string } | undefined;
+  if (origin?.type === "followup") {
+    lines.push(
+      "",
+      "Note: This is a follow-up task handed off from a teammate. Before producing new output, read any referenced files in the mission workspace (e.g. chain.txt) so you know what your teammate already produced.",
+    );
+  }
+
+  lines.push("", "User instruction:", input.message);
+  return lines.join("\n");
 }
 
 /**
