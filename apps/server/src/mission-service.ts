@@ -30,8 +30,8 @@ import {
   type TaskFailureType,
 } from "@digitalagent/core";
 import type { LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, promises as fsPromises } from "node:fs";
+import { dirname, join } from "node:path";
 import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
 import {
   buildMissionPlanMessages,
@@ -557,6 +557,7 @@ export interface MissionServiceOptions {
   runtime?: MissionExecutionRuntime | undefined;
   followupSafety?: FollowupSafetyConfig | undefined;
   fetch?: ((url: string, init?: RequestInit) => Promise<Response>) | undefined;
+  workspaceRoot?: string | undefined;
 }
 
 export type StreamEventListener = (event: {
@@ -593,6 +594,7 @@ export class InMemoryMissionService {
   private readonly taskFailureAnalyses = new Map<string, TaskFailureAnalysis>();
   private readonly strategyAdjustments = new Map<string, StrategyAdjustment>();
   private readonly storageFile: string | undefined;
+  private readonly workspaceRoot: string | undefined;
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
   private readonly streamListeners = new Map<string, Set<StreamEventListener>>();
@@ -618,6 +620,7 @@ export class InMemoryMissionService {
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
+    this.workspaceRoot = options.workspaceRoot;
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
     this.runtime = options.runtime;
@@ -1692,6 +1695,13 @@ export class InMemoryMissionService {
     }
     for (const adjustment of this.strategyAdjustments.values()) {
       if (adjustment.missionId === missionId) this.strategyAdjustments.delete(adjustment.id);
+    }
+
+    if (this.workspaceRoot) {
+      const workspaceDir = join(this.workspaceRoot, missionId);
+      fsPromises.rm(workspaceDir, { recursive: true, force: true }).catch((err) => {
+        console.error(`[MissionService] Failed to clean workspace ${workspaceDir}:`, err);
+      });
     }
 
     this.persist();

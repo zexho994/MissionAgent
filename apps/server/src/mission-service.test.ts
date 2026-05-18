@@ -3,7 +3,7 @@ import { createScheduleRule } from "@digitalagent/core";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -3270,6 +3270,57 @@ describe("knowledge base", () => {
         (m) => m.type === "agent_notify" && m.content.includes("non_existent_role_xyz"),
       );
       expect(ownerNotify).toBeDefined();
+    });
+  });
+
+  describe("workspace lifecycle", () => {
+    it("deleteMission removes the workspace directory under workspaceRoot", async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "v1-workspace-"));
+      const storageFile = join(workspaceRoot, "store.json");
+
+      const missions = new InMemoryMissionService({
+        storageFile,
+        workspaceRoot,
+      });
+
+      const m = await missions.createMission({
+        goal: "test goal",
+        successMetrics: ["m"],
+        constraints: [],
+      });
+
+      // Simulate an agent having written a file in the workspace
+      const missionDir = join(workspaceRoot, m.id);
+      mkdirSync(missionDir, { recursive: true });
+      writeFileSync(join(missionDir, "chain.txt"), "x");
+
+      missions.deleteMission(m.id);
+
+      // The rm is async with fire-and-forget; give it a tick
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(existsSync(missionDir)).toBe(false);
+
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    });
+
+    it("deleteMission does not throw when workspace dir does not exist", async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "v1-workspace-"));
+      const missions = new InMemoryMissionService({
+        storageFile: join(workspaceRoot, "store.json"),
+        workspaceRoot,
+      });
+
+      const m = await missions.createMission({
+        goal: "test goal",
+        successMetrics: ["m"],
+        constraints: [],
+      });
+
+      // Never created the mission dir
+      expect(() => missions.deleteMission(m.id)).not.toThrow();
+
+      rmSync(workspaceRoot, { recursive: true, force: true });
     });
   });
 
