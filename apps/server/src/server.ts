@@ -5,9 +5,11 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PiSdkAdapter,
-  createLlmServiceFromEnv,
+  createPiAgentLlmService,
+  createSkillTools,
   createWebSearchTool,
 } from "@digitalagent/runtime";
+import { loadAgentSystemConfig } from "./system-config.js";
 import { handleApiRequest } from "./api.js";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
@@ -16,26 +18,41 @@ const port = Number(process.env.PORT ?? 3000);
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
 const dataFile = process.env.DIGITALAGENT_STORE_FILE ?? join(root, "..", "data", "mission-store.json");
+const workspaceRoot = process.env.DIGITALAGENT_WORKSPACE_ROOT ?? join(root, "..", "data", "workspaces");
 
-const llm = createLlmServiceFromEnv(process.env);
+const configFile = join(root, "..", "config", "agent-system.json");
+const agentConfig = loadAgentSystemConfig(configFile);
+const skillRoot = join(root, "..", agentConfig.skills.rootDir);
+if (!existsSync(skillRoot)) {
+  throw new Error(`Skill root directory not found: ${skillRoot}`);
+}
+const skillTools = createSkillTools({ rootDir: skillRoot });
 
 const apiKey =
   process.env.LLM_API_KEY ??
   process.env.MINIMAX_API_KEY ??
   process.env.ANTHROPIC_API_KEY ??
   "";
+
+const llm = createPiAgentLlmService({
+  apiKey,
+  modelProvider: process.env.LLM_PROVIDER ?? "minimax-cn",
+  modelId: process.env.LLM_MODEL ?? "MiniMax-M2.7-highspeed",
+  tools: skillTools,
+});
+
 const pi = new PiSdkAdapter({
   apiKey,
-  modelProvider: process.env.LLM_PROVIDER ?? "minimax",
+  modelProvider: process.env.LLM_PROVIDER ?? "minimax-cn",
   modelId: process.env.LLM_MODEL ?? "MiniMax-M2.7-highspeed",
-  tools: [createWebSearchTool({})],
+  tools: [...skillTools, createWebSearchTool({})],
 });
 
 const runtime: MissionExecutionRuntime = {
   runAgentTask: (input) => pi.runAgentTask(input),
 };
 
-const missions = new InMemoryMissionService({ storageFile: dataFile, llm, runtime });
+const missions = new InMemoryMissionService({ storageFile: dataFile, workspaceRoot, llm, runtime });
 missions.restoreSchedulers();
 
 const server = createServer(async (req, res) => {
@@ -118,7 +135,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
     },
     { missions, runtime: pi },
   );
-  writeJson(res, response.status, response.body);
+  writeJson(res, response.status, response.body, response.headers);
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -135,10 +152,16 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(raw);
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
+function writeJson(
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Record<string, string> = {},
+): void {
   const payload = JSON.stringify(body, null, 2);
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
+    ...headers,
     "content-length": Buffer.byteLength(payload),
   });
   res.end(payload);

@@ -7,13 +7,37 @@ export type MissionPlanDraft = Omit<
 >;
 
 export function buildMissionPlanMessages(input: { brief: MissionBrief; feedback?: string }): LlmMessage[] {
+  return buildMissionPlanMessagesWithRepair(input);
+}
+
+export function buildMissionPlanMessagesWithRepair(input: {
+  brief: MissionBrief;
+  feedback?: string;
+  parseError?: string;
+}): LlmMessage[] {
+  const repairInstruction = input.parseError
+    ? [
+        "",
+        "Previous MissionPlan JSON parse error:",
+        input.parseError,
+        "",
+        "Repair requirement: return one valid JSON object only. Preserve every hard constraint from the MissionBrief.",
+      ].join("\n")
+    : "";
   return [
     {
       role: "system",
       content: `You are the Owner planning workflow for DigitalAgent.
+You have access to skill loading tools: list_skill_files and load_skill.
+Use load_skill with digitalagent/SKILL.md when you need DigitalAgent capability context for planning.
+Do not expose skill loading details in the returned JSON.
 Return ONLY a JSON object. No markdown, no explanation.
 The JSON must contain: goal, successMetrics, phases, workstreams, reportingLines, scheduleRhythms, risks, checkpoints.
 goal must be a string. successMetrics, risks, and checkpoints must be arrays of strings.
+Preserve explicit participant counts, round counts, and validation requirements from the MissionBrief exactly.
+If the MissionBrief asks for 5 agents to participate, the plan workstreams must not downgrade that into fewer meta roles only.
+If the MissionBrief fixes the participant agent count, do not add additional mandatory runtime roles, requiredRole entries, reporting roles, reviewers, coordinators, trackers, or validators beyond that fixed participant set unless the MissionBrief explicitly allows extra roles.
+Validation, tracking, and coordination responsibilities must be assigned to the fixed participants or the Owner when the participant count is fixed.
 Each phase must contain: name, objective, deliverables, successCriteria.
 Each phase deliverables and successCriteria must be arrays of strings.
 Each workstream must contain: name, objective, requiredRole, responsibilities, firstTaskGoal.
@@ -25,9 +49,9 @@ Keep arrays concise with 1 to 3 items. Do not omit arrays. Use empty arrays only
     {
       role: "user",
       content: JSON.stringify({
-        missionBrief: input.brief,
+        MissionBrief: input.brief,
         revisionFeedback: input.feedback ?? "",
-      }),
+      }) + repairInstruction,
     },
   ];
 }

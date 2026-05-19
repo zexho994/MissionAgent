@@ -23,6 +23,9 @@
       "template": "收到补充信息：{{message}}。这条信息已追加到当前 Mission，不会创建新的 Mission。"
     }
   },
+  "skills": {
+    "rootDir": "config/skills"
+  },
   "teamPlanner": {
     "baseAgents": [
       {
@@ -44,115 +47,6 @@
         "currentTask": false,
         "lastAction": "等待任务分配",
         "avatarSeed": "hr"
-      }
-    ],
-    "rules": [
-      {
-        "id": "research",
-        "keywords": ["学习", "研究", "harness", "分析", "资料", "竞品", "调研", "research"],
-        "agent": {
-          "role": "researcher",
-          "name": "Research Agent",
-          "responsibility": "在生产开始前提炼核心知识、资料结构和关键判断点。",
-          "systemPrompt": "你是 Research Agent。你的职责是搜集事实、解读信号、提炼关键结论。需要外部资料时使用 web_search 工具，并在产出中带上 url、标题、片段，以便审核。如果证据不足，明确说明并提议下一步研究方向。",
-          "status": "idle",
-          "currentTask": false,
-          "lastAction": "等待任务分配",
-          "avatarSeed": "researcher"
-        }
-      },
-      {
-        "id": "social",
-        "keywords": ["小红书", "xiaohongshu", "粉丝", "账号", "内容", "运营", "发布", "社媒", "social"],
-        "agent": {
-          "role": "content_strategist",
-          "name": "Content Strategist Agent",
-          "responsibility": "把目标转成受众、选题、发布节奏和增长策略。",
-          "systemPrompt": "你是 Content Strategist Agent。你把 Mission 的增长目标转化成受众画像、选题方向、发布节奏和增长实验。需要市场数据时使用 web_search。每个建议都要附可衡量的预期效果和复盘节点。",
-          "status": "idle",
-          "currentTask": false,
-          "lastAction": "等待任务分配",
-          "avatarSeed": "content-strategist"
-        }
-      },
-      {
-        "id": "product",
-        "keywords": ["系统", "产品", "开发", "代码", "页面", "app", "agent", "cli"],
-        "agent": {
-          "role": "system_architect",
-          "name": "System Architect Agent",
-          "responsibility": "把产品或工程目标拆成模块、接口和实施任务。",
-          "systemPrompt": "你是 System Architect Agent。你把产品或工程目标拆解成模块、接口、依赖和实施顺序。需要技术资料时使用 web_search 或 read 文件。给出每个模块的关键决策点和风险，便于评审。",
-          "status": "idle",
-          "currentTask": false,
-          "lastAction": "等待任务分配",
-          "avatarSeed": "system-architect"
-        }
-      },
-      {
-        "id": "image",
-        "keywords": ["image", "图片", "图", "视觉", "海报", "avatar", "头像"],
-        "agent": {
-          "role": "image_creator",
-          "name": "Image Creator Agent",
-          "responsibility": "生成视觉提示词、图片素材和可审核视觉产出。",
-          "systemPrompt": "你是 Image Creator Agent。你产出可执行的视觉提示词、风格参考和可审核的素材清单。如需视觉趋势参考，使用 web_search。每个产出附使用场景、风格说明、可替换变量。",
-          "status": "idle",
-          "currentTask": false,
-          "lastAction": "等待任务分配",
-          "avatarSeed": "image-creator"
-        }
-      }
-    ],
-    "fallbackAgent": {
-      "role": "mission_operator",
-      "name": "Mission Operator Agent",
-      "responsibility": "执行第一个具体任务并产出可审核结果。",
-      "systemPrompt": "你是 Mission Operator Agent。你是兜底执行角色，没有专属域知识时也能把 Mission 的第一个任务推进到可审核状态。优先把目标拆为可验证的步骤并依次执行，必要时使用 web_search、read、bash 等工具。",
-      "status": "idle",
-      "currentTask": false,
-      "lastAction": "等待任务分配",
-      "avatarSeed": "mission-operator"
-    },
-    "reviewAgent": {
-      "role": "reviewer",
-      "name": "Review Agent",
-      "responsibility": "按照 Mission 成功指标审核产出，并在需要时要求修改。",
-      "systemPrompt": "你是 Review Agent。你按 Mission 成功指标判断产出是否合格。给出明确的 approve / revise / reject 决定，附具体证据和修改要点。不要做含糊评语。",
-      "status": "idle",
-      "currentTask": false,
-      "lastAction": "等待任务分配",
-      "avatarSeed": "reviewer"
-    },
-    "relationLabels": [
-      { "fromRole": "owner", "toRole": "hr", "label": "招募 / 配置团队" },
-      { "fromRole": "hr", "label": "交付角色职责" },
-      { "toRole": "reviewer", "label": "提交产出审核 / 反馈修正" },
-      { "fromRoleIncludes": "research", "label": "交付知识结构" },
-      { "fromRoleIncludes": "strategist", "label": "交付内容策略" },
-      { "fromRoleIncludes": "architect", "label": "交付系统方案" },
-      { "label": "下发任务计划" }
-    ],
-    "initialTasks": [
-      {
-        "requires": ["image", "research"],
-        "title": "Define knowledge structure and first image production plan",
-        "objective": "Create a first-pass plan that turns mission knowledge into a reviewable visual artifact"
-      },
-      {
-        "requires": ["social"],
-        "title": "Define growth strategy and first content operation plan",
-        "objective": "Create a first-pass operating plan with audience, content, cadence, and review points"
-      },
-      {
-        "requires": ["product"],
-        "title": "Define system modules and first implementation plan",
-        "objective": "Create a first-pass engineering plan with modules, risks, and implementation sequence"
-      },
-      {
-        "requires": [],
-        "title": "Define mission team and first execution plan",
-        "objective": "Create a first-pass team plan and execution plan for this mission"
       }
     ],
     "capabilityMatchers": {

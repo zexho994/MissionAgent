@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createMission,
   type Mission,
@@ -17,11 +17,21 @@ function makeTestDeps() {
       callCount += 1;
       if (callCount === 1) {
         const content = JSON.stringify({
-          requiredCapabilities: ["data_analysis"],
-          estimatedTeamSize: 2,
-          priorityRoles: ["data_analyst", "content_strategist"],
-          complexity: "medium",
-          riskFactors: [],
+          analysis: {
+            requiredCapabilities: ["data_analysis"],
+            estimatedTeamSize: 2,
+            priorityRoles: ["data_analyst", "content_strategist"],
+            complexity: "medium",
+            riskFactors: [],
+          },
+          roleSpecs: [{
+            name: "DataAnalyst",
+            purpose: "Analyze mission metrics",
+            responsibilities: ["Track KPIs", "Generate reports"],
+            allowedTools: ["web_search", "data_analyzer"],
+            successCriteria: ["KPIs tracked daily"],
+            budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+          }],
         });
         if (options?.onStream) {
           for (const char of content) {
@@ -116,6 +126,10 @@ describe("NegotiationManager", () => {
     mission = makeMissionWithBrief();
     deps.missions.set(mission.id, mission);
     addOwner(deps.agents, mission.id);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("escalation mechanism", () => {
@@ -291,6 +305,74 @@ describe("NegotiationManager", () => {
       expect(doneEvent).toBeDefined();
       expect(doneEvent?.messageId).toBe(last?.messageId);
     });
+
+    it("retries analyzeAndPlan up to 3 times on transient LLM failures", async () => {
+      vi.useFakeTimers();
+      let callCount = 0;
+      deps.llm.call = async (_messages, options) => {
+        callCount += 1;
+        if (callCount <= 2) {
+          throw new Error(`transient failure ${callCount}`);
+        }
+        const content = JSON.stringify({
+          analysis: {
+            requiredCapabilities: ["data_analysis"],
+            estimatedTeamSize: 2,
+            priorityRoles: ["data_analyst"],
+            complexity: "medium",
+            riskFactors: [],
+          },
+          roleSpecs: [{
+            name: "Analyst",
+            purpose: "Analyze",
+            responsibilities: ["work"],
+            allowedTools: ["web_search"],
+            successCriteria: ["done"],
+            budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+          }],
+        });
+        if (options?.onStream) {
+          for (const ch of content) options.onStream(ch);
+        }
+        return {
+          content,
+          model: "test",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      };
+
+      const manager = new NegotiationManager(deps);
+      const promise = manager.startNegotiation({ missionId: mission.id }, mission);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(2000);
+      const proposal = await promise;
+
+      expect(proposal.roles).toHaveLength(1);
+      expect(callCount).toBe(3);
+    });
+
+    it("throws after exhausting retries and marks HR agent as failed", async () => {
+      vi.useFakeTimers();
+      deps.llm.call = async () => {
+        throw new Error("permanent failure");
+      };
+
+      const manager = new NegotiationManager(deps);
+      const promise = manager.startNegotiation({ missionId: mission.id }, mission);
+      const expectation = expect(promise).rejects.toThrow("permanent failure");
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(2000);
+      await vi.advanceTimersByTimeAsync(4000);
+      await expectation;
+
+      const hrAgents = [...deps.agents.values()].filter((a) => a.role === "hr");
+      expect(hrAgents).toHaveLength(1);
+      expect(hrAgents[0]?.status).toBe("failed");
+      expect(hrAgents[0]?.lastAction).toContain("招募失败");
+    });
   });
 
   describe("confirmNegotiation", () => {
@@ -313,7 +395,8 @@ describe("NegotiationManager", () => {
       expect(hrAgent?.name).toBe("HR Agent");
       expect(hrAgent?.status).toBe("done");
       expect([...deps.tasks.values()]).toHaveLength(1);
-      expect(deps.missions.get(mission.id)?.scheduleRules.length).toBeGreaterThan(0);
+      // HR no longer auto-generates scheduleRules — user adds them manually if needed.
+      expect(deps.missions.get(mission.id)?.scheduleRules).toEqual([]);
     });
 
     it("renders HR team proposal messages in Chinese from structured proposal data", async () => {
@@ -328,17 +411,6 @@ describe("NegotiationManager", () => {
       expect(proposalMessage?.content).toContain("团队规模");
       expect(proposalMessage?.content).toContain("角色分工");
       expect(proposalMessage?.content).not.toContain("HR Agent proposes");
-    });
-
-    it("uses configured default timezone for schedule rules", async () => {
-      deps.config.scheduler = { defaultTimezone: "UTC" };
-      const manager = new NegotiationManager(deps);
-      await manager.startNegotiation({ missionId: mission.id }, mission);
-
-      manager.confirmNegotiation({ missionId: mission.id }, mission);
-
-      const cronRule = deps.missions.get(mission.id)?.scheduleRules.find((rule) => rule.trigger.type === "cron");
-      expect(cronRule?.trigger).toMatchObject({ timezone: "UTC" });
     });
 
     it("should propagate toolPermissions from RoleSpec to worker agents", async () => {

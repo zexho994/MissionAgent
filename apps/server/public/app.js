@@ -8,6 +8,8 @@ const state = {
   popoverOpen: false,
   streamingMissionId: undefined,
   hrStreamingMissionId: undefined,
+  toolConsoleMissionId: undefined,
+  toolConsoleEventSource: undefined,
   pollingInterval: undefined,
   automationSummaryByMissionId: {},
   feedbackSummaryByMissionId: {},
@@ -57,6 +59,21 @@ async function api(path, options = {}) {
   const json = await response.json();
   if (!response.ok) throw new Error(json.error || `HTTP ${response.status}`);
   return json;
+}
+
+function expectPiHealth(health) {
+  if (!health || typeof health !== "object") {
+    throw new Error("Health response must be an object");
+  }
+  const pi = health.pi;
+  if (!pi || typeof pi !== "object") {
+    throw new Error("Health response missing pi runtime status");
+  }
+  if (typeof pi.available !== "boolean") {
+    throw new Error("Health response pi.available must be boolean");
+  }
+  const version = typeof pi.version === "string" && pi.version.trim() ? pi.version.trim() : "unknown";
+  return { available: pi.available, version };
 }
 
 async function loadAutomationState(missionId) {
@@ -190,9 +207,10 @@ async function updateStrategyAdjustmentStatus(missionId, adjustmentId, newStatus
 async function runTask(missionId, taskId, message = "Execute the assigned task.") {
   state.scheduleActionPending = true;
   state.scheduleError = "";
+  streamToolCallConsole(missionId);
   renderAll();
   try {
-    const result = await api(`/api/openclaw/run`, {
+    const result = await api(`/api/pi/run`, {
       method: "POST",
       body: { missionId, taskId, message },
     });
@@ -250,11 +268,12 @@ async function createScheduleTemplate(missionId, payload, runNow) {
 async function refresh(options = {}) {
   state.config = await api("/api/config");
   const health = await api("/api/health");
-  const version = health.openclaw.version || "unknown";
-  $("openclaw-status").textContent = health.openclaw.available
-    ? (version.startsWith("OpenClaw") ? version : `OpenClaw ${version}`)
-    : "OpenClaw 不可用";
-  $("openclaw-dot").classList.toggle("ok", Boolean(health.openclaw.available));
+  const piHealth = expectPiHealth(health);
+  const version = piHealth.version;
+  $("openclaw-status").textContent = piHealth.available
+    ? (version.startsWith("Pi") || version.startsWith("pi") ? version : `Pi ${version}`)
+    : "Pi 不可用";
+  $("openclaw-dot").classList.toggle("ok", piHealth.available);
 
   state.snapshot = await api("/api/snapshot");
   syncSelectedMission();
@@ -270,10 +289,14 @@ function syncSelectedMission() {
     state.selectedMissionId = undefined;
     state.draftMode = true;
     state.view = "home";
+    stopToolCallConsole();
     return;
   }
   if (!state.draftMode && (!state.selectedMissionId || !missions.some((mission) => mission.id === state.selectedMissionId))) {
     state.selectedMissionId = missions.at(-1).id;
+  }
+  if (!state.draftMode && state.selectedMissionId) {
+    streamToolCallConsole(state.selectedMissionId);
   }
 }
 
@@ -463,6 +486,7 @@ function renderMissionPopover() {
     button.addEventListener("click", async () => {
       state.selectedMissionId = button.dataset.selectMission;
       state.draftMode = false;
+      streamToolCallConsole(state.selectedMissionId);
       const willEnterWarRoom = missionHasWarRoomState(state.selectedMissionId);
       state.view = willEnterWarRoom ? "mission" : "home";
       state.popoverOpen = false;
@@ -718,7 +742,9 @@ function renderTeamProposalCard(message, data) {
 }
 
 function isRecruitingTeamMessage(message) {
-  return message.content.includes("正在分析 MissionBrief")
+  return message.content.includes("基于 MissionPlan 分析")
+    || message.content.includes("Analyzing MissionPlan")
+    || message.content.includes("正在分析 MissionBrief")
     || message.content.includes("Analyzing MissionBrief");
 }
 
@@ -769,7 +795,7 @@ function renderMissionPlanReview(data) {
       ${error}
       ${plan.status === "draft" ? `
         <div class="choice-row">
-          <button type="button" data-confirm-plan="${esc(plan.id)}" ${pending ? "disabled" : ""}>确认 MissionPlan</button>
+          <button type="button" data-confirm-plan="${esc(plan.id)}" ${pending ? "disabled" : ""}>确认 MissionPlan 并招募团队</button>
           <button type="button" data-toggle-plan-revision ${pending ? "disabled" : ""}>提出修改建议</button>
         </div>
         ${planUi.revisionOpen ? `
@@ -907,6 +933,7 @@ function bindChoiceButtons() {
         const result = await api(`/api/missions/${mission.id}/plan/confirm`, { method: "POST", body: { planId } });
         state.snapshot = result.snapshot;
         await loadAutopilotDiagnosis(mission.id);
+        startPolling();
       } catch (error) {
         planUiState(mission.id).error = error instanceof Error ? error.message : String(error);
       } finally {
@@ -1140,7 +1167,7 @@ function agentOutputText(data, agent) {
     const message = data.messages.filter((item) => {
       return agent.id === item.fromAgentId
         && item.type === "team_created"
-        && !item.content.includes("正在分析 MissionBrief");
+        && !isRecruitingTeamMessage(item);
     }).at(-1);
     return message?.content;
   }
@@ -1178,7 +1205,7 @@ function shortAgentName(name) {
 
 function nextTaskText(data) {
   if (data.tasks.length === 0 && data.agents.some((agent) => agent.role === "hr" && agent.status === "running")) {
-    return "HR 正在分析 MissionBrief 并招募团队。";
+    return "HR 正在基于 MissionPlan 分析团队需求并招募团队。";
   }
   const runningTask = data.tasks.find((task) => task.status === "running");
   if (runningTask) return runningTask.title;
@@ -1252,6 +1279,7 @@ document.addEventListener("submit", async (event) => {
 $("home-button").addEventListener("click", () => {
   state.view = "home";
   state.popoverOpen = false;
+  stopToolCallConsole();
   stopPolling();
   renderAll();
 });
@@ -1261,6 +1289,7 @@ $("new-chat-button").addEventListener("click", () => {
   state.draftMode = true;
   state.view = "home";
   state.popoverOpen = false;
+  stopToolCallConsole();
   stopPolling();
   renderAll();
 });
@@ -1314,10 +1343,53 @@ function showTopbarError(error) {
   $("openclaw-dot").classList.remove("ok");
 }
 
+function logToolCallToBrowserConsole(toolEvent) {
+  if (!toolEvent || typeof toolEvent !== "object") return;
+  const label = toolEvent.traceLabel || "unknown";
+  const status = toolEvent.status || "event";
+  const toolName = toolEvent.toolName || "unknown_tool";
+  console.log(`[pi-agent tool][${label}] ${status} ${toolName}`, toolEvent);
+}
+
+function streamToolCallConsole(missionId) {
+  if (!missionId) return;
+  if (state.toolConsoleMissionId === missionId && state.toolConsoleEventSource) return;
+  stopToolCallConsole();
+
+  const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
+  state.toolConsoleMissionId = missionId;
+  state.toolConsoleEventSource = eventSource;
+
+  eventSource.addEventListener("message", (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === "tool_call") {
+        logToolCallToBrowserConsole(data.toolEvent);
+      }
+    } catch (error) {
+      console.error("[ToolCall SSE] Parse error:", error);
+    }
+  });
+
+  eventSource.addEventListener("error", (error) => {
+    console.error("[ToolCall SSE] Connection error:", error);
+    stopToolCallConsole();
+  });
+}
+
+function stopToolCallConsole() {
+  if (state.toolConsoleEventSource) {
+    state.toolConsoleEventSource.close();
+  }
+  state.toolConsoleEventSource = undefined;
+  state.toolConsoleMissionId = undefined;
+}
+
 async function streamOwnerResponse(missionId, container) {
   if (state.streamingMissionId === missionId) return;
 
   state.streamingMissionId = missionId;
+  streamToolCallConsole(missionId);
   const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
 
   // Try to find the thinking bubble, but don't close SSE if it doesn't exist yet
@@ -1387,6 +1459,7 @@ async function streamOwnerResponse(missionId, container) {
 function streamHrProgress(missionId) {
   if (state.hrStreamingMissionId === missionId) return;
   state.hrStreamingMissionId = missionId;
+  streamToolCallConsole(missionId);
 
   const eventSource = new EventSource(`/api/missions/${missionId}/stream`);
 

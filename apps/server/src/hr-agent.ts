@@ -3,10 +3,10 @@ import {
   validateRoleSpec,
   type RoleSpec,
   type MissionBrief,
+  type MissionPlan,
   type ValidationResult,
-  SchedulePlanGenerationError,
 } from "@digitalagent/core";
-import type { LlmMessage, LlmService } from "@digitalagent/runtime";
+import type { LlmMessage, LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
 
 export interface MissionAnalysis {
   missionGoal: string;
@@ -56,10 +56,7 @@ export interface HRAgentOptions {
   timeoutMs?: number;
   idleTimeoutMs?: number;
   onToken?: (token: string) => void;
-}
-
-export interface ProposeTeamOptions {
-  scheduleStrategy?: "auto" | "llm" | "deterministic";
+  onToolEvent?: (event: ToolCallTraceEvent) => void;
 }
 
 export function createHRAgent(options: HRAgentOptions) {
@@ -70,6 +67,7 @@ export function createHRAgent(options: HRAgentOptions) {
     timeoutMs = 90000,
     idleTimeoutMs = 10000,
     onToken,
+    onToolEvent,
   } = options;
 
   return {
@@ -91,6 +89,7 @@ export function createHRAgent(options: HRAgentOptions) {
         content += token;
         onToken?.(token);
       },
+      ...(onToolEvent ? { onToolEvent } : {}),
     });
     return content;
   }
@@ -152,59 +151,44 @@ export function createHRAgent(options: HRAgentOptions) {
   async function analyzeAndPlan(
     missionId: string,
     brief: MissionBrief,
+    plan?: MissionPlan,
   ): Promise<{ analysis: MissionAnalysis; roleSpecs: RoleSpec[] }> {
     const systemPrompt = buildHRAgentSystemPrompt();
-    const userPrompt = buildAnalyzeAndPlanPrompt(brief);
+    const userPrompt = buildAnalyzeAndPlanPrompt(brief, plan);
 
-    try {
-      const content = await llmCallStream([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ]);
+    const content = await llmCallStream([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ]);
 
-      const json = extractJson(content, "object");
-      if (!json) {
-        throw new Error("No JSON object found in analyzeAndPlan response");
-      }
-      const parsed = JSON.parse(json) as {
-        analysis?: unknown;
-        roleSpecs?: unknown;
-      };
-
-      const analysis = buildAnalysis(parsed.analysis, brief);
-      const roleSpecs = buildRoleSpecsFromArray(parsed.roleSpecs, missionId);
-      if (roleSpecs.length === 0) {
-        throw new Error("analyzeAndPlan response contained no valid roleSpecs");
-      }
-      for (const spec of roleSpecs) {
-        const validation = validateRoleSpec(spec);
-        if (!validation.isValid) {
-          throw new Error(`Invalid role spec ${spec.name}: ${validation.errors.join(", ")}`);
-        }
-      }
-
-      return { analysis, roleSpecs };
-    } catch (error) {
-      console.error(
-        "[HR Agent] analyzeAndPlan failed, using fallback:",
-        error instanceof Error ? error.message : String(error),
-      );
-      const fallbackAnalysis: MissionAnalysis = {
-        ...fallbackMissionAnalysis(brief),
-        missionGoal: brief.goal,
-      };
-      return {
-        analysis: fallbackAnalysis,
-        roleSpecs: fallbackRoleSpecs(missionId, fallbackAnalysis),
-      };
+    const json = extractJson(content, "object");
+    if (!json) {
+      throw new Error("No JSON object found in analyzeAndPlan response");
     }
+    const parsed = JSON.parse(json) as {
+      analysis?: unknown;
+      roleSpecs?: unknown;
+    };
+
+    const analysis = buildAnalysis(parsed.analysis, brief);
+    const roleSpecs = buildRoleSpecsFromArray(parsed.roleSpecs, missionId);
+    if (roleSpecs.length === 0) {
+      throw new Error("analyzeAndPlan response contained no valid roleSpecs");
+    }
+    for (const spec of roleSpecs) {
+      const validation = validateRoleSpec(spec);
+      if (!validation.isValid) {
+        throw new Error(`Invalid role spec ${spec.name}: ${validation.errors.join(", ")}`);
+      }
+    }
+
+    return { analysis, roleSpecs };
   }
 
   async function proposeTeam(
     missionId: string,
     roleSpecs: RoleSpec[],
-    brief?: MissionBrief,
-    options?: ProposeTeamOptions,
+    _brief?: MissionBrief,
   ): Promise<TeamProposal> {
     const enforcedSpecs = roleSpecs.length > maxTeamSize
       ? roleSpecs.slice(0, maxTeamSize)
@@ -221,17 +205,6 @@ export function createHRAgent(options: HRAgentOptions) {
     const estimatedDuration = estimateDuration(totalBudget.maxRuntimeMinutes);
     const riskAssessment = assessRisks(enforcedSpecs);
     const collaborationPlan = designCollaborationPlan(enforcedSpecs);
-    const scheduleStrategy = options?.scheduleStrategy;
-    let schedulePlan: SchedulePlanItem[];
-    if (scheduleStrategy === undefined || scheduleStrategy === "deterministic") {
-      schedulePlan = designSchedulePlan(enforcedSpecs, brief);
-    } else if (scheduleStrategy === "auto" && !brief) {
-      // auto without brief falls back to deterministic
-      schedulePlan = designSchedulePlan(enforcedSpecs, brief);
-    } else {
-      // "auto" with brief or "llm" — LLM is required
-      schedulePlan = await proposeSchedulePlan(brief!, enforcedSpecs, scheduleStrategy === "llm");
-    }
 
     return {
       missionId,
@@ -241,54 +214,9 @@ export function createHRAgent(options: HRAgentOptions) {
       estimatedDuration,
       riskAssessment,
       collaborationPlan,
-      schedulePlan,
+      schedulePlan: [],
       createdAt: new Date(),
     };
-  }
-
-  async function proposeSchedulePlan(
-    brief: MissionBrief,
-    roleSpecs: RoleSpec[],
-    forceLlm: boolean = false,
-  ): Promise<SchedulePlanItem[]> {
-    const systemPrompt = buildHRAgentSystemPrompt();
-    const userPromptContent = buildSchedulePlanPrompt(brief, roleSpecs);
-
-    try {
-      const content = await llmCallStream([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPromptContent },
-      ]);
-      const parsed = parseSchedulePlan(content, roleSpecs);
-
-      if (parsed.length === 0) {
-        throw new SchedulePlanGenerationError("empty_plan", { rawResponse: content });
-      }
-
-      // Validate all items have required fields
-      const itemErrors: string[] = [];
-      for (const item of parsed) {
-        if (!item.name || !item.assigneeRole || !item.taskDescription || !item.justification) {
-          itemErrors.push(`Item missing required fields: ${JSON.stringify(item)}`);
-        }
-      }
-      if (itemErrors.length > 0) {
-        throw new SchedulePlanGenerationError("all_items_invalid", { itemErrors });
-      }
-
-      return parsed;
-    } catch (error) {
-      if (error instanceof SchedulePlanGenerationError) throw error;
-      if (error instanceof SyntaxError) {
-        throw new SchedulePlanGenerationError("no_json_in_response", { rawResponse: String(error) });
-      }
-      // Catch errors from parseSchedulePlan validation
-      if (error instanceof Error && error.message.startsWith("parseSchedulePlan validation failed:")) {
-        const itemErrors = error.message.replace("parseSchedulePlan validation failed: ", "").split("; ");
-        throw new SchedulePlanGenerationError("all_items_invalid", { itemErrors });
-      }
-      throw new SchedulePlanGenerationError("llm_call_failed", {}, error);
-    }
   }
 
   async function negotiateRoleSpec(
@@ -315,28 +243,34 @@ export function createHRAgent(options: HRAgentOptions) {
 
 function buildHRAgentSystemPrompt(): string {
   return [
-    "You are an experienced HR Agent specializing in team assembly for software projects.",
-    "Your role is to analyze mission requirements and propose optimal team compositions.",
+    "You are an experienced HR Agent for the DigitalAgent mission execution system.",
+    "Your role is to analyze mission requirements and propose mission-internal agent teams.",
+    "You have access to skill loading tools: list_skill_files and load_skill.",
+    "Use load_skill with digitalagent/SKILL.md when you need DigitalAgent capability context.",
+    "Do not expose skill loading details to the user.",
+    "Do not assume the user wants to build an external software project unless they explicitly ask for software construction.",
     "Always consider:",
     "- Required skills and capabilities",
     "- Team size constraints (prefer 2-5 members)",
     "- Budget limitations",
     "- Role dependencies and collaboration needs",
     "- Risk factors and mitigation strategies",
+    "- The platform can deploy multiple real runtime agents inside one mission.",
+    "- If the mission asks for N agents to collaborate, propose N actual runtime participant roles unless the user explicitly asks for manager/coordinator-only roles.",
+    "- Do not replace required participant agents with coordinators, supervisors, validators, or other meta roles.",
+    "- Coordinator/reviewer roles may be added only when they do not reduce the required participant count.",
+    "- The runtime exposes the capability list via the skill loader (see system directive for valid paths and load policy). Load at most 2-3 capability files relevant to this mission, then assign those tool names in each role's allowedTools.",
     "",
     "When proposing teams, ensure:",
     "- Each role has clear responsibilities",
     "- Success criteria are measurable",
-    "- Tool permissions are appropriate",
+    "- Tool permissions match each role's assigned mission responsibilities",
     "- Budget allocation is realistic",
     "",
-    "When proposing teams, also suggest a work rhythm:",
-    "- Recommend periodic tasks based on the mission goal and roles",
-    "- Consider each role's responsibilities when scheduling recurring work",
-    "- If anomaly detection is needed, describe the trigger condition and responder",
+    "角色命名必须使用具体业务岗位名（如\"小红书数据分析员\"、\"App Store 流量观察员\"、\"Python 代码审核员\"），禁止使用 Owner / HR / Manager / 协调者 这种泛化角色名。",
     "",
     "Respond with structured JSON that can be parsed directly.",
-    "Use Chinese for user-facing role names, purposes, responsibilities, risk factors, schedule names, and schedule task descriptions.",
+    "Use Chinese for user-facing role names, purposes, responsibilities, and risk factors.",
   ].join("\n");
 }
 
@@ -387,8 +321,8 @@ function buildRoleSpecsPrompt(missionId: string, analysis: MissionAnalysis): str
   ].join("\n");
 }
 
-function buildAnalyzeAndPlanPrompt(brief: MissionBrief): string {
-  return [
+function buildAnalyzeAndPlanPrompt(brief: MissionBrief, plan?: MissionPlan): string {
+  const lines: string[] = [
     "Analyze this mission brief and propose a team in a single response.",
     "Return user-facing text fields in Chinese for: role name, purpose, responsibilities, success criteria, riskFactors.",
     "",
@@ -398,6 +332,35 @@ function buildAnalyzeAndPlanPrompt(brief: MissionBrief): string {
     `**Constraints:** ${brief.constraints.join(", ")}`,
     `**Target Audience:** ${brief.targetAudience || "Not specified"}`,
     `**Timeline:** ${brief.timeline || "Not specified"}`,
+  ];
+
+  if (plan) {
+    lines.push(
+      "",
+      "**Confirmed MissionPlan (authoritative team blueprint — your role list MUST staff every workstream below):**",
+      "",
+      "Workstreams:",
+      ...plan.workstreams.map((ws, idx) =>
+        `  ${idx + 1}. name="${ws.name}" | requiredRole="${ws.requiredRole}" | objective="${ws.objective}" | firstTaskGoal="${ws.firstTaskGoal}"`,
+      ),
+    );
+    if (plan.scheduleRhythms.length > 0) {
+      lines.push(
+        "",
+        "Schedule rhythms already designed by Owner (reuse, do not invent Daily/Weekly defaults):",
+        ...plan.scheduleRhythms.map((r) => `  - ${r.name} · ${r.cadence} · owner=${r.ownerRole} · ${r.purpose}`),
+      );
+    }
+    if (plan.reportingLines.length > 0) {
+      lines.push(
+        "",
+        "Reporting lines:",
+        ...plan.reportingLines.map((r) => `  - ${r.fromRole} → ${r.toRole} · ${r.cadence} · ${r.purpose}`),
+      );
+    }
+  }
+
+  lines.push(
     "",
     "Respond with a single JSON object that contains BOTH the mission analysis and the role specs:",
     "{",
@@ -422,10 +385,31 @@ function buildAnalyzeAndPlanPrompt(brief: MissionBrief): string {
     "}",
     "",
     "Constraints:",
+  );
+
+  if (plan) {
+    lines.push(
+      "- The MissionPlan above is authoritative. Each workstream's requiredRole MUST be staffed by at least one matching role in your roleSpecs.",
+      "- If a workstream's requiredRole field encodes a range pattern such as 'Agent1-5', '玩家1-N', 'Worker1-3', or any text matching `\\w+\\d+-\\d+`, you MUST expand it into N separate peer roles (e.g. Agent1, Agent2, ..., Agent5), not collapse them into one role.",
+      "- Peer roles in such a range share the same responsibilities but are distinct runtime participants — keep their names distinct.",
+      "- Reuse the scheduleRhythms above instead of inventing generic Daily/Weekly check-ins; the rhythms below the team should reflect the Plan's cadences.",
+      "- Team size may exceed 5 ONLY when the MissionPlan explicitly requires more participants (e.g. an Agent1-N range with N>3). Otherwise prefer 2–5.",
+    );
+  } else {
+    lines.push(
+      "- Keep team size between 2 and 5 unless the brief clearly demands otherwise.",
+      "- If the brief explicitly asks for N participating agents, roleSpecs must contain N actual participant roles for that collaboration, not fewer meta roles.",
+    );
+  }
+
+  lines.push(
     "- The roleSpecs MUST cover the priorityRoles from the analysis (one role per priority role).",
-    "- Keep team size between 2 and 5 unless the brief clearly demands otherwise.",
+    "- Use coordinator, supervisor, validator, or reviewer roles only as additional roles when they do not replace required participants.",
+    "- For collaborative or turn-based tasks, ensure the working roles' allowedTools list the actual tool names from the loaded capability files (typically file IO + agent handoff).",
     "- Each role must have non-empty responsibilities, allowedTools, successCriteria, and a positive budget.",
-  ].join("\n");
+  );
+
+  return lines.join("\n");
 }
 
 function buildNegotiationPrompt(spec: RoleSpec, feedback: string): string {
@@ -724,176 +708,6 @@ function designCollaborationPlan(roleSpecs: RoleSpec[]) {
     communicationChannels,
     decisionMaking,
   };
-}
-
-function designSchedulePlan(roleSpecs: RoleSpec[], brief?: MissionBrief): SchedulePlanItem[] {
-  const primaryRole = roleSpecs[0];
-  if (!primaryRole) return [];
-
-  const missionText = brief
-    ? `${brief.goal} ${brief.scope} ${brief.successMetrics.join(" ")} ${brief.constraints.join(" ")}`
-    : "";
-  const monitoringRole = roleSpecs.find((spec) =>
-    /analyst|data|metric|monitor|research/i.test(roleSearchText(spec)),
-  ) ?? primaryRole;
-  const executionRole = roleSpecs.find((spec) =>
-    /content|writer|creator|operator|execution|growth/i.test(roleSearchText(spec)),
-  ) ?? primaryRole;
-
-  const isXiaohongshu = /xiaohongshu|小红书|rednote/i.test(missionText);
-
-  const plan: SchedulePlanItem[] = isXiaohongshu
-    ? [
-        {
-          name: "Daily Xiaohongshu data check",
-          cronExpression: "0 9 * * *",
-          assigneeRole: monitoringRole.id,
-          taskDescription: "Check yesterday's Xiaohongshu follower, engagement, and content performance data",
-          justification: "Daily platform metrics are required to spot content performance changes early.",
-        },
-        {
-          name: "Biweekly Xiaohongshu strategy review",
-          cronExpression: "0 10 */14 * *",
-          assigneeRole: executionRole.id,
-          taskDescription: "Review two weeks of Xiaohongshu results and revise the content growth plan",
-          justification: "A biweekly cadence is long enough to see content pattern signal without delaying strategy changes.",
-        },
-        {
-          name: "Engagement drop alert",
-          assigneeRole: monitoringRole.id,
-          taskDescription: "Investigate Xiaohongshu engagement drop and propose corrective actions",
-          justification: "Sudden engagement drops need immediate analysis outside the normal reporting cadence.",
-          conditionDescription: "Engagement rate drops more than 20% compared with the previous period",
-          conditionSourceRole: monitoringRole.id,
-          conditionEvaluatePrompt: "Return true only if the artifact shows Xiaohongshu engagement rate dropped more than 20% compared with the previous period.",
-        },
-      ]
-    : [
-        {
-          name: "Daily progress check",
-          cronExpression: "0 9 * * *",
-          assigneeRole: monitoringRole.id,
-          taskDescription: `Review mission progress and report blockers for ${monitoringRole.name}`,
-          justification: "Daily review keeps long-running missions from drifting without feedback.",
-        },
-      ];
-
-  if (!isXiaohongshu && (roleSpecs.length > 1 || executionRole.id !== monitoringRole.id)) {
-    plan.push({
-      name: "Weekly execution review",
-      cronExpression: "0 10 * * 1",
-      assigneeRole: executionRole.id,
-      taskDescription: `Summarize weekly execution results and propose next actions for ${executionRole.name}`,
-      justification: "Weekly synthesis turns recurring work into concrete next-step decisions.",
-    });
-  }
-
-  return plan;
-}
-
-function roleSearchText(spec: RoleSpec): string {
-  return `${spec.id} ${spec.name} ${spec.purpose} ${spec.responsibilities.join(" ")}`;
-}
-
-function buildSchedulePlanPrompt(brief: MissionBrief, roleSpecs: RoleSpec[]): string {
-  return [
-    "Create a mission-specific schedulePlan for this team.",
-    "",
-    `Goal: ${brief.goal}`,
-    `Scope: ${brief.scope}`,
-    `Success metrics: ${brief.successMetrics.join(", ")}`,
-    `Constraints: ${brief.constraints.join(", ")}`,
-    `Timeline: ${brief.timeline ?? "Not specified"}`,
-    "",
-    "Roles:",
-    JSON.stringify(roleSpecs.map((spec) => ({
-      id: spec.id,
-      name: spec.name,
-      purpose: spec.purpose,
-      responsibilities: spec.responsibilities,
-    })), null, 2),
-    "",
-    "Return a JSON array of schedule items. Use role ids exactly as assigneeRole/source role.",
-    "Each item must contain name, assigneeRole, taskDescription, justification.",
-    "For periodic tasks include cronExpression using five-field cron only, and optional timezone.",
-    "For condition triggers omit cronExpression and include conditionDescription, conditionSourceRole, conditionEvaluatePrompt.",
-  ].join("\n");
-}
-
-function parseSchedulePlan(content: string, roleSpecs: RoleSpec[]): SchedulePlanItem[] {
-  const json = extractJson(content, "array");
-  if (!json) return [];
-
-  const parsed = JSON.parse(json) as unknown;
-  if (!Array.isArray(parsed)) return [];
-
-  const roleIds = new Set(roleSpecs.map((spec) => spec.id));
-  const itemErrors: string[] = [];
-  const validItems: SchedulePlanItem[] = [];
-
-  for (const item of parsed) {
-    if (!item || typeof item !== "object") {
-      itemErrors.push(`Invalid item: not an object`);
-      continue;
-    }
-    const candidate = item as Record<string, unknown>;
-    const name = nonEmptyString(candidate.name);
-    const assigneeRole = nonEmptyString(candidate.assigneeRole);
-    const taskDescription = nonEmptyString(candidate.taskDescription);
-    const justification = nonEmptyString(candidate.justification);
-    if (!name || !assigneeRole || !taskDescription || !justification || !roleIds.has(assigneeRole)) {
-      itemErrors.push(`Item missing required fields: ${JSON.stringify(item)}`);
-      continue;
-    }
-
-    const templateId = optionalString(candidate.templateId);
-    const cronExpression = optionalString(candidate.cronExpression);
-    if (cronExpression) {
-      const timezone = optionalString(candidate.timezone);
-      validItems.push({
-        name,
-        cronExpression,
-        ...(timezone === undefined ? {} : { timezone }),
-        ...(templateId === undefined ? {} : { templateId }),
-        assigneeRole,
-        taskDescription,
-        justification,
-      });
-      continue;
-    }
-
-    const conditionDescription = nonEmptyString(candidate.conditionDescription);
-    const conditionSourceRole = nonEmptyString(candidate.conditionSourceRole);
-    const conditionEvaluatePrompt = nonEmptyString(candidate.conditionEvaluatePrompt);
-    if (!conditionDescription || !conditionSourceRole || !conditionEvaluatePrompt || !roleIds.has(conditionSourceRole)) {
-      itemErrors.push(`Item missing required fields: ${JSON.stringify(item)}`);
-      continue;
-    }
-    validItems.push({
-      name,
-      assigneeRole,
-      taskDescription,
-      justification,
-      conditionDescription,
-      conditionSourceRole,
-      conditionEvaluatePrompt,
-      ...(templateId === undefined ? {} : { templateId }),
-    });
-  }
-
-  if (itemErrors.length > 0) {
-    throw new Error(`parseSchedulePlan validation failed: ${itemErrors.join("; ")}`);
-  }
-
-  return validItems;
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export function extractJson(content: string, type: "object" | "array"): string | undefined {

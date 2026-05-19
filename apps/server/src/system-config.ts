@@ -18,26 +18,11 @@ export interface AgentSystemConfig {
       template: string;
     };
   };
+  skills: {
+    rootDir: string;
+  };
   teamPlanner: {
     baseAgents: ConfigAgentSpec[];
-    rules: Array<{
-      id: string;
-      keywords: string[];
-      agent: ConfigAgentSpec;
-    }>;
-    fallbackAgent: ConfigAgentSpec;
-    reviewAgent: ConfigAgentSpec;
-    relationLabels: Array<{
-      fromRole?: string;
-      toRole?: string;
-      fromRoleIncludes?: string;
-      label: string;
-    }>;
-    initialTasks: Array<{
-      requires: string[];
-      title: string;
-      objective: string;
-    }>;
     capabilityMatchers: Record<"plan" | "execute" | "review", string[]>;
   };
   agentCollaboration?: {
@@ -100,20 +85,47 @@ const TASK_OUTPUT_FORMAT_DIRECTIVE = [
   "If you did not perform web research, return empty arrays for searchResults and sources.",
 ].join("\n");
 
+const RUNTIME_SKILL_TOOL_DIRECTIVE = [
+  "",
+  "DigitalAgent capability context:",
+  "You have access to skill loading tools: list_skill_files and load_skill.",
+  "",
+  "The following capability skill files exist (the ONLY valid load_skill paths):",
+  "  • digitalagent/SKILL.md (index)",
+  "  • digitalagent/capabilities/file-io.md",
+  "  • digitalagent/capabilities/agent-collaboration.md",
+  "  • digitalagent/capabilities/web-search.md",
+  "  • digitalagent/capabilities/browser-validation.md",
+  "  • digitalagent/capabilities/code-writing.md",
+  "",
+  "When and how to load:",
+  "- Load a skill file ONLY if your current task actually needs that capability AND you have not already loaded it in this conversation.",
+  "- Check the tool-call history: if a load_skill result is already in your context, REUSE it — do NOT call load_skill again on the same path.",
+  "- Do NOT invent paths. Calling load_skill on a path not listed above will fail.",
+  "- Maximum 3 load_skill calls per task. After that, act with what you have.",
+  "",
+  "Skill files are the authoritative source for tool names and signatures. Do not assume tool names that are not listed in the loaded skill content.",
+  "Do not expose skill loading details to the user.",
+  "",
+  "Collaboration principle (when team has multiple worker agents):",
+  "- If your task is part of a collaborative mission AND there are multiple teammates listed in the message, do ONLY YOUR PIECE of work and then use pass_to_next_agent to hand off to a teammate.",
+  "- Do NOT try to single-handedly complete a multi-agent collaborative mission (e.g. do not write all 15 rounds of a chain yourself if you have 5 teammates — do round 1, then hand off).",
+  "- Check the current state (e.g. file_read on shared files) to know what your specific turn is, then add ONE increment, then hand off.",
+  "- Stop the handoff chain (do NOT call pass_to_next_agent) only when the stop condition in the mission goal is met (e.g. chain.txt already has the required number of entries).",
+].join("\n");
+
 export function getRoleSystemPrompt(roleName: string, config: AgentSystemConfig): string | undefined {
   const spec = findRoleSpec(roleName, config);
   if (!spec || !spec.systemPrompt || !spec.systemPrompt.trim()) {
-    return undefined;
+    // Dynamic roles (HR-recruited) still get skill tool guidance
+    return `${RUNTIME_SKILL_TOOL_DIRECTIVE}${TASK_OUTPUT_FORMAT_DIRECTIVE}`;
   }
-  return `${spec.systemPrompt.trim()}${TASK_OUTPUT_FORMAT_DIRECTIVE}`;
+  return `${spec.systemPrompt.trim()}${RUNTIME_SKILL_TOOL_DIRECTIVE}${TASK_OUTPUT_FORMAT_DIRECTIVE}`;
 }
 
 function findRoleSpec(roleName: string, config: AgentSystemConfig): ConfigAgentSpec | undefined {
   const buckets: ConfigAgentSpec[] = [
     ...config.teamPlanner.baseAgents,
-    ...config.teamPlanner.rules.map((rule) => rule.agent),
-    config.teamPlanner.fallbackAgent,
-    config.teamPlanner.reviewAgent,
   ];
   return buckets.find((agent) => agent.role === roleName);
 }
@@ -123,9 +135,8 @@ function validateAgentSystemConfig(config: AgentSystemConfig): void {
   if (!config.owner.brief.successMetrics.length) throw new Error("owner.brief.successMetrics is required");
   if (!config.owner.brief.constraints.length) throw new Error("owner.brief.constraints is required");
   if (!config.owner.followup.template.trim()) throw new Error("owner.followup.template is required");
+  if (!config.skills?.rootDir?.trim()) throw new Error("skills.rootDir is required");
   if (!config.teamPlanner.baseAgents.length) throw new Error("teamPlanner.baseAgents is required");
-  if (!config.teamPlanner.rules.length) throw new Error("teamPlanner.rules is required");
-  if (!config.teamPlanner.initialTasks.length) throw new Error("teamPlanner.initialTasks is required");
   if (!config.teamPlanner.capabilityMatchers.plan.length) throw new Error("teamPlanner.capabilityMatchers.plan is required");
   if (!config.ui.emptyPrompt.trim()) throw new Error("ui.emptyPrompt is required");
 }

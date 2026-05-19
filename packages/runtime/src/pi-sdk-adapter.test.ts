@@ -42,11 +42,13 @@ describe("PiSdkAdapter", () => {
 
   it("collects sources from tool_execution_end events for web_search", async () => {
     let captured: ((event: any) => void) | null = null;
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const fakeAgent = {
       prompt: vi.fn().mockImplementation(async () => {
         if (captured) {
           captured({
             type: "tool_execution_end",
+            toolCallId: "tool-1",
             toolName: "web_search",
             result: {
               ok: true,
@@ -71,16 +73,96 @@ describe("PiSdkAdapter", () => {
       apiKey: "k",
       agentFactory: (() => fakeAgent) as never,
     });
+    const onToolEvent = vi.fn();
 
     const result = await adapter.runAgentTask({
       message: "search hello",
       timeoutSeconds: 5,
+      onToolEvent,
     });
 
     expect(result.sources).toEqual([
       { url: "https://a.example", title: "A", snippet: "snip-a", searchKeyword: "hello" },
       { url: "https://b.example", title: "B", searchKeyword: "hello" },
     ]);
+    expect(onToolEvent).toHaveBeenCalledWith({
+      status: "end",
+      traceLabel: "RuntimeAgent",
+      toolCallId: "tool-1",
+      toolName: "web_search",
+      ok: true,
+      details: {
+        results: [
+          { url: "https://a.example", title: "A", snippet: "snip-a" },
+          { url: "https://b.example", title: "B" },
+        ],
+        searchKeyword: "hello",
+      },
+    });
+    consoleSpy.mockRestore();
+  });
+
+  it("merges base tools with per-task tools for agent execution", async () => {
+    const baseTool = { name: "load_skill" };
+    const taskTool = { name: "task_specific_tool" };
+    const fakeAgent = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+      state: { messages: [{ role: "assistant", content: "done" }] },
+    };
+    const agentFactory = vi.fn().mockReturnValue(fakeAgent);
+
+    const adapter = new PiSdkAdapter({
+      apiKey: "k",
+      tools: [baseTool as never],
+      agentFactory: agentFactory as never,
+    });
+
+    await adapter.runAgentTask({
+      message: "do it",
+      timeoutSeconds: 5,
+      tools: [taskTool as never],
+    });
+
+    expect(agentFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialState: expect.objectContaining({
+          tools: [baseTool, taskTool],
+        }),
+      }),
+    );
+  });
+
+  it("uses the configured pi-ai provider directly for agent execution", async () => {
+    const fakeAgent = {
+      prompt: vi.fn().mockResolvedValue(undefined),
+      subscribe: vi.fn(),
+      state: { messages: [] },
+    };
+    const agentFactory = vi.fn().mockReturnValue(fakeAgent);
+
+    const adapter = new PiSdkAdapter({
+      apiKey: "k",
+      modelProvider: "minimax-cn",
+      modelId: "MiniMax-M2.7-highspeed",
+      agentFactory: agentFactory as never,
+    });
+
+    await adapter.runAgentTask({
+      message: "do it",
+      timeoutSeconds: 5,
+    });
+
+    expect(agentFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialState: expect.objectContaining({
+          model: expect.objectContaining({
+            provider: "minimax-cn",
+            baseUrl: "https://api.minimaxi.com/anthropic",
+          }),
+        }),
+      }),
+    );
   });
 
   it("returns failed status when prompt throws (exception isolation fence)", async () => {
@@ -100,10 +182,12 @@ describe("PiSdkAdapter", () => {
       timeoutSeconds: 5,
     });
 
-    expect(result.status).toBe("failed");
-    expect(result.error).toBe("pi blew up");
-    expect(result.stderr).toBe("pi blew up");
-    expect(result.sources).toEqual([]);
+    expect(result).toMatchObject({
+      status: "failed",
+      stderr: "pi blew up",
+      error: "pi blew up",
+      output: { messages: [], error: "pi blew up" },
+    });
   });
 
   it("returns failed status when prompt does not resolve in time", async () => {

@@ -125,7 +125,7 @@ describe("speakin Mission week 1 integration (Plans 1+2+3)", () => {
     expect(service.listPublishTargets(mission.id).length).toBeGreaterThanOrEqual(1);
 
     // Step 2: activate to create initial task
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id);
     if (!initialTask) throw new Error("missing initial task");
 

@@ -61,7 +61,7 @@ describe("Phase 3 integration: knowledge + hierarchy + autonomy", () => {
       constraints: ["none"],
     });
 
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
 
     const snapshot = service.snapshot();
     const relations = snapshot.agentRelations.filter((r) => r.missionId === mission.id);
@@ -85,7 +85,7 @@ describe("Phase 3 integration: knowledge + hierarchy + autonomy", () => {
       constraints: ["none"],
     });
 
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
 
     expect((service as any).autonomyService).toBeDefined();
     expect((service as any).autonomyService.isRunning(mission.id)).toBe(true);
@@ -137,7 +137,7 @@ describe("Phase 3 integration: knowledge + hierarchy + autonomy", () => {
     const current = service.snapshot().missions.find((m) => m.id === mission.id);
     if (current?.brief) {
       service.confirmBrief({ missionId: mission.id });
-      await service.activateMissionWithHR({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       const negotiation = service.getNegotiation({ missionId: mission.id });
       if (negotiation) {

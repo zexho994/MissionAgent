@@ -1,6 +1,7 @@
 import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { getModel, type Model } from "@earendil-works/pi-ai";
 import type { Source } from "@digitalagent/core";
+import { runPiAgent, type PiAgentConfig, type PiAgentLike } from "./pi-agent-runner.js";
+import type { ToolCallTraceEvent } from "./tool-call-trace.js";
 
 export interface PiSdkAdapterOptions {
   apiKey: string;
@@ -10,30 +11,18 @@ export interface PiSdkAdapterOptions {
   agentFactory?: (config: AgentConfig) => AgentLike;
 }
 
-export interface AgentConfig {
-  initialState: {
-    systemPrompt: string;
-    model: Model<any>;
-    tools: AgentTool<any>[];
-    messages: never[];
-  };
-  sessionId?: string;
-  getApiKey?: () => Promise<string>;
-}
-
-export interface AgentLike {
-  prompt(text: string): Promise<void>;
-  subscribe(handler: (event: AgentEvent) => void): void;
-  state: {
-    messages: unknown[];
-  };
-}
+export type AgentConfig = PiAgentConfig;
+export type AgentLike = PiAgentLike;
 
 export interface RunAgentTaskInput {
   message: string;
   timeoutSeconds: number;
   systemPrompt?: string;
   sessionId?: string;
+  missionId?: string;
+  agentId?: string;
+  tools?: AgentTool<any>[];
+  onToolEvent?: (event: ToolCallTraceEvent) => void;
 }
 
 export interface RunAgentTaskResult {
@@ -59,7 +48,7 @@ export class PiSdkAdapter {
 
   constructor(options: PiSdkAdapterOptions) {
     this.apiKey = options.apiKey;
-    this.modelProvider = options.modelProvider ?? "minimax";
+    this.modelProvider = options.modelProvider ?? "minimax-cn";
     this.modelId = options.modelId ?? "MiniMax-M2.7-highspeed";
     this.tools = options.tools ?? [];
     this.agentFactory =
@@ -75,33 +64,27 @@ export class PiSdkAdapter {
   }
 
   async runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTaskResult> {
-    const model = resolveModelSafe(this.modelProvider, this.modelId);
     const sources: Source[] = [];
 
-    const config: AgentConfig = {
-      initialState: {
-        systemPrompt: input.systemPrompt ?? "",
-        model,
-        tools: this.tools,
-        messages: [] as never[],
-      },
-      getApiKey: async () => this.apiKey,
-    };
-    if (input.sessionId) {
-      config.sessionId = input.sessionId;
-    }
-
-    const agent = this.agentFactory(config);
-
-    agent.subscribe((event) => {
-      collectSourcesFromEvent(event, sources);
-    });
-
     try {
-      await runWithTimeout(agent.prompt(input.message), input.timeoutSeconds);
+      const result = await runPiAgent({
+        apiKey: this.apiKey,
+        modelProvider: this.modelProvider,
+        modelId: this.modelId,
+        systemPrompt: input.systemPrompt ?? "",
+        messages: [],
+        prompt: input.message,
+        tools: [...this.tools, ...(input.tools ?? [])],
+        timeoutSeconds: input.timeoutSeconds,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        traceLabel: inferRuntimeTraceLabel(input.systemPrompt),
+        ...(input.onToolEvent ? { onToolEvent: input.onToolEvent } : {}),
+        onEvent: (event) => collectSourcesFromEvent(event, sources),
+        agentFactory: this.agentFactory,
+      });
       return {
         status: "completed",
-        output: { messages: agent.state.messages },
+        output: { messages: result.messages },
         stderr: "",
         sources,
       };
@@ -109,7 +92,7 @@ export class PiSdkAdapter {
       const message = error instanceof Error ? error.message : String(error);
       return {
         status: "failed",
-        output: { messages: agent.state.messages, error: message },
+        output: { messages: [], error: message },
         stderr: message,
         sources,
         error: message,
@@ -118,42 +101,11 @@ export class PiSdkAdapter {
   }
 }
 
-function resolveModelSafe(provider: string, modelId: string): Model<any> {
-  try {
-    const m = getModel(provider as never, modelId as never);
-    if (m) return m;
-  } catch {
-    // fall through
-  }
-  return {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions",
-    provider,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 4096,
-  } as Model<any>;
-}
-
-function runWithTimeout<T>(promise: Promise<T>, timeoutSeconds: number): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`pi agent task timed out after ${timeoutSeconds}s`));
-    }, timeoutSeconds * 1000);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+function inferRuntimeTraceLabel(systemPrompt?: string): string {
+  if (!systemPrompt?.trim()) return "RuntimeAgent";
+  const firstLine = systemPrompt.trim().split(/\r?\n/)[0]?.trim();
+  if (!firstLine) return "RuntimeAgent";
+  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
 }
 
 function collectSourcesFromEvent(event: AgentEvent, sources: Source[]): void {

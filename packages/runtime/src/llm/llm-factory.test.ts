@@ -11,27 +11,12 @@ function fakeCompleteResponse(text: string, modelId = "test-model") {
 }
 
 describe("createLlmService", () => {
-  it("glm provider resolves to openai pi-provider with glm defaults", async () => {
-    const completeMock = vi.fn().mockResolvedValue(fakeCompleteResponse("ok", "glm-4-flash"));
-    const llm = createLlmService({
-      provider: "glm",
-      apiKey: "glm-key",
-      completeFn: completeMock,
-    });
-    await llm.call([{ role: "user", content: "hello" }]);
-    const [model, , options] = completeMock.mock.calls[0]!;
-    expect(model.provider).toBe("openai");
-    expect(model.id).toBe("glm-4-flash");
-    expect(model.baseUrl).toBe("https://open.bigmodel.cn/api/paas/v4");
-    expect(options).toMatchObject({ apiKey: "glm-key" });
-  });
-
-  it("minimax provider resolves to pi minimax-cn provider with anthropic-compatible endpoint", async () => {
+  it("uses the configured pi-ai provider directly", async () => {
     const completeMock = vi
       .fn()
       .mockResolvedValue(fakeCompleteResponse("ok", "MiniMax-M2.7-highspeed"));
     const llm = createLlmService({
-      provider: "minimax",
+      provider: "minimax-cn",
       apiKey: "minimax-key",
       completeFn: completeMock,
     });
@@ -44,22 +29,6 @@ describe("createLlmService", () => {
     expect(options).toMatchObject({ apiKey: "minimax-key" });
   });
 
-  it("claude provider resolves to anthropic pi-provider with anthropic defaults", async () => {
-    const completeMock = vi
-      .fn()
-      .mockResolvedValue(fakeCompleteResponse("hello", "claude-3-5-haiku-latest"));
-    const llm = createLlmService({
-      provider: "claude",
-      apiKey: "claude-key",
-      completeFn: completeMock,
-    });
-    const response = await llm.call([{ role: "user", content: "hello" }]);
-    const [model] = completeMock.mock.calls[0]!;
-    expect(model.provider).toBe("anthropic");
-    expect(model.id).toBe("claude-3-5-haiku-latest");
-    expect(response.content).toBe("hello");
-  });
-
   it("fast-fails when API key is missing", () => {
     expect(() =>
       createLlmService({
@@ -67,6 +36,28 @@ describe("createLlmService", () => {
         apiKey: "",
       }),
     ).toThrow("LLM API key is required");
+  });
+
+  it("throws when pi-ai returns an error stop reason", async () => {
+    const completeMock = vi.fn().mockResolvedValue({
+      content: [],
+      usage: { input: 0, output: 0, totalTokens: 0 },
+      stopReason: "error",
+      errorMessage: "assistantMsg.content.flatMap is not a function",
+      model: { id: "MiniMax-M2.7-highspeed", name: "MiniMax" },
+    });
+    const llm = createLlmService({
+      provider: "minimax-cn",
+      apiKey: "minimax-key",
+      completeFn: completeMock,
+    });
+
+    await expect(llm.call([{ role: "user", content: "hello" }])).rejects.toThrow(
+      "assistantMsg.content.flatMap is not a function",
+    );
+    await expect(llm.call([{ role: "user", content: "hello" }])).rejects.toThrow(
+      "provider=minimax-cn",
+    );
   });
 });
 
@@ -141,5 +132,28 @@ describe("createLlmService (pi-ai backed)", () => {
       usage: { promptTokens: 12, completionTokens: 3, totalTokens: 15 },
       finishReason: "end_turn",
     });
+  });
+
+  it("serializes assistant history as text content blocks for pi-ai", async () => {
+    const completeMock = vi.fn().mockResolvedValue(fakeCompleteResponse("ok"));
+    const service = createLlmService({
+      provider: "minimax-cn",
+      apiKey: "sk-test",
+      completeFn: completeMock,
+    });
+
+    await service.call([
+      { role: "system", content: "You are helpful." },
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi, how can I help?" },
+      { role: "user", content: "Tell me a joke" },
+    ]);
+
+    const [, context] = completeMock.mock.calls[0]!;
+    expect(context.messages).toEqual([
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: [{ type: "text", text: "Hi, how can I help?" }] },
+      { role: "user", content: "Tell me a joke" },
+    ]);
   });
 });

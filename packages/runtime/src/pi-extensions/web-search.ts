@@ -6,7 +6,7 @@
  * - `createWebSearchTool`: factory that returns an `AgentTool` consumed by the pi-agent-core Agent.
  *
  * Backend is configured via:
- * - `WEB_SEARCH_API_KEY` env var (or `apiKey` option) — required; without it the tool returns empty results.
+ * - `WEB_SEARCH_API_KEY` env var (or `apiKey` option) — required.
  * - `WEB_SEARCH_BACKEND_URL` env var (or `endpoint` option) — defaults to Brave Search.
  */
 
@@ -32,16 +32,12 @@ export interface SearchOptions {
 export interface SearchResponse {
   results: SearchResult[];
   raw?: unknown;
-  note?: string;
 }
 
 export async function searchWeb(options: SearchOptions): Promise<SearchResponse> {
   const apiKey = options.apiKey ?? process.env.WEB_SEARCH_API_KEY;
   if (!apiKey) {
-    return {
-      results: [],
-      note: "Web search disabled: missing API key (set WEB_SEARCH_API_KEY)",
-    };
+    throw new Error("WEB_SEARCH_API_KEY is required for web_search");
   }
 
   const endpoint = options.endpoint ?? process.env.WEB_SEARCH_BACKEND_URL ?? DEFAULT_ENDPOINT;
@@ -116,7 +112,7 @@ export function createWebSearchTool(
       const search = await searchWeb(opts);
       const text =
         search.results.length === 0
-          ? search.note ?? "No results found."
+          ? "No results found."
           : JSON.stringify(search.results, null, 2);
       return {
         content: [{ type: "text", text }],

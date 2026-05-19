@@ -11,6 +11,7 @@ export interface ApiRequest {
 
 export interface ApiResponse {
   status: number;
+  headers?: Record<string, string>;
   body: unknown;
 }
 
@@ -88,10 +89,22 @@ export async function handleApiRequest(
 
     if (request.method === "POST" && request.path === "/api/missions/activate") {
       const body = expectObject(request.body);
-      const mission = await deps.missions.activateMissionWithHR({
-        missionId: expectString(body.missionId, "missionId"),
-      });
-      return json(200, { mission, snapshot: deps.missions.snapshot() });
+      try {
+        const mission = await deps.missions.activateMission({
+          missionId: expectString(body.missionId, "missionId"),
+        });
+        return json(200, { mission, snapshot: deps.missions.snapshot() });
+      } catch (error) {
+        return json(
+          503,
+          {
+            error: error instanceof Error ? error.message : String(error),
+            retryable: true,
+            message: "HR 招募失败,请点击重试",
+          },
+          { "Retry-After": "5" },
+        );
+      }
     }
 
     if (request.method === "POST" && request.path === "/api/missions/activate-async") {
@@ -99,7 +112,7 @@ export async function handleApiRequest(
       const missionId = expectString(body.missionId, "missionId");
       const mission = deps.missions.beginMissionActivation({ missionId });
       setTimeout(() => {
-        void deps.missions.activateMissionWithHR({ missionId }).catch((error: unknown) => {
+        void deps.missions.activateMission({ missionId }).catch((error: unknown) => {
           console.error("[API] Async mission activation failed:", error instanceof Error ? error.message : String(error));
         });
       }, 0);
@@ -280,7 +293,24 @@ export async function handleApiRequest(
         const planId = expectString(body.planId, "planId");
         const mission = deps.missions.confirmMissionPlan({ missionId, planId });
         const plan = deps.missions.getMissionPlan({ missionId });
-        return json(200, { mission, plan, snapshot: deps.missions.snapshot() });
+        const snapshotBeforeActivation = deps.missions.snapshot();
+        const activationAlreadyStarted = hasMissionActivationStarted(snapshotBeforeActivation, missionId);
+        const activatedMission = activationAlreadyStarted
+          ? mission
+          : deps.missions.beginMissionActivation({ missionId });
+        if (!activationAlreadyStarted) {
+          setTimeout(() => {
+            void deps.missions.activateMission({ missionId }).catch((error: unknown) => {
+              console.error("[API] MissionPlan confirmation activation failed:", error instanceof Error ? error.message : String(error));
+            });
+          }, 0);
+        }
+        return json(200, {
+          mission: activatedMission,
+          plan,
+          activation: { status: activationAlreadyStarted ? "already_started" : "started" },
+          snapshot: deps.missions.snapshot(),
+        });
       }
     }
 
@@ -649,8 +679,8 @@ export async function handleApiRequest(
   }
 }
 
-function json(status: number, body: unknown): ApiResponse {
-  return { status, body };
+function json(status: number, body: unknown, headers?: Record<string, string>): ApiResponse {
+  return { status, body, ...(headers === undefined ? {} : { headers }) };
 }
 
 function expectObject(value: unknown): Record<string, unknown> {
@@ -684,6 +714,21 @@ function firstRunnableMissionTask(snapshot: ReturnType<InMemoryMissionService["s
   return snapshot.tasks
     .filter((task) => task.missionId === missionId && statusOrder.has(task.status))
     .sort((a, b) => (statusOrder.get(a.status) ?? 99) - (statusOrder.get(b.status) ?? 99))[0];
+}
+
+function hasMissionActivationStarted(snapshot: ReturnType<InMemoryMissionService["snapshot"]>, missionId: string): boolean {
+  const hasTask = snapshot.tasks.some((task) => task.missionId === missionId);
+  const hasExecutionTeam = snapshot.agents.some((agent) => (
+    agent.missionId === missionId &&
+    agent.role !== "owner" &&
+    agent.role !== "hr"
+  ));
+  const hasActiveHr = snapshot.agents.some((agent) => (
+    agent.missionId === missionId &&
+    agent.role === "hr" &&
+    (agent.status === "running" || agent.status === "thinking" || agent.status === "done")
+  ));
+  return hasTask || hasExecutionTeam || hasActiveHr;
 }
 
 function expectRecord(value: unknown, field: string): Record<string, unknown> {
@@ -764,4 +809,3 @@ function parseScheduleRulePatch(body: Record<string, unknown>): Partial<Schedule
 
   return patch;
 }
-

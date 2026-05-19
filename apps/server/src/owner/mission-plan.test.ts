@@ -82,4 +82,12 @@ ${completeMissionPlanJson}
     expect(messages[1]?.content).toContain("Grow two GitHub repositories past 1k stars");
     expect(messages[1]?.content).toContain("Add a stronger analytics role.");
   });
+
+  it("includes skill tool directives in the system prompt", () => {
+    const messages = buildMissionPlanMessages({ brief });
+
+    expect(messages[0]?.content).toContain("list_skill_files");
+    expect(messages[0]?.content).toContain("load_skill");
+    expect(messages[0]?.content).toContain("digitalagent/SKILL.md");
+  });
 });

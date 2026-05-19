@@ -18,6 +18,7 @@ import {
   type MissionOutcomeEvaluation,
   type MissionOutcomeEvaluationSource,
   type MissionPlan,
+  type MissionPlanWorkstream,
   type RecommendedRecovery,
   type Review,
   type ScheduleRule,
@@ -28,12 +29,14 @@ import {
   type TaskFailureAnalysis,
   type TaskFailureType,
 } from "@digitalagent/core";
-import type { LlmService } from "@digitalagent/runtime";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import type { AgentTool, LlmService, ToolCallTraceEvent } from "@digitalagent/runtime";
+import { createFileTools, createPassToNextAgentTool } from "@digitalagent/runtime";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, promises as fsPromises } from "node:fs";
+import { dirname, join } from "node:path";
 import { loadAgentSystemConfig, getRoleSystemPrompt, type AgentSystemConfig } from "./system-config.js";
 import {
   buildMissionPlanMessages,
+  buildMissionPlanMessagesWithRepair,
   buildOwnerSystemPrompt,
   buildConversationMessages,
   buildSummaryRequest,
@@ -41,7 +44,6 @@ import {
 } from "./owner/index.js";
 import type { TeamProposal } from "./hr-agent.js";
 import { NegotiationManager, type NegotiationSummary, type StoredNegotiationState } from "./negotiation-manager.js";
-import { planMissionTeam, matcherFor, type MissionTeamPlan } from "./team-planning.js";
 import { evaluateArtifactQuality } from "./artifact-evaluation.js";
 
 import { ensureTaskRunning, deriveOwnerBrief, deriveOwnerFollowup } from "./mission-helpers.js";
@@ -142,7 +144,7 @@ export interface Execution {
 }
 
 export type WarRoomAgentRole = string;
-export type WarRoomAgentStatus = "idle" | "thinking" | "running" | "blocked" | "done";
+export type WarRoomAgentStatus = "idle" | "thinking" | "running" | "blocked" | "done" | "failed";
 
 export interface WarRoomAgent {
   id: string;
@@ -280,7 +282,6 @@ export type AutopilotStage =
   | "team_not_ready"
   | "missing_initial_tasks"
   | "missing_execution_runner"
-  | "missing_schedule"
   | "ready"
   | "running"
   | "blocked";
@@ -291,7 +292,6 @@ export type AutopilotBlockerCode =
   | "team_not_ready"
   | "initial_tasks_missing"
   | "execution_runner_missing"
-  | "schedule_rules_missing"
   | "execution_blocked";
 
 export interface AutopilotBlocker {
@@ -558,14 +558,16 @@ export interface MissionServiceOptions {
   runtime?: MissionExecutionRuntime | undefined;
   followupSafety?: FollowupSafetyConfig | undefined;
   fetch?: ((url: string, init?: RequestInit) => Promise<Response>) | undefined;
+  workspaceRoot?: string | undefined;
 }
 
 export type StreamEventListener = (event: {
-  type: "token" | "done" | "hr_progress" | "hr_progress_done";
+  type: "token" | "done" | "hr_progress" | "hr_progress_done" | "tool_call";
   content?: string;
   messageId?: string;
   tokensReceived?: number;
   phase?: string;
+  toolEvent?: ToolCallTraceEvent;
 }) => void;
 
 export interface StreamSubscription {
@@ -593,9 +595,11 @@ export class InMemoryMissionService {
   private readonly taskFailureAnalyses = new Map<string, TaskFailureAnalysis>();
   private readonly strategyAdjustments = new Map<string, StrategyAdjustment>();
   private readonly storageFile: string | undefined;
+  private readonly workspaceRoot: string | undefined;
   private readonly config: AgentSystemConfig;
   private readonly llm: LlmService | undefined;
   private readonly streamListeners = new Map<string, Set<StreamEventListener>>();
+  private readonly toolCallStreamBacklog = new Map<string, ToolCallTraceEvent[]>();
   private negotiationManager: NegotiationManager | undefined;
   private conversationBus: AgentConversationBus | undefined;
   private autonomyService: AgentAutonomyService | undefined;
@@ -617,6 +621,7 @@ export class InMemoryMissionService {
 
   constructor(options: MissionServiceOptions = {}) {
     this.storageFile = options.storageFile;
+    this.workspaceRoot = options.workspaceRoot;
     this.config = loadAgentSystemConfig(options.configFile);
     this.llm = options.llm;
     this.runtime = options.runtime;
@@ -655,6 +660,7 @@ export class InMemoryMissionService {
         agents: this.agents,
         agentRelations: this.agentRelations,
         missions: this.missions,
+        plans: this.plans,
         tasks: this.tasks,
         agentMessages: this.agentMessages,
         notifyStream: (missionId, event) => this.notifyStreamListeners(missionId, event),
@@ -672,9 +678,7 @@ export class InMemoryMissionService {
       budget: {
         maxRuntimeMinutes: input.budget?.maxRuntimeMinutes ?? 180,
         maxTokenSpendUsd: input.budget?.maxTokenSpendUsd ?? 20,
-        ...(input.budget?.maxFollowupTasks === undefined
-          ? {}
-          : { maxFollowupTasks: input.budget.maxFollowupTasks }),
+        maxFollowupTasks: input.budget?.maxFollowupTasks ?? 30,
       },
     });
 
@@ -722,60 +726,14 @@ export class InMemoryMissionService {
     return this.missions.get(mission.id) ?? mission;
   }
 
-  activateMission(input: ActivateMissionRequest): Mission {
-    const mission = this.missions.get(input.missionId);
-    if (!mission) {
-      throw new Error(`Mission not found: ${input.missionId}`);
-    }
-    const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
-    if (existingTask) {
-      return mission;
-    }
-
-    const teamPlan = planMissionTeam(mission.goal, this.config);
-    const initialTask = createTask({
-      missionId: mission.id,
-      title: teamPlan.initialTaskTitle,
-      dependencies: [],
-      contract: {
-        objective: teamPlan.initialTaskObjective,
-        input: {
-          goal: mission.goal,
-          successMetrics: mission.successMetrics,
-          constraints: mission.constraints,
-          teamPlan,
-        },
-        outputSchema: {
-          teamPlan: "array",
-          firstTasks: "array",
-          risks: "array",
-        },
-        successCriteria: [
-          "Every proposed role has a clear responsibility",
-          "First tasks are executable and reviewable",
-        ],
-      },
-      approvalRequired: false,
-    });
-
-    this.tasks.set(initialTask.id, initialTask);
-    this.createMissionTeam(mission.id, initialTask.id, teamPlan);
-    if (this.llm) {
-      this.getAutonomyService().startLoop(mission.id);
-    }
-    if (mission.scheduleRules.length > 0) {
-      this.getOrCreateScheduler(mission.id).start(mission.scheduleRules);
-    }
-    this.persist();
-    return mission;
-  }
-
   beginMissionActivation(input: ActivateMissionRequest): Mission {
     const mission = this.missions.get(input.missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
-    this.assertMissionPlanReadyForActivation(mission.id);
+    if (this.llm && mission.briefConfirmed) {
+      this.assertMissionPlanReadyForActivation(mission.id);
+    }
     const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
     if (existingTask) {
       return mission;
@@ -783,39 +741,43 @@ export class InMemoryMissionService {
 
     const hr = this.createBaseAgent(mission.id, "hr", {
       status: "running",
-      lastAction: "正在分析 MissionBrief 并招募团队",
+      lastAction: "正在基于 MissionPlan 分析团队需求并招募团队",
     });
     const alreadyAnnounced = [...this.agentMessages.values()].some(
       (message) => message.missionId === mission.id
         && message.fromAgentId === hr.id
         && message.type === "team_created"
-        && message.content.includes("正在分析 MissionBrief"),
+        && message.content.includes("基于 MissionPlan 分析"),
     );
     if (!alreadyAnnounced) {
       this.appendMessage({
         missionId: mission.id,
         fromAgentId: hr.id,
         type: "team_created",
-        content: "HR Agent 正在分析 MissionBrief、拆解需要的角色，并招募 Mission 团队。",
+        content: "HR Agent 正在基于 MissionPlan 分析团队需求、拆解角色，并招募 Mission 团队。",
       });
     }
     this.persist();
     return mission;
   }
 
-  async activateMissionWithHR(input: ActivateMissionRequest): Promise<Mission> {
+  async activateMission(input: ActivateMissionRequest): Promise<Mission> {
     const mission = this.missions.get(input.missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
     }
-    this.assertMissionPlanReadyForActivation(mission.id);
     const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
     if (existingTask) {
       return mission;
     }
 
-    if (!this.llm || !mission.brief) {
-      return this.activateMission(input);
+    if (!this.llm || !mission.briefConfirmed) {
+      return this.activateConfirmedMissionPlan(mission);
+    }
+
+    this.assertMissionPlanReadyForActivation(mission.id);
+    if (!mission.brief) {
+      throw new Error("HR activation requires mission brief");
     }
 
     try {
@@ -830,9 +792,147 @@ export class InMemoryMissionService {
       this.persist();
       return this.missions.get(mission.id)!;
     } catch (error) {
-      console.error("[MissionService] HR-based activation failed, falling back to keyword:", error instanceof Error ? error.message : String(error));
-      return this.activateMission(input);
+      this.persist();
+      throw error;
     }
+  }
+
+  private activateConfirmedMissionPlan(mission: Mission): Mission {
+    const plan = mission.confirmedPlanId
+      ? this.assertMissionPlanReadyForActivation(mission.id)
+      : buildLocalActivationPlan(mission);
+    const existingTask = [...this.tasks.values()].find((task) => task.missionId === mission.id);
+    if (existingTask) {
+      return mission;
+    }
+
+    const firstWorkstream = plan.workstreams[0];
+    if (!firstWorkstream) {
+      throw new Error(`MissionPlan has no workstreams: ${plan.id}`);
+    }
+
+    const firstTask = createTask({
+      missionId: mission.id,
+      title: firstWorkstream.firstTaskGoal,
+      dependencies: [],
+      contract: {
+        objective: firstWorkstream.objective,
+        input: {
+          goal: mission.goal,
+          successMetrics: mission.successMetrics,
+          constraints: mission.constraints,
+          missionPlanId: plan.id,
+          workstream: firstWorkstream,
+        },
+        outputSchema: {
+          summary: "string",
+          payloads: "array",
+          sources: "array",
+        },
+        successCriteria: firstWorkstream.responsibilities,
+      },
+      approvalRequired: false,
+    });
+    this.tasks.set(firstTask.id, firstTask);
+
+    const owner = this.agentByRole(mission.id, "owner");
+    this.createBaseAgent(mission.id, "hr", {
+      status: "done",
+      lastAction: "MissionPlan 已确认,团队骨架已创建",
+      sortOrder: 1,
+    });
+
+    const workerAgents = new Map<string, WarRoomAgent>();
+    plan.workstreams.forEach((workstream, index) => {
+      const agent = this.createOrUpdatePlanAgent({
+        missionId: mission.id,
+        role: workstream.requiredRole,
+        name: `${workstream.requiredRole} Agent`,
+        responsibility: workstream.responsibilities.join("; "),
+        status: index === 0 ? "idle" : "idle",
+        currentTaskId: index === 0 ? firstTask.id : undefined,
+        lastAction: index === 0 ? `Ready for ${firstTask.title}` : "等待任务分配",
+        avatarSeed: workstream.requiredRole,
+        sortOrder: index + 2,
+      });
+      workerAgents.set(workstream.requiredRole, agent);
+    });
+
+    const reviewer = this.createOrUpdatePlanAgent({
+      missionId: mission.id,
+      role: "reviewer",
+      name: "Review Agent",
+      responsibility: "Review mission outputs against the confirmed MissionPlan.",
+      status: "idle",
+      currentTaskId: undefined,
+      lastAction: "等待产出审核",
+      avatarSeed: "reviewer",
+      sortOrder: workerAgents.size + 2,
+    });
+
+    for (const agent of workerAgents.values()) {
+      const ownerRelationId = createId("relation");
+      this.agentRelations.set(ownerRelationId, {
+        id: ownerRelationId,
+        missionId: mission.id,
+        fromAgentId: owner.id,
+        toAgentId: agent.id,
+        label: "下发 MissionPlan 工作流",
+        status: "active",
+        createdAt: new Date().toISOString(),
+      });
+      const reviewRelationId = createId("relation");
+      this.agentRelations.set(reviewRelationId, {
+        id: reviewRelationId,
+        missionId: mission.id,
+        fromAgentId: agent.id,
+        toAgentId: reviewer.id,
+        label: "提交产出审核 / 反馈修正",
+        status: "active",
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    if (mission.scheduleRules.length > 0) {
+      this.getOrCreateScheduler(mission.id).start(mission.scheduleRules);
+    }
+    if (this.llm) {
+      this.getAutonomyService().startLoop(mission.id);
+    }
+    this.persist();
+    return mission;
+  }
+
+  private createOrUpdatePlanAgent(input: {
+    missionId: string;
+    role: string;
+    name: string;
+    responsibility: string;
+    status: WarRoomAgentStatus;
+    currentTaskId: string | undefined;
+    lastAction: string;
+    avatarSeed: string;
+    sortOrder: number;
+  }): WarRoomAgent {
+    const existing = [...this.agents.values()].find(
+      (agent) => agent.missionId === input.missionId && agent.role === input.role,
+    );
+    const agent: WarRoomAgent = {
+      ...(existing ?? {
+        id: createId("agent"),
+        missionId: input.missionId,
+        role: input.role,
+      }),
+      name: input.name,
+      responsibility: input.responsibility,
+      status: input.status,
+      currentTaskId: input.currentTaskId,
+      lastAction: input.lastAction,
+      avatarSeed: input.avatarSeed,
+      sortOrder: input.sortOrder,
+    };
+    this.agents.set(agent.id, agent);
+    return agent;
   }
 
   async continueMission(input: ContinueMissionRequest): Promise<Mission> {
@@ -934,17 +1034,27 @@ export class InMemoryMissionService {
       throw new Error("LLM is required to generate a MissionPlan");
     }
 
-    const response = await this.llm.call(
-      buildMissionPlanMessages({
-        brief: mission.brief,
-        ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
-      }),
-      {
-        maxTokens: 3000,
-        timeoutMs: 90000,
-      },
-    );
-    const draft = parseMissionPlanDraft(response.content);
+    const callOptions = {
+      maxTokens: 3000,
+      timeoutMs: 90000,
+      onToolEvent: (toolEvent: ToolCallTraceEvent) => this.notifyToolCall(mission.id, toolEvent),
+    };
+    const baseInput = {
+      brief: mission.brief,
+      ...(input.feedback !== undefined ? { feedback: input.feedback } : {}),
+    };
+    const firstResponse = await this.llm.call(buildMissionPlanMessages(baseInput), callOptions);
+    let draft;
+    try {
+      draft = parseMissionPlanDraft(firstResponse.content);
+    } catch (error) {
+      const parseError = error instanceof Error ? error.message : String(error);
+      const repairResponse = await this.llm.call(
+        buildMissionPlanMessagesWithRepair({ ...baseInput, parseError }),
+        callOptions,
+      );
+      draft = parseMissionPlanDraft(repairResponse.content);
+    }
     const existingPlans = [...this.plans.values()].filter((plan) => plan.missionId === mission.id);
     const revision = existingPlans.length + 1;
 
@@ -1044,19 +1154,27 @@ export class InMemoryMissionService {
       throw new Error(`Task already has a running execution: ${task.id}`);
     }
 
-    const runningTask = ensureTaskRunning(task);
+    // 优先使用 task 上预先绑定的 assigneeAgentId(followup 任务由 createFollowupTask 设置),
+    // 否则回退到 executionAgent 通用挑选。这保证不同 worker 真的轮流执行,而非全部归 pi_runner。
+    const preferredAgent =
+      task.assigneeAgentId && task.assigneeAgentId !== "pi_runner"
+        ? this.agents.get(task.assigneeAgentId)
+        : undefined;
+    const worker = preferredAgent ?? this.executionAgent(mission.id);
+    const runningTask = ensureTaskRunning(task, worker.id);
     this.tasks.set(runningTask.id, runningTask);
-    const worker = this.executionAgent(mission.id);
     const planner = this.planningAgent(mission.id);
     this.updateAgent(worker.id, {
       status: "running",
       currentTaskId: runningTask.id,
       lastAction: `Executing ${runningTask.title}`,
     });
-    this.updateAgent(planner.id, {
-      status: "done",
-      lastAction: "Task handed to Worker Agent",
-    });
+    if (planner.id !== worker.id) {
+      this.updateAgent(planner.id, {
+        status: "done",
+        lastAction: "Task handed to Worker Agent",
+      });
+    }
 
     const execution: Execution = {
       id: createId("execution"),
@@ -1082,23 +1200,20 @@ export class InMemoryMissionService {
       missionId: mission.id,
       fromAgentId: worker.id,
       type: "execution_started",
-      content: "Started local OpenClaw execution for the current task.",
+      content: "Started local pi-agent execution for the current task.",
     });
     this.appendTaskEvent({
       missionId: mission.id,
       taskId: runningTask.id,
       actorAgentId: worker.id,
       type: "execution.started",
-      summary: `${worker.name} invoked OpenClaw local agent.`,
+      summary: `${worker.name} invoked local pi-agent runtime.`,
     });
     this.persist();
     return execution;
   }
 
   executeTask(input: { missionId: string; taskId: string; message: string }): Execution {
-    if (!this.runtime) {
-      throw new Error("MissionService.executeTask requires a runtime to be injected");
-    }
     const mission = this.missions.get(input.missionId);
     if (!mission) {
       throw new Error(`Mission not found: ${input.missionId}`);
@@ -1107,21 +1222,50 @@ export class InMemoryMissionService {
     if (!task || task.missionId !== mission.id) {
       throw new Error(`Task not found in mission: ${input.taskId}`);
     }
+    if (!this.runtime) {
+      throw new Error("MissionService.executeTask requires a runtime to be injected");
+    }
 
     const execution = this.startExecution({
       missionId: input.missionId,
       taskId: input.taskId,
     });
     const runtime = this.runtime;
-    const executor = this.executionAgent(mission.id);
+    // 与 startExecution 内部用同一套挑选规则:优先 task.assigneeAgentId,回退 executionAgent
+    const preferredExecutor =
+      task.assigneeAgentId && task.assigneeAgentId !== "pi_runner"
+        ? this.agents.get(task.assigneeAgentId)
+        : undefined;
+    const executor = preferredExecutor ?? this.executionAgent(mission.id);
     const systemPrompt = getRoleSystemPrompt(executor.role, this.config);
+    const perCallTools = this.buildPerCallTools({
+      missionId: input.missionId,
+      sourceTaskId: input.taskId,
+      sourceAgentId: executor.id,
+    });
+
+    // 注入团队 roster,LLM 才能在 pass_to_next_agent 用正确的队友名字(否则幻觉为 "agent_3" 等)
+    const teamRoster = [...this.agents.values()]
+      .filter(
+        (a) =>
+          a.missionId === mission.id && !["owner", "hr"].includes(a.role),
+      )
+      .map((a) => `- "${a.name || a.role}"${a.id === executor.id ? " (you)" : ""}`)
+      .join("\n");
+    const enrichedMessage = teamRoster
+      ? `${input.message}\n\nYour team (use these EXACT names when calling pass_to_next_agent — do NOT invent or shorten names like "agent_3"):\n${teamRoster}`
+      : input.message;
 
     void runtime
       .runAgentTask({
-        message: buildAgentMessage({ message: input.message, mission, task }),
+        message: buildAgentMessage({ message: enrichedMessage, mission, task }),
         timeoutSeconds: 300,
         sessionId: input.missionId,
+        missionId: input.missionId,
+        agentId: executor.id,
         ...(systemPrompt ? { systemPrompt } : {}),
+        tools: perCallTools,
+        onToolEvent: (toolEvent) => this.notifyToolCall(input.missionId, toolEvent),
       })
       .then((result) => {
         const sources = extractSourcesFromPiOutput(result.output, result.sources ?? []);
@@ -1144,6 +1288,38 @@ export class InMemoryMissionService {
     return execution;
   }
 
+  private buildPerCallTools(ctx: {
+    missionId: string;
+    sourceTaskId: string;
+    sourceAgentId: string;
+  }): AgentTool<any>[] {
+    const tools: AgentTool<any>[] = [];
+
+    if (this.workspaceRoot) {
+      const missionWorkspace = join(this.workspaceRoot, ctx.missionId);
+      tools.push(...createFileTools({ workspaceRoot: missionWorkspace }));
+    }
+
+    tools.push(
+      createPassToNextAgentTool({
+        missionId: ctx.missionId,
+        sourceTaskId: ctx.sourceTaskId,
+        sourceAgentId: ctx.sourceAgentId,
+        createFollowupTask: (input) => this.createFollowupTask(input),
+        appendMessage: (msg) => {
+          this.appendMessage({
+            missionId: msg.missionId,
+            fromAgentId: msg.fromAgentId,
+            type: msg.type,
+            content: msg.content,
+          });
+        },
+      }),
+    );
+
+    return tools;
+  }
+
   submitExecutionResult(input: SubmitExecutionResultRequest): { artifact: Artifact; review: Review } {
     const mission = this.missions.get(input.missionId);
     if (!mission) {
@@ -1160,7 +1336,10 @@ export class InMemoryMissionService {
       throw new Error(`Running execution not found: ${input.executionId}`);
     }
 
-    const runningTask = task.status === "running" ? task : ensureTaskRunning(task);
+    const runningTask =
+      task.status === "running"
+        ? task
+        : ensureTaskRunning(task, task.assigneeAgentId ?? "pi_runner");
     const qualityResult = evaluateArtifactQuality(input.content, mission);
     const artifact = createArtifact({
       taskId: runningTask.id,
@@ -1401,7 +1580,7 @@ export class InMemoryMissionService {
       briefConfirmed: mission.briefConfirmed === true,
       hasPlan: this.hasConfirmedMissionPlan(mission),
       teamReady: missionAgents.some(
-        (agent) => agent.role !== "owner" && agent.role !== "hr" && agent.status !== "blocked" && agent.status !== "done",
+        (agent) => agent.role !== "owner" && agent.role !== "hr" && agent.status !== "done",
       ),
       hasInitialTasks: executableTasks.length > 0,
       hasExecutionRunner: runtime.hasExecutionRunner,
@@ -1413,8 +1592,7 @@ export class InMemoryMissionService {
       signals.hasPlan &&
       signals.teamReady &&
       signals.hasInitialTasks &&
-      signals.hasExecutionRunner &&
-      signals.hasScheduleRules;
+      signals.hasExecutionRunner;
 
     const blockers: AutopilotBlocker[] = [];
     if (prerequisitesReady && (hasFailedExecution || hasBlockedExecutionAgent)) {
@@ -1459,20 +1637,6 @@ export class InMemoryMissionService {
         nextAction: "Provide an execution runner availability signal before launching autopilot execution.",
       });
     }
-    if (
-      signals.briefConfirmed &&
-      signals.hasPlan &&
-      signals.teamReady &&
-      signals.hasInitialTasks &&
-      signals.hasExecutionRunner &&
-      !signals.hasScheduleRules
-    ) {
-      blockers.push({
-        code: "schedule_rules_missing",
-        message: "No schedule rules are registered for this mission.",
-        nextAction: "Register at least one schedule rule after the mission is otherwise ready.",
-      });
-    }
 
     let stage: AutopilotStage = "ready";
     if (!signals.briefConfirmed) {
@@ -1485,8 +1649,6 @@ export class InMemoryMissionService {
       stage = "missing_initial_tasks";
     } else if (!signals.hasExecutionRunner) {
       stage = "missing_execution_runner";
-    } else if (!signals.hasScheduleRules) {
-      stage = "missing_schedule";
     } else if (hasFailedExecution || hasBlockedExecutionAgent) {
       stage = "blocked";
     } else if (signals.hasRunningExecution) {
@@ -1549,6 +1711,7 @@ export class InMemoryMissionService {
     this.schedulers.delete(missionId);
     this.autonomyService?.stopLoop(missionId);
     this.streamListeners.delete(missionId);
+    this.toolCallStreamBacklog.delete(missionId);
 
     this.missions.delete(missionId);
     for (const plan of this.plans.values()) {
@@ -1595,6 +1758,13 @@ export class InMemoryMissionService {
     }
     for (const adjustment of this.strategyAdjustments.values()) {
       if (adjustment.missionId === missionId) this.strategyAdjustments.delete(adjustment.id);
+    }
+
+    if (this.workspaceRoot) {
+      const workspaceDir = join(this.workspaceRoot, missionId);
+      fsPromises.rm(workspaceDir, { recursive: true, force: true }).catch((err) => {
+        console.error(`[MissionService] Failed to clean workspace ${workspaceDir}:`, err);
+      });
     }
 
     this.persist();
@@ -2568,6 +2738,9 @@ export class InMemoryMissionService {
       this.streamListeners.set(missionId, new Set());
     }
     this.streamListeners.get(missionId)!.add(listener);
+    for (const toolEvent of this.toolCallStreamBacklog.get(missionId) ?? []) {
+      listener({ type: "tool_call", toolEvent });
+    }
 
     return {
       missionId,
@@ -2644,6 +2817,59 @@ export class InMemoryMissionService {
     }
   }
 
+  private notifyToolCall(missionId: string, toolEvent: ToolCallTraceEvent): void {
+    const backlog = this.toolCallStreamBacklog.get(missionId) ?? [];
+    backlog.push(toolEvent);
+    this.toolCallStreamBacklog.set(missionId, backlog.slice(-100));
+    this.recordToolCallEvent(missionId, toolEvent);
+    this.notifyStreamListeners(missionId, {
+      type: "tool_call",
+      toolEvent,
+    });
+  }
+
+  private recordToolCallEvent(missionId: string, evt: ToolCallTraceEvent): void {
+    // 找到当前 mission 下正在跑的 umbrella pi.agent record,从它继承 taskId / executionId / agentId
+    const umbrella = [...this.toolCalls.values()].find(
+      (c) =>
+        c.missionId === missionId &&
+        c.toolName === "pi.agent" &&
+        c.status === "running",
+    );
+    if (!umbrella) return; // 没有活跃的执行,无法归因
+
+    if (evt.status === "start") {
+      const record: ToolCallRecord = {
+        id: evt.toolCallId,
+        missionId,
+        taskId: umbrella.taskId,
+        executionId: umbrella.executionId,
+        agentId: umbrella.agentId,
+        toolName: evt.toolName,
+        status: "running",
+        input: (evt.args ?? {}) as Record<string, unknown>,
+        startedAt: new Date().toISOString(),
+      };
+      this.toolCalls.set(record.id, record);
+    } else if (evt.status === "end") {
+      const existing = this.toolCalls.get(evt.toolCallId);
+      if (!existing) return;
+      const updated: ToolCallRecord = {
+        ...existing,
+        status: evt.ok ? "completed" : "failed",
+        completedAt: new Date().toISOString(),
+      };
+      if (evt.details && typeof evt.details === "object") {
+        updated.output = evt.details as Record<string, unknown>;
+      }
+      if (!evt.ok && evt.error !== undefined) {
+        updated.error =
+          typeof evt.error === "string" ? evt.error : JSON.stringify(evt.error);
+      }
+      this.toolCalls.set(updated.id, updated);
+    }
+  }
+
   private createOwnerAgent(missionId: string): WarRoomAgent {
     return this.createBaseAgent(missionId, "owner");
   }
@@ -2678,70 +2904,6 @@ export class InMemoryMissionService {
     };
     this.agents.set(agent.id, agent);
     return agent;
-  }
-
-  private createMissionTeam(missionId: string, firstTaskId: string, plan: MissionTeamPlan): WarRoomAgent[] {
-    const createdAgents: WarRoomAgent[] = [];
-    const byRole = new Map<string, WarRoomAgent>(
-      [...this.agents.values()]
-        .filter((agent) => agent.missionId === missionId)
-        .map((agent) => [agent.role, agent]),
-    );
-
-    for (const spec of plan.agents) {
-      const existing = byRole.get(spec.role);
-      if (existing) {
-        const updated = {
-          ...existing,
-          name: spec.name,
-          responsibility: spec.responsibility,
-          status: spec.status,
-          currentTaskId: spec.currentTask ? firstTaskId : existing.currentTaskId,
-          lastAction: spec.lastAction,
-          avatarSeed: spec.avatarSeed,
-          sortOrder: spec.sortOrder,
-        };
-        this.agents.set(updated.id, updated);
-        byRole.set(updated.role, updated);
-        createdAgents.push(updated);
-        continue;
-      }
-      const agent: WarRoomAgent = {
-        id: createId("agent"),
-        missionId,
-        role: spec.role,
-        name: spec.name,
-        responsibility: spec.responsibility,
-        status: spec.status,
-        currentTaskId: spec.currentTask ? firstTaskId : undefined,
-        lastAction: spec.lastAction,
-        avatarSeed: spec.avatarSeed,
-        sortOrder: spec.sortOrder,
-      };
-      this.agents.set(agent.id, agent);
-      createdAgents.push(agent);
-      byRole.set(agent.role, agent);
-    }
-
-    for (const relationSpec of plan.relations) {
-      const fromAgent = byRole.get(relationSpec.fromRole);
-      const toAgent = byRole.get(relationSpec.toRole);
-      if (!fromAgent || !toAgent) {
-        throw new Error(`Invalid team relation: ${relationSpec.fromRole} -> ${relationSpec.toRole}`);
-      }
-      const relation: AgentRelation = {
-        id: createId("relation"),
-        missionId,
-        fromAgentId: fromAgent.id,
-        toAgentId: toAgent.id,
-        label: relationSpec.label,
-        status: relationSpec.status,
-        createdAt: new Date().toISOString(),
-      };
-      this.agentRelations.set(relation.id, relation);
-    }
-
-    return createdAgents;
   }
 
   private getConversationBus(): AgentConversationBus {
@@ -2995,13 +3157,21 @@ export class InMemoryMissionService {
       return { created: false, reason: safety.reason, escalateMessageSent };
     }
 
-    const assignee = [...this.agents.values()].find(
-      (a) =>
-        a.missionId === input.missionId &&
-        (a.role === input.payload.assigneeRole ||
-          a.role.includes(input.payload.assigneeRole) ||
-          input.payload.assigneeRole.includes(a.role)),
-    );
+    const target = input.payload.assigneeRole;
+    const matches = (a: WarRoomAgent): boolean => {
+      if (a.missionId !== input.missionId) return false;
+      const role = a.role ?? "";
+      const name = a.name ?? "";
+      // 按 role 精确匹配优先(HR 招的角色 role 是 uuid,LLM 不会传)
+      if (role === target) return true;
+      // 按 name 匹配(HR roleSpec.name 是人类可读名字,如"玩家2",LLM 用这个)
+      if (name === target) return true;
+      // 容错:子串匹配
+      if (role.includes(target) || target.includes(role)) return true;
+      if (name.includes(target) || target.includes(name)) return true;
+      return false;
+    };
+    const assignee = [...this.agents.values()].find(matches);
     if (!assignee) {
       const owner = [...this.agents.values()].find(
         (a) => a.missionId === input.missionId && a.role === "owner",
@@ -3432,6 +3602,7 @@ export class InMemoryMissionService {
       appendMessage: (msg) => this.appendMessage(msg as any),
       updateAgent: (id, patch) => this.updateAgent(id, patch as any),
       notifyStream: (id, event) => this.notifyStreamListeners(id, event as any),
+      notifyToolCall: (id, event) => this.notifyToolCall(id, event),
       persist: () => this.persist(),
     });
 
@@ -3449,7 +3620,7 @@ export class InMemoryMissionService {
     const migration = migrateOpenClawToPi(raw);
     if (migration.migrated) {
       writeFileSync(this.storageFile, migration.json, "utf8");
-      console.log("[store-migration] rewrote openclaw -> pi keys in", this.storageFile);
+      console.log("[store-migration] rewrote pi legacy store entries in", this.storageFile);
     }
     const json = migration.migrated ? migration.json : raw;
     const stored = JSON.parse(json) as StoredMissionSnapshot;
@@ -3572,4 +3743,68 @@ export class InMemoryMissionService {
     };
     writeFileSync(this.storageFile, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   }
+}
+
+function matcherFor(parts: string[]): RegExp {
+  return new RegExp(parts.map(escapeRegExp).join("|"), "i");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildLocalActivationPlan(mission: Mission): MissionPlan {
+  const needsImage = /image|图片|图|视觉|海报|avatar|头像/i.test(mission.goal);
+  const workstreams: MissionPlanWorkstream[] = [
+    {
+      name: "Research",
+      objective: "Clarify mission facts and execution approach.",
+      requiredRole: "researcher",
+      responsibilities: ["Research the mission context", "Prepare an actionable first plan"],
+      firstTaskGoal: needsImage
+        ? "Define knowledge structure and first image production plan"
+        : "Define mission team and first execution plan",
+    },
+  ];
+  if (needsImage) {
+    workstreams.push({
+      name: "Image",
+      objective: "Produce visual assets required by the mission.",
+      requiredRole: "image_creator",
+      responsibilities: ["Create visual direction", "Prepare image production plan"],
+      firstTaskGoal: "Define first image production plan",
+    });
+  }
+
+  return {
+    id: createId("plan"),
+    missionId: mission.id,
+    status: "confirmed",
+    createdAt: new Date(),
+    confirmedAt: new Date(),
+    revision: 1,
+    goal: mission.goal,
+    successMetrics: mission.successMetrics,
+    phases: [{
+      name: "Launch",
+      objective: "Start execution from a local activation plan.",
+      deliverables: ["First executable task"],
+      successCriteria: mission.successMetrics,
+    }],
+    workstreams,
+    reportingLines: workstreams.map((workstream) => ({
+      fromRole: workstream.requiredRole,
+      toRole: "owner",
+      cadence: "as needed",
+      purpose: "Report execution progress and blockers.",
+    })),
+    scheduleRhythms: [{
+      name: "Manual progress review",
+      cadence: "manual",
+      ownerRole: "owner",
+      purpose: "Review progress when execution results arrive.",
+    }],
+    risks: ["Local activation plan was generated without LLM HR recruitment."],
+    checkpoints: ["First task ready for execution"],
+  };
 }

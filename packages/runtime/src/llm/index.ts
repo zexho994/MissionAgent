@@ -10,3 +10,7 @@ export {
   type LlmProvider,
   type CompleteFn,
 } from "./llm-factory.js";
+export {
+  createPiAgentLlmService,
+  type CreatePiAgentLlmServiceOptions,
+} from "./pi-agent-llm-service.js";

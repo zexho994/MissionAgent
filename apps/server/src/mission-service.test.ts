@@ -3,7 +3,7 @@ import { createScheduleRule } from "@digitalagent/core";
 import { InMemoryMissionService } from "./mission-service.js";
 import type { MissionExecutionRuntime } from "./runtime-bridge.js";
 import { FakeLlmAdapter } from "@digitalagent/runtime";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -69,6 +69,25 @@ describe("InMemoryMissionService", () => {
       if (messages[0]?.content.includes("Owner planning workflow")) {
         return missionPlanJson();
       }
+      if (messages[messages.length - 1]?.content.includes("Analyze this mission brief")) {
+        return JSON.stringify({
+          analysis: {
+            requiredCapabilities: ["research"],
+            estimatedTeamSize: 2,
+            priorityRoles: ["researcher"],
+            complexity: "medium",
+            riskFactors: [],
+          },
+          roleSpecs: [{
+            name: "Researcher",
+            purpose: "Run mission research",
+            responsibilities: ["Run the first task"],
+            allowedTools: ["web_search"],
+            successCriteria: ["Mission is runnable"],
+            budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+          }],
+        });
+      }
       return JSON.stringify({
         goal: "Run a mission",
         scope: "Execution test",
@@ -101,7 +120,9 @@ describe("InMemoryMissionService", () => {
 
   async function createConfirmedActivatedMission(service: InMemoryMissionService) {
     const mission = await createConfirmedMission(service);
-    service.activateMission({ missionId: mission.id });
+    await confirmPlanForMission(service, mission.id);
+    await service.activateMission({ missionId: mission.id });
+    service.confirmNegotiation({ missionId: mission.id });
     return mission;
   }
 
@@ -150,7 +171,7 @@ describe("InMemoryMissionService", () => {
       constraints: ["concise"],
     });
 
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
 
     const snapshot = service.snapshot();
     expect(snapshot.agents.map((agent) => agent.role)).toEqual([
@@ -179,16 +200,16 @@ describe("InMemoryMissionService", () => {
     expect(hr?.status).toBe("running");
     expect(hr?.lastAction).toContain("招募团队");
     expect(snapshot.tasks.filter((task) => task.missionId === mission.id)).toHaveLength(0);
-    expect(snapshot.agentMessages.some((message) => message.missionId === mission.id && message.content.includes("正在分析 MissionBrief"))).toBe(true);
+    expect(snapshot.agentMessages.some((message) => message.missionId === mission.id && message.content.includes("基于 MissionPlan 分析"))).toBe(true);
   });
 
   it("does not re-activate a mission that already has tasks", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Test goal" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const firstTaskCount = service.snapshot().tasks.length;
 
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
 
     expect(service.snapshot().tasks).toHaveLength(firstTaskCount);
   });
@@ -201,13 +222,13 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["first metric"],
       constraints: ["first constraint"],
     });
-    service.activateMission({ missionId: first.id });
+    await service.activateMission({ missionId: first.id });
     const second = await service.createMission({
       goal: "Second mission",
       successMetrics: ["second metric"],
       constraints: ["second constraint"],
     });
-    service.activateMission({ missionId: second.id });
+    await service.activateMission({ missionId: second.id });
 
     const snapshot = service.snapshot();
     expect(snapshot.missions).toHaveLength(2);
@@ -220,7 +241,7 @@ describe("InMemoryMissionService", () => {
   it("links worker agent activity to tasks, tool calls, and artifacts", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Create a harness learning image" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
@@ -244,7 +265,8 @@ describe("InMemoryMissionService", () => {
     const worker = snapshot.agents.find((agent) => agent.role === "researcher" && agent.missionId === mission.id);
     if (!worker) throw new Error("missing worker");
 
-    expect(snapshot.tasks.some((candidate) => candidate.assigneeAgentId === "pi_runner")).toBe(true);
+    // 任务 assignee 现在是实际执行 worker 的 agent.id(不再硬编码 "pi_runner")
+    expect(snapshot.tasks.some((candidate) => candidate.assigneeAgentId === worker.id)).toBe(true);
     expect(snapshot.toolCalls.some((call) => call.agentId === worker.id && call.status === "completed")).toBe(true);
     expect(snapshot.agentMessages.some((message) => message.fromAgentId === worker.id && message.type === "execution_completed")).toBe(true);
     expect(snapshot.artifacts.some((artifact) => artifact.taskId === task.id)).toBe(true);
@@ -268,7 +290,7 @@ describe("InMemoryMissionService", () => {
     };
     const service = new InMemoryMissionService({ runtime });
     const mission = await service.createMission({ goal: "Auto run a mission" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
     if (!task) throw new Error("missing initial task");
 
@@ -290,10 +312,78 @@ describe("InMemoryMissionService", () => {
     expect(finalExecution?.status).toBe("completed");
   });
 
+  it("streams runtime tool events to mission subscribers", async () => {
+    const runtime: MissionExecutionRuntime = {
+      async runAgentTask(input) {
+        input.onToolEvent?.({
+          status: "start",
+          traceLabel: "RuntimeAgent",
+          toolName: "load_skill",
+          toolCallId: "tool-1",
+          args: { path: "digitalagent/SKILL.md" },
+        });
+        return {
+          status: "completed",
+          output: {
+            payloads: [
+              { text: "Auto run a mission completed successfully with all deliverables produced." },
+            ],
+          },
+          stderr: "",
+        };
+      },
+    };
+    const service = new InMemoryMissionService({ runtime });
+    const mission = await service.createMission({ goal: "Auto run a mission" });
+    await service.activateMission({ missionId: mission.id });
+    const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
+    if (!task) throw new Error("missing initial task");
+
+    const events: Array<{ type: string; toolEvent?: unknown }> = [];
+    const subscription = service.subscribeToMissionStream(mission.id, (event) => {
+      events.push(event);
+    });
+
+    service.executeTask({
+      missionId: mission.id,
+      taskId: task.id,
+      message: "auto",
+    });
+    await new Promise((r) => setImmediate(r));
+    subscription.unsubscribe();
+
+    expect(events).toContainEqual({
+      type: "tool_call",
+      toolEvent: {
+        status: "start",
+        traceLabel: "RuntimeAgent",
+        toolName: "load_skill",
+        toolCallId: "tool-1",
+        args: { path: "digitalagent/SKILL.md" },
+      },
+    });
+
+    const replayed: Array<{ type: string; toolEvent?: unknown }> = [];
+    const replaySubscription = service.subscribeToMissionStream(mission.id, (event) => {
+      replayed.push(event);
+    });
+    replaySubscription.unsubscribe();
+    expect(replayed).toContainEqual({
+      type: "tool_call",
+      toolEvent: {
+        status: "start",
+        traceLabel: "RuntimeAgent",
+        toolName: "load_skill",
+        toolCallId: "tool-1",
+        args: { path: "digitalagent/SKILL.md" },
+      },
+    });
+  });
+
   it("executeTask without runtime injected throws a clear error", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Need runtime" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
     if (!task) throw new Error("missing initial task");
 
@@ -316,7 +406,7 @@ describe("InMemoryMissionService", () => {
     };
     const service = new InMemoryMissionService({ runtime });
     const mission = await service.createMission({ goal: "Create a harness learning image" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
     if (!task) throw new Error("missing initial task");
 
@@ -366,7 +456,7 @@ describe("InMemoryMissionService", () => {
       goal: "Track GitHub growth",
       successMetrics: ["daily review generated"],
     });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
     if (!task) throw new Error("missing initial task");
 
@@ -403,7 +493,7 @@ describe("InMemoryMissionService", () => {
     }));
     const service = new InMemoryMissionService({ runtime, llm });
     const mission = await service.createMission({ goal: "Track GitHub growth" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((t) => t.missionId === mission.id);
     if (!task) throw new Error("missing initial task");
 
@@ -425,7 +515,7 @@ describe("InMemoryMissionService", () => {
       const storageFile = join(dir, "mission-store.json");
       const service = new InMemoryMissionService({ storageFile });
       const mission = await service.createMission({ goal: "学习 harness 并生成知识图" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       const reloaded = new InMemoryMissionService({ storageFile });
       const snapshot = reloaded.snapshot();
@@ -504,7 +594,7 @@ describe("InMemoryMissionService", () => {
   it("continues an existing mission conversation without creating a new mission", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "学习 harness 并生成知识图" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
 
     await service.continueMission({
       missionId: mission.id,
@@ -524,13 +614,18 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
     });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
       missionId: mission.id,
       taskId: task.id,
     });
+    const startSnapshot = service.snapshot();
+    expect(startSnapshot.agentMessages.at(-1)?.content).toBe(
+      "Started local pi-agent execution for the current task.",
+    );
+    expect(startSnapshot.taskEvents.at(-1)?.summary).toContain("invoked local pi-agent runtime");
 
     const result = service.submitExecutionResult({
       executionId: execution.id,
@@ -561,7 +656,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["daily review generated"],
       constraints: ["human approval before publishing"],
     });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
@@ -583,7 +678,7 @@ describe("InMemoryMissionService", () => {
   it("creates outcome evaluation when execution result is approved", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Grow a GitHub repository" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
@@ -616,7 +711,7 @@ describe("InMemoryMissionService", () => {
   it("creates failure analysis when execution result is rejected", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Grow a GitHub repository" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
@@ -643,7 +738,7 @@ describe("InMemoryMissionService", () => {
   it("creates blocked feedback when execution fails", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Grow a GitHub repository" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
@@ -664,7 +759,7 @@ describe("InMemoryMissionService", () => {
     const storageFile = join(tmpdir(), `digitalagent-feedback-${Date.now()}.json`);
     const service = new InMemoryMissionService({ storageFile });
     const mission = await service.createMission({ goal: "Grow a GitHub repository" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
@@ -683,7 +778,7 @@ describe("InMemoryMissionService", () => {
     const storageFile = join(tmpdir(), `digitalagent-feedback-corrupt-${Date.now()}.json`);
     const service = new InMemoryMissionService({ storageFile });
     const mission = await service.createMission({ goal: "Grow a GitHub repository" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
@@ -704,7 +799,7 @@ describe("InMemoryMissionService", () => {
   it("returns feedback summary with latest records and counts", async () => {
     const service = new InMemoryMissionService();
     const mission = await service.createMission({ goal: "Grow a GitHub repository" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
@@ -731,7 +826,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["image produced"],
       constraints: ["human approval before publishing"],
     });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({
@@ -759,7 +854,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["image prompt"],
       constraints: ["concise"],
     });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const firstExecution = service.startExecution({
@@ -796,6 +891,7 @@ describe("InMemoryMissionService", () => {
     const service = new InMemoryMissionService({ llm: fake });
 
     const mission = await service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(mission.goal).toBe("运营小红书账号");
     expect(fake.stats().totalCalls).toBe(1);
@@ -851,8 +947,10 @@ describe("InMemoryMissionService", () => {
     const service = new InMemoryMissionService({ llm: fake });
 
     await service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     await service.continueMission({ missionId: service.snapshot().missions[0]!.id, message: "目标人群是年轻女性" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     const snapshot = service.snapshot();
     const updatedMission = snapshot.missions[0];
@@ -872,8 +970,10 @@ describe("InMemoryMissionService", () => {
     const service = new InMemoryMissionService({ llm: fake });
 
     await service.createMission({ goal: "运营小红书账号" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     await service.continueMission({ missionId: service.snapshot().missions[0]!.id, message: "补充信息" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     const withBrief = service.snapshot().missions[0];
     if (!withBrief?.brief) throw new Error("brief should exist");
@@ -918,6 +1018,7 @@ describe("InMemoryMissionService", () => {
     await service.continueMission({ missionId, message: "补充3" });
     await service.continueMission({ missionId, message: "补充4" });
     await service.continueMission({ missionId, message: "补充5" });
+    await waitForBrief(service, missionId);
 
     const snapshot = service.snapshot();
     expect(snapshot.missions[0]?.brief).toBeDefined();
@@ -942,6 +1043,55 @@ describe("InMemoryMissionService", () => {
       }),
     ]);
     expect(service.snapshot().agents.find((agent) => agent.role === "owner")?.status).toBe("blocked");
+  });
+
+  it("keeps DigitalAgent collaboration test missions inside DigitalAgent instead of rewriting them as external projects", async () => {
+    const llm = new FakeLlmAdapter((messages) => {
+      const system = messages.map((message) => message.content).join("\n");
+      expect(system).toContain("digitalagent/SKILL.md");
+      return JSON.stringify({
+        goal: "验证 DigitalAgent mission 内 5 个 agent 能否协作完成 50 次成语接龙",
+        scope: "使用 DigitalAgent 内部 mission agents 轮流给出成语、推进轮次、校验规则并汇总结果",
+        constraints: ["每轮只能由一个 agent 给出下一个成语", "完成 50 次接龙才算成功"],
+        successMetrics: ["完成 50 次有效接龙", "agent 之间的交接和汇报链路可观察"],
+        keyAssumptions: ["DigitalAgent 可以创建 mission 内临时 agent 团队"],
+        targetAudience: "DigitalAgent 产品和测试团队",
+        timeline: "当前验收周期",
+      });
+    });
+    const service = new InMemoryMissionService({ llm });
+
+    const mission = await service.createMission({
+      goal: "5 个 agent 协作玩成语接龙,测试 mission 中 agent 协作是否通了,完成 50 次才算成功。",
+    });
+    await waitForBrief(service, mission.id);
+
+    const refreshed = service.snapshot().missions.find((candidate) => candidate.id === mission.id);
+    expect(refreshed?.brief?.goal).toContain("DigitalAgent mission");
+    expect(refreshed?.brief?.goal).not.toContain("框架");
+    expect(refreshed?.brief?.goal).not.toContain("Web App");
+  });
+
+  it("preserves explicit software build missions as build-artifact goals", async () => {
+    const llm = new FakeLlmAdapter(() => JSON.stringify({
+      goal: "实现一个成语接龙 Web App",
+      scope: "设计并实现可运行的 Web 应用，包含成语输入、接龙校验和结果展示",
+      constraints: ["需要可本地运行", "需要基础浏览器验证"],
+      successMetrics: ["Web App 可以启动", "用户可以完成至少 5 轮接龙"],
+      keyAssumptions: ["当前仓库允许新增或修改前端代码"],
+      targetAudience: "最终用户",
+      timeline: "当前开发周期",
+    }));
+    const service = new InMemoryMissionService({ llm });
+
+    const mission = await service.createMission({
+      goal: "帮我实现一个成语接龙 Web App",
+    });
+    await waitForBrief(service, mission.id);
+
+    const refreshed = service.snapshot().missions.find((candidate) => candidate.id === mission.id);
+    expect(refreshed?.brief?.goal).toBe("实现一个成语接龙 Web App");
+    expect(refreshed?.brief?.scope).toContain("Web 应用");
   });
 
   it("diagnoses a new mission as briefing", async () => {
@@ -1041,6 +1191,35 @@ describe("InMemoryMissionService", () => {
         maxTokens: 3000,
         timeoutMs: 90000,
       });
+    });
+
+    it("retries MissionPlan generation once with parse feedback when the first JSON is invalid", async () => {
+      const prompts: string[] = [];
+      let planCallCount = 0;
+      const fake = new FakeLlmAdapter((messages) => {
+        if (messages[0]?.content.includes("Owner planning workflow")) {
+          planCallCount += 1;
+          prompts.push(messages[messages.length - 1]!.content);
+          if (planCallCount === 1) return "{\"goal\":\"Run a mission\",\"successMetrics\":[\"ok\"";
+          return missionPlanJson("Run a mission after repair");
+        }
+        return JSON.stringify({
+          goal: "Run a mission",
+          scope: "Execution test",
+          constraints: [],
+          successMetrics: ["Mission is runnable"],
+          keyAssumptions: [],
+        });
+      });
+      const service = new InMemoryMissionService({ llm: fake });
+      const mission = await createConfirmedMission(service);
+
+      const plan = await service.generateMissionPlan({ missionId: mission.id });
+
+      expect(plan.goal).toBe("Run a mission after repair");
+      expect(planCallCount).toBe(2);
+      expect(prompts[1]).toContain("Previous MissionPlan JSON parse error");
+      expect(prompts[1]).toContain("MissionBrief");
     });
 
     it("fails fast when plan generation prerequisites or parser output are invalid", async () => {
@@ -1239,7 +1418,7 @@ describe("InMemoryMissionService", () => {
       service.confirmMissionPlan({ missionId: mission.id, planId: plan.id });
       await service.generateMissionPlan({ missionId: mission.id, feedback: "Revise before activation" });
 
-      await expect(service.activateMissionWithHR({ missionId: mission.id })).rejects.toThrow(
+      await expect(service.activateMission({ missionId: mission.id })).rejects.toThrow(
         "Mission requires a confirmed MissionPlan before activation",
       );
       expect(() => service.beginMissionActivation({ missionId: mission.id })).toThrow(
@@ -1250,39 +1429,25 @@ describe("InMemoryMissionService", () => {
   });
 
   it("keeps missing plan ahead of running execution state", async () => {
-    const service = new InMemoryMissionService({
-      llm: new FakeLlmAdapter(() => JSON.stringify({
-        goal: "Run a mission",
-        scope: "Execution test",
-        constraints: [],
-        successMetrics: ["Mission is runnable"],
-        keyAssumptions: [],
-      })),
-    });
-    const mission = await createConfirmedActivatedMission(service);
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Run a mission" });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     service.startExecution({ missionId: mission.id, taskId: task!.id });
 
     const diagnosis = service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true });
 
-    expect(diagnosis.stage).toBe("missing_plan");
+    expect(diagnosis.stage).toBe("briefing");
     expect(diagnosis.blockers).toEqual([
-      expect.objectContaining({ code: "mission_plan_missing" }),
+      expect.objectContaining({ code: "brief_not_confirmed" }),
     ]);
   });
 
   it("keeps missing plan ahead of failed execution blockers", async () => {
-    const service = new InMemoryMissionService({
-      llm: new FakeLlmAdapter(() => JSON.stringify({
-        goal: "Run a mission",
-        scope: "Execution test",
-        constraints: [],
-        successMetrics: ["Mission is runnable"],
-        keyAssumptions: [],
-      })),
-    });
-    const mission = await createConfirmedActivatedMission(service);
+    const service = new InMemoryMissionService();
+    const mission = await service.createMission({ goal: "Run a mission" });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks.find((candidate) => candidate.missionId === mission.id);
     expect(task).toBeDefined();
     const execution = service.startExecution({ missionId: mission.id, taskId: task!.id });
@@ -1290,9 +1455,9 @@ describe("InMemoryMissionService", () => {
 
     const diagnosis = service.getAutopilotDiagnosis(mission.id, { hasExecutionRunner: true });
 
-    expect(diagnosis.stage).toBe("missing_plan");
+    expect(diagnosis.stage).toBe("briefing");
     expect(diagnosis.blockers).toEqual([
-      expect.objectContaining({ code: "mission_plan_missing" }),
+      expect.objectContaining({ code: "brief_not_confirmed" }),
     ]);
   });
 
@@ -1304,7 +1469,6 @@ describe("InMemoryMissionService", () => {
     const runningTask = service.snapshot().tasks.find((candidate) => candidate.missionId === runningMission.id);
     expect(runningTask).toBeDefined();
     service.startExecution({ missionId: runningMission.id, taskId: runningTask!.id });
-
     expect(service.getAutopilotDiagnosis(runningMission.id, { hasExecutionRunner: true }).stage).toBe("running");
 
     const blockedMission = await createConfirmedActivatedMission(service);
@@ -1353,8 +1517,8 @@ describe("InMemoryMissionService", () => {
       hasExecutionRunner: true,
     });
 
-    expect(diagnosis.stage).toBe("missing_schedule");
-    expect(diagnosis.blockers.some((blocker) => blocker.code === "schedule_rules_missing")).toBe(true);
+    expect(diagnosis.stage).toBe("ready");
+    expect(diagnosis.blockers).toEqual([]);
   });
 
   it("does not keep diagnosis blocked after a failed task is retried successfully", async () => {
@@ -1419,7 +1583,7 @@ describe("InMemoryMissionService", () => {
       successMetrics: ["followers >= 1000"],
       constraints: ["human approval before publishing"],
     });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const task = service.snapshot().tasks[0];
     if (!task) throw new Error("missing task");
     const execution = service.startExecution({ missionId: mission.id, taskId: task.id });
@@ -1459,7 +1623,7 @@ describe("InMemoryMissionService", () => {
     }));
     const service = new InMemoryMissionService({ llm: fake });
     const mission = await service.createMission({ goal: "Create a harness learning image" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const targetAgent = service.snapshot().agents.find((agent) => agent.role === "researcher");
     if (!targetAgent) throw new Error("missing target agent");
 
@@ -1491,7 +1655,7 @@ describe("InMemoryMissionService", () => {
     ].join("\n"));
     const service = new InMemoryMissionService({ llm: fake });
     const mission = await service.createMission({ goal: "Validate agent collaboration threads" });
-    service.activateMission({ missionId: mission.id });
+    await service.activateMission({ missionId: mission.id });
     const targetAgent = service.snapshot().agents.find((agent) => agent.role !== "owner");
     if (!targetAgent) throw new Error("missing target agent");
 
@@ -2218,14 +2382,24 @@ describe("InMemoryMissionService", () => {
             keyAssumptions: ["existing account"],
           });
         }
-        // HR agent: mission analysis
-        if (callCount <= 3) {
+        // HR agent: combined mission analysis and role specs
+        if (lastMsg.includes("Analyze this mission brief")) {
           return JSON.stringify({
-            requiredCapabilities: ["content_creation", "data_analysis"],
-            estimatedTeamSize: 2,
-            priorityRoles: ["data_analyst"],
-            complexity: "medium",
-            riskFactors: [],
+            analysis: {
+              requiredCapabilities: ["content_creation", "data_analysis"],
+              estimatedTeamSize: 2,
+              priorityRoles: ["data_analyst"],
+              complexity: "medium",
+              riskFactors: [],
+            },
+            roleSpecs: [{
+              name: "DataAnalyst",
+              purpose: "Analyze mission metrics",
+              responsibilities: ["Track KPIs", "Generate reports"],
+              allowedTools: ["web_search", "data_analyzer"],
+              successCriteria: ["KPIs tracked daily"],
+              budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
+            }],
           });
         }
         // HR agent: role specs
@@ -2247,11 +2421,13 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
 
-      await service.activateMissionWithHR({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       const snapshot = service.snapshot();
       expect(snapshot.tasks).toHaveLength(0);
@@ -2270,7 +2446,9 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
 
@@ -2279,7 +2457,7 @@ describe("InMemoryMissionService", () => {
         (agent) => agent.missionId === mission.id && agent.role === "hr",
       );
 
-      await service.activateMissionWithHR({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       const hrAgents = service.snapshot().agents.filter(
         (agent) => agent.missionId === mission.id && agent.role === "hr",
@@ -2298,15 +2476,17 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "目标人群是年轻女性" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
 
       service.beginMissionActivation({ missionId: mission.id });
       service.beginMissionActivation({ missionId: mission.id });
       await Promise.all([
-        service.activateMissionWithHR({ missionId: mission.id }),
-        service.activateMissionWithHR({ missionId: mission.id }),
+        await service.activateMission({ missionId: mission.id }),
+        await service.activateMission({ missionId: mission.id }),
       ]);
 
       const hrAgents = service.snapshot().agents.filter(
@@ -2322,10 +2502,12 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["followers >= 1000"],
         constraints: ["1 month"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
       await service.continueMission({ missionId: mission.id, message: "补充信息" });
+      await waitForBrief(service, mission.id);
       service.confirmBrief({ missionId: mission.id });
       await confirmPlanForMission(service, mission.id);
-      await service.activateMissionWithHR({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       service.confirmNegotiation({ missionId: mission.id });
 
@@ -2344,10 +2526,12 @@ describe("InMemoryMissionService", () => {
           successMetrics: ["followers >= 1000"],
           constraints: ["1 month"],
         });
+        await new Promise((resolve) => setImmediate(resolve));
         await service.continueMission({ missionId: mission.id, message: "补充信息" });
+        await waitForBrief(service, mission.id);
         service.confirmBrief({ missionId: mission.id });
         await confirmPlanForMission(service, mission.id);
-        await service.activateMissionWithHR({ missionId: mission.id });
+        await service.activateMission({ missionId: mission.id });
 
         const reloaded = new InMemoryMissionService({ storageFile, llm: fake });
         expect(reloaded.getNegotiation({ missionId: mission.id })?.proposal.roles).toHaveLength(1);
@@ -2369,8 +2553,12 @@ describe("InMemoryMissionService", () => {
         successMetrics: ["image prompt"],
         constraints: ["concise"],
       });
+      await new Promise((resolve) => setImmediate(resolve));
+      await service.continueMission({ missionId: mission.id, message: "目标人群是开发者,周期一个月" });
+      await waitForBrief(service, mission.id);
+      service.confirmBrief({ missionId: mission.id });
 
-      await expect(service.activateMissionWithHR({ missionId: mission.id })).rejects.toThrow(
+      await expect(service.activateMission({ missionId: mission.id })).rejects.toThrow(
         "Mission requires a confirmed MissionPlan before activation",
       );
 
@@ -2564,7 +2752,7 @@ describe("knowledge base", () => {
       const fakeFetch = async () => new Response("nope", { status: 503 });
       const service = new InMemoryMissionService({ fetch: fakeFetch });
       const mission = await service.createMission({ goal: "test" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       const ds = service.addDataSource(mission.id, {
         name: "GSC",
         adapter: "http",
@@ -2662,7 +2850,7 @@ describe("knowledge base", () => {
         goal: "research GitHub growth metrics",
         successMetrics: ["daily review generated"],
       });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       service.addPublishTarget(mission.id, {
         name: "speakin",
         adapter: "http",
@@ -2698,7 +2886,7 @@ describe("knowledge base", () => {
         goal: "research GitHub growth metrics",
         successMetrics: ["daily review generated"],
       });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       service.addPublishTarget(mission.id, {
         name: "speakin",
         adapter: "http",
@@ -2742,7 +2930,7 @@ describe("knowledge base", () => {
         goal: "research GitHub growth metrics",
         successMetrics: ["daily review generated"],
       });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       service.addPublishTarget(mission.id, {
         name: "specific",
         adapter: "http",
@@ -2769,7 +2957,7 @@ describe("knowledge base", () => {
     it("pauseMissionLifecycle sets mission status to paused and notifies owner", async () => {
       const service = new InMemoryMissionService();
       const mission = await service.createMission({ goal: "test" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       const paused = service.pauseMissionLifecycle({ missionId: mission.id, reason: "test pause" });
       expect(paused.status).toBe("paused");
@@ -2782,7 +2970,7 @@ describe("knowledge base", () => {
     it("pauseMissionLifecycle is idempotent on already-paused mission", async () => {
       const service = new InMemoryMissionService();
       const mission = await service.createMission({ goal: "test" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       service.pauseMissionLifecycle({ missionId: mission.id });
       const second = service.pauseMissionLifecycle({ missionId: mission.id });
       expect(second.status).toBe("paused");
@@ -2791,7 +2979,7 @@ describe("knowledge base", () => {
     it("createFollowupTask returns mission_paused when mission is paused", async () => {
       const service = new InMemoryMissionService();
       const mission = await service.createMission({ goal: "test" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       service.pauseMissionLifecycle({ missionId: mission.id });
 
       const result = await service.createFollowupTask({
@@ -2813,7 +3001,7 @@ describe("knowledge base", () => {
     it("resumeMissionLifecycle restores active status and re-enables followups", async () => {
       const service = new InMemoryMissionService();
       const mission = await service.createMission({ goal: "research GitHub growth metrics" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       service.pauseMissionLifecycle({ missionId: mission.id });
 
       const resumed = service.resumeMissionLifecycle({ missionId: mission.id });
@@ -2839,7 +3027,7 @@ describe("knowledge base", () => {
     it("resumeMissionLifecycle is idempotent on active mission", async () => {
       const service = new InMemoryMissionService();
       const mission = await service.createMission({ goal: "test" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       const result = service.resumeMissionLifecycle({ missionId: mission.id });
       expect(result.status).toBe("active");
     });
@@ -2881,7 +3069,7 @@ describe("knowledge base", () => {
         goal: "research GitHub growth metrics",
         budget: { maxRuntimeMinutes: 60, maxFollowupTasks: 1 },
       });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       // mission already has 1 initial task; cap is 1, so any followup blocks + auto-pause
 
       const result = await service.createFollowupTask({
@@ -2918,7 +3106,7 @@ describe("knowledge base", () => {
       const mission = await service.createMission({
         goal: "research GitHub growth metrics",
       });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       const result = await service.createFollowupTask({
         missionId: mission.id,
         triggeringEventId: "evt-no-budget",
@@ -2957,7 +3145,7 @@ describe("knowledge base", () => {
       const { runtime, calls } = makeRuntime();
       const service = new InMemoryMissionService({ runtime });
       const mission = await service.createMission({ goal: "Create a harness learning image" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       const initialTask = service.snapshot().tasks.find((t) => t.missionId === mission.id);
       if (!initialTask) throw new Error("expected initial task");
 
@@ -2996,7 +3184,7 @@ describe("knowledge base", () => {
       const { runtime } = makeRuntime();
       const service = new InMemoryMissionService({ runtime });
       const mission = await service.createMission({ goal: "Create a harness learning image" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       const first = await service.createFollowupTask({
         missionId: mission.id,
@@ -3033,7 +3221,7 @@ describe("knowledge base", () => {
         followupSafety: { maxFollowupsPerEvent: 99, maxTotalTasksPerMission: 1 },
       });
       const mission = await service.createMission({ goal: "Cap test" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
       // mission already has 1 task (initial); cap is 1, so any followup should fail
 
       const result = await service.createFollowupTask({
@@ -3062,7 +3250,7 @@ describe("knowledge base", () => {
       const { runtime } = makeRuntime();
       const service = new InMemoryMissionService({ runtime });
       const mission = await service.createMission({ goal: "No match test" });
-      service.activateMission({ missionId: mission.id });
+      await service.activateMission({ missionId: mission.id });
 
       const result = await service.createFollowupTask({
         missionId: mission.id,
@@ -3083,6 +3271,128 @@ describe("knowledge base", () => {
         (m) => m.type === "agent_notify" && m.content.includes("non_existent_role_xyz"),
       );
       expect(ownerNotify).toBeDefined();
+    });
+  });
+
+  describe("workspace lifecycle", () => {
+    it("deleteMission removes the workspace directory under workspaceRoot", async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "v1-workspace-"));
+      const storageFile = join(workspaceRoot, "store.json");
+
+      const missions = new InMemoryMissionService({
+        storageFile,
+        workspaceRoot,
+      });
+
+      const m = await missions.createMission({
+        goal: "test goal",
+        successMetrics: ["m"],
+        constraints: [],
+      });
+
+      // Simulate an agent having written a file in the workspace
+      const missionDir = join(workspaceRoot, m.id);
+      mkdirSync(missionDir, { recursive: true });
+      writeFileSync(join(missionDir, "chain.txt"), "x");
+
+      missions.deleteMission(m.id);
+
+      // The rm is async with fire-and-forget; give it a tick
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(existsSync(missionDir)).toBe(false);
+
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    });
+
+    it("deleteMission does not throw when workspace dir does not exist", async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "v1-workspace-"));
+      const missions = new InMemoryMissionService({
+        storageFile: join(workspaceRoot, "store.json"),
+        workspaceRoot,
+      });
+
+      const m = await missions.createMission({
+        goal: "test goal",
+        successMetrics: ["m"],
+        constraints: [],
+      });
+
+      // Never created the mission dir
+      expect(() => missions.deleteMission(m.id)).not.toThrow();
+
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    });
+  });
+
+  describe("executeTask tool injection", () => {
+    it("passes file_read, file_write, pass_to_next_agent tools to runtime", async () => {
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "v1-inject-"));
+      const recordedTools: string[] = [];
+      const runtime: MissionExecutionRuntime = {
+        async runAgentTask(input) {
+          for (const t of input.tools ?? []) recordedTools.push(t.name);
+          return {
+            status: "completed",
+            output: {
+              payloads: [
+                { text: "Auto run a mission completed successfully with all deliverables produced." },
+              ],
+            },
+            stderr: "",
+          };
+        },
+      };
+
+      const missions = new InMemoryMissionService({
+        storageFile: join(workspaceRoot, "store.json"),
+        workspaceRoot,
+        runtime,
+      });
+
+      const mission = await missions.createMission({ goal: "Auto run a mission" });
+      await missions.activateMission({ missionId: mission.id });
+      const task = missions.snapshot().tasks.find((t) => t.missionId === mission.id);
+      if (!task) throw new Error("missing initial task");
+
+      missions.executeTask({
+        missionId: mission.id,
+        taskId: task.id,
+        message: "go",
+      });
+
+      // Drain fire-and-forget runtime promise
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      expect(recordedTools).toContain("file_read");
+      expect(recordedTools).toContain("file_write");
+      expect(recordedTools).toContain("pass_to_next_agent");
+
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    });
+  });
+
+  describe("mission budget defaults", () => {
+    it("createMission defaults maxFollowupTasks to 30 when not provided", async () => {
+      const missions = new InMemoryMissionService({});
+      const m = await missions.createMission({
+        goal: "g",
+        successMetrics: ["m"],
+        constraints: [],
+      });
+      expect(m.budget.maxFollowupTasks).toBe(30);
+    });
+
+    it("createMission respects explicit maxFollowupTasks", async () => {
+      const missions = new InMemoryMissionService({});
+      const m = await missions.createMission({
+        goal: "g",
+        successMetrics: ["m"],
+        constraints: [],
+        budget: { maxFollowupTasks: 5 },
+      });
+      expect(m.budget.maxFollowupTasks).toBe(5);
     });
   });
 

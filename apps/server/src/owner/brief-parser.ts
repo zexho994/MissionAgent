@@ -3,6 +3,7 @@ import type { MissionBrief } from "@digitalagent/core";
 export type OwnerDecision =
   | { status: "ready"; brief: MissionBrief }
   | { status: "needs_info"; question: string }
+  | { status: "invalid_json"; content: string; error: string }
   | { status: "followup"; content: string };
 
 export function detectBriefInResponse(text: string): boolean {
@@ -16,8 +17,12 @@ export function parseOwnerDecision(text: string): OwnerDecision {
   let parsed: Record<string, unknown>;
   try {
     parsed = JSON.parse(jsonCandidate) as Record<string, unknown>;
-  } catch {
-    return { status: "followup", content: text };
+  } catch (error) {
+    return {
+      status: "invalid_json",
+      content: text,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 
   if (parsed.status === "needs_info" && typeof parsed.question === "string" && parsed.question.trim()) {

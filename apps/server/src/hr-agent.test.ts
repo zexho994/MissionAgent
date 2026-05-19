@@ -1,11 +1,37 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   type MissionBrief,
+  type MissionPlan,
   type RoleSpec,
-  SchedulePlanGenerationError,
 } from "@digitalagent/core";
 import { createHRAgent, type MissionAnalysis } from "./hr-agent.js";
 import type { LlmService } from "@digitalagent/runtime";
+
+function makeChainGamePlan(missionGoal: string): MissionPlan {
+  return {
+    id: "plan_test",
+    missionId: "mission_test",
+    status: "confirmed",
+    createdAt: new Date(),
+    confirmedAt: new Date(),
+    revision: 1,
+    goal: missionGoal,
+    successMetrics: ["完成50次接龙"],
+    phases: [
+      { name: "初始化阶段", objective: "搭建接龙框架", deliverables: ["起始成语已确定"], successCriteria: ["全部 agent 就位"] },
+    ],
+    workstreams: [
+      { name: "状态管理流", objective: "维护接龙状态", requiredRole: "状态管理员", responsibilities: ["记录尾字", "推进回合"], firstTaskGoal: "初始化状态" },
+      { name: "执行流", objective: "轮流接龙", requiredRole: "Agent1-5", responsibilities: ["按顺序产出下一个成语"], firstTaskGoal: "Agent1 产出起始成语" },
+    ],
+    reportingLines: [],
+    scheduleRhythms: [
+      { name: "回合同步", cadence: "每回合", ownerRole: "状态管理员", purpose: "推进下一回合" },
+    ],
+    risks: [],
+    checkpoints: ["第 10/20/30/40/50 回合"],
+  };
+}
 
 describe("HRAgent", () => {
   let mockLlm: LlmService;
@@ -258,8 +284,7 @@ describe("HRAgent", () => {
       expect(proposal.totalBudget).toBeDefined();
       expect(proposal.estimatedDuration).toBeDefined();
       expect(proposal.riskAssessment).toBeDefined();
-      expect(proposal.schedulePlan).toHaveLength(1);
-      expect(proposal.schedulePlan[0]?.assigneeRole).toBe("role-1");
+      expect(proposal.schedulePlan).toEqual([]);
     });
 
     it("should include collaboration suggestions in proposal", async () => {
@@ -295,234 +320,26 @@ describe("HRAgent", () => {
       expect(proposal.collaborationPlan).toBeDefined();
       expect(proposal.collaborationPlan.workflow).toBeDefined();
       expect(proposal.roles.length).toBeGreaterThanOrEqual(2);
-      expect(proposal.schedulePlan.length).toBeGreaterThanOrEqual(1);
+      expect(proposal.schedulePlan).toEqual([]);
     });
 
-    it("should use MissionBrief context to generate mission-specific schedule plan", async () => {
-      const calls: string[] = [];
-      mockLlm.call = async (messages, options) => {
-        calls.push(messages.map((message) => message.content).join("\n"));
-        const content = JSON.stringify([
-          {
-            name: "Daily Xiaohongshu data check",
-            cronExpression: "0 9 * * *",
-            assigneeRole: "data_analyst",
-            taskDescription: "Check yesterday's Xiaohongshu follower and engagement data",
-            justification: "Daily data checks catch performance changes quickly",
-          },
-          {
-            name: "Biweekly Xiaohongshu strategy review",
-            cronExpression: "0 10 */14 * *",
-            assigneeRole: "content_strategist",
-            taskDescription: "Review two weeks of Xiaohongshu results and adjust the content plan",
-            justification: "Biweekly strategy reviews align cadence with content performance signal",
-          },
-          {
-            name: "Engagement drop alert",
-            assigneeRole: "data_analyst",
-            taskDescription: "Investigate engagement drop and propose corrective actions",
-            justification: "Large engagement drops require immediate analysis",
-            conditionDescription: "Engagement rate drops more than 20%",
-            conditionSourceRole: "data_analyst",
-            conditionEvaluatePrompt: "Return true if engagement rate dropped more than 20%.",
-          },
-        ]);
-        if (options?.onStream) {
-          for (const char of content) {
-            options.onStream(char);
-          }
-        }
-        return {
-          content,
-          model: "test-model",
-          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-          finishReason: "stop",
-        };
-      };
+    it("returns empty schedulePlan (HR no longer auto-generates schedule)", async () => {
       const hrAgent = createHRAgent({ llm: mockLlm });
       const roleSpecs: RoleSpec[] = [
         {
-          id: "data_analyst",
-          name: "Data Analyst",
-          purpose: "Track Xiaohongshu metrics",
-          responsibilities: ["Analyze engagement", "Report follower growth"],
+          id: "role-1",
+          name: "小红书数据分析员",
+          purpose: "track metrics",
+          responsibilities: ["analyze"],
           allowedTools: ["analytics"],
           inputContract: {},
           outputContract: {},
-          successCriteria: ["Metrics reported"],
-          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        },
-        {
-          id: "content_strategist",
-          name: "Content Strategist",
-          purpose: "Plan Xiaohongshu content",
-          responsibilities: ["Plan posts", "Adjust strategy"],
-          allowedTools: ["editor"],
-          inputContract: {},
-          outputContract: {},
-          successCriteria: ["Plan updated"],
+          successCriteria: ["reported"],
           budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
         },
       ];
-
-      const proposal = await hrAgent.proposeTeam(
-        "mission-123",
-        roleSpecs,
-        {
-          ...missionBrief,
-          goal: "Grow Xiaohongshu account to 1000 followers",
-          scope: "Xiaohongshu content operations",
-          successMetrics: ["followers >= 1000", "engagement rate improves"],
-        },
-        { scheduleStrategy: "llm" },
-      );
-
-      expect(calls.at(-1)).toContain("Grow Xiaohongshu account");
-      expect(proposal.schedulePlan.map((item) => item.name)).toEqual([
-        "Daily Xiaohongshu data check",
-        "Biweekly Xiaohongshu strategy review",
-        "Engagement drop alert",
-      ]);
-      expect(proposal.schedulePlan[2]?.conditionEvaluatePrompt).toContain("20%");
-    });
-
-    it("AC1: scheduleStrategy llm with empty LLM response throws SchedulePlanGenerationError", async () => {
-      const mockLlmEmpty: LlmService = {
-        call: async (_messages, options) => {
-          const content = "[]";
-          if (options?.onStream) {
-            for (const char of content) options.onStream(char);
-          }
-          return {
-            content,
-            model: "test-model",
-            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-            finishReason: "stop",
-          };
-        },
-        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
-      };
-      const hrAgent = createHRAgent({ llm: mockLlmEmpty });
-      const roleSpecs: RoleSpec[] = [
-        {
-          id: "data_analyst",
-          name: "Data Analyst",
-          purpose: "Track metrics",
-          responsibilities: ["Analyze engagement"],
-          allowedTools: ["analytics"],
-          inputContract: {},
-          outputContract: {},
-          successCriteria: ["Metrics reported"],
-          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        },
-      ];
-
-      await expect(
-        hrAgent.proposeTeam("mission-id", roleSpecs, missionBrief, { scheduleStrategy: "llm" })
-      ).rejects.toThrow(SchedulePlanGenerationError);
-    });
-
-    it("AC2: scheduleStrategy auto with brief calls LLM exactly once", async () => {
-      let callCount = 0;
-      const mockLlmOnce: LlmService = {
-        call: async (_messages, options) => {
-          callCount++;
-          const content = JSON.stringify([
-            {
-              name: "daily",
-              cronExpression: "0 9 * * *",
-              assigneeRole: "analyst",
-              taskDescription: "check",
-              justification: "ok",
-            },
-          ]);
-          if (options?.onStream) {
-            for (const char of content) options.onStream(char);
-          }
-          return {
-            content,
-            model: "test-model",
-            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-            finishReason: "stop",
-          };
-        },
-        stats: () => ({ totalCalls: 0, totalPromptTokens: 0, totalCompletionTokens: 0 }),
-      };
-      const hrAgent = createHRAgent({ llm: mockLlmOnce });
-      const roleSpecs: RoleSpec[] = [
-        {
-          id: "analyst",
-          name: "Analyst",
-          purpose: "Analyze",
-          responsibilities: ["Analyze"],
-          allowedTools: ["analytics"],
-          inputContract: {},
-          outputContract: {},
-          successCriteria: ["Done"],
-          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        },
-      ];
-
-      await hrAgent.proposeTeam("mission-id", roleSpecs, missionBrief, { scheduleStrategy: "auto" });
-      expect(callCount).toBe(1);
-    });
-
-    it("uses rule-based schedule plan by default and skips the LLM call", async () => {
-      let callCount = 0;
-      mockLlm.call = async (_messages, options) => {
-        callCount += 1;
-        const content = "should-not-be-used";
-        if (options?.onStream) {
-          for (const char of content) options.onStream(char);
-        }
-        return {
-          content,
-          model: "test-model",
-          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
-          finishReason: "stop",
-        };
-      };
-
-      const hrAgent = createHRAgent({ llm: mockLlm });
-      const roleSpecs: RoleSpec[] = [
-        {
-          id: "data_analyst",
-          name: "Data Analyst",
-          purpose: "Track Xiaohongshu metrics",
-          responsibilities: ["Analyze engagement", "Report follower growth"],
-          allowedTools: ["analytics"],
-          inputContract: {},
-          outputContract: {},
-          successCriteria: ["Metrics reported"],
-          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        },
-        {
-          id: "content_strategist",
-          name: "Content Strategist",
-          purpose: "Plan Xiaohongshu content",
-          responsibilities: ["Plan posts", "Adjust strategy"],
-          allowedTools: ["editor"],
-          inputContract: {},
-          outputContract: {},
-          successCriteria: ["Plan updated"],
-          budget: { maxRuntimeMinutes: 60, maxTasks: 5 },
-        },
-      ];
-
-      const proposal = await hrAgent.proposeTeam(
-        "mission-123",
-        roleSpecs,
-        {
-          ...missionBrief,
-          goal: "Grow Xiaohongshu account to 1000 followers",
-          scope: "Xiaohongshu content operations",
-          successMetrics: ["followers >= 1000", "engagement rate improves"],
-        },
-      );
-
-      expect(callCount).toBe(0);
-      expect(proposal.schedulePlan.length).toBeGreaterThan(0);
-      expect(proposal.schedulePlan[0]?.assigneeRole).toBe("data_analyst");
+      const proposal = await hrAgent.proposeTeam("mission-id", roleSpecs, missionBrief);
+      expect(proposal.schedulePlan).toEqual([]);
     });
   });
 
@@ -585,7 +402,68 @@ describe("HRAgent", () => {
       expect(first?.budget.maxRuntimeMinutes).toBe(90);
     });
 
-    it("falls back to rule-based analysis and role specs when LLM output is unparseable", async () => {
+    it("includes skill tool directives in the system prompt", async () => {
+      const calls: Array<{ role: string; content: string }[]> = [];
+      const fakeLlm: LlmService = {
+        call: async (messages, options) => {
+          calls.push(messages);
+          const content = JSON.stringify({
+            analysis: {
+              requiredCapabilities: ["agent_collaboration"],
+              estimatedTeamSize: 2,
+              priorityRoles: ["Coordinator", "Reviewer"],
+              complexity: "low",
+              riskFactors: ["rule drift"],
+            },
+            roleSpecs: [
+              {
+                name: "接龙协调员",
+                purpose: "推进接龙轮次",
+                responsibilities: ["安排轮次"],
+                capabilities: ["agent_collaboration"],
+                allowedTools: ["load_skill"],
+                successCriteria: ["轮次清晰"],
+                budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+              },
+              {
+                name: "规则审核员",
+                purpose: "审核成语接龙规则",
+                responsibilities: ["检查成语合法性"],
+                capabilities: ["review"],
+                allowedTools: ["load_skill"],
+                successCriteria: ["规则检查完成"],
+                budget: { maxRuntimeMinutes: 60, maxTasks: 3 },
+              },
+            ],
+          });
+          if (options?.onStream) {
+            for (const char of content) options.onStream(char);
+          }
+          return {
+            content,
+            model: "test-model",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+          };
+        },
+        stats: () => ({
+          totalCalls: 0,
+          totalPromptTokens: 0,
+          totalCompletionTokens: 0,
+        }),
+      };
+
+      const hrAgent = createHRAgent({ llm: fakeLlm });
+      await hrAgent.analyzeAndPlan("mission_1", missionBrief);
+
+      expect(calls[0]?.[0]?.content).toContain("list_skill_files");
+      expect(calls[0]?.[0]?.content).toContain("load_skill");
+      expect(calls[0]?.[0]?.content).toContain("DigitalAgent mission execution system");
+      expect(calls[0]?.[0]?.content).toContain("multiple real runtime agents");
+      expect(calls[0]?.[0]?.content).toContain("Do not replace required participant agents");
+    });
+
+    it("throws when LLM output is unparseable", async () => {
       let callCount = 0;
       mockLlm.call = async (_messages, options) => {
         callCount += 1;
@@ -602,20 +480,33 @@ describe("HRAgent", () => {
       };
 
       const hrAgent = createHRAgent({ llm: mockLlm });
-      const result = await hrAgent.analyzeAndPlan("mission-fallback", missionBrief);
 
+      await expect(hrAgent.analyzeAndPlan("mission-fallback", missionBrief)).rejects.toThrow(
+        "No JSON object found in analyzeAndPlan response",
+      );
       expect(callCount).toBe(1);
-      expect(result.analysis.missionGoal).toBe(missionBrief.goal);
-      expect(result.roleSpecs.length).toBeGreaterThan(0);
-      const first = result.roleSpecs[0];
-      expect(first?.id).toBeTruthy();
-      expect(first?.budget.maxTasks).toBeGreaterThan(0);
     });
 
     it("forwards each LLM token to onToken when provided", async () => {
       const seen: string[] = [];
       mockLlm.call = async (_messages, options) => {
-        const content = "abc-def";
+        const content = JSON.stringify({
+          analysis: {
+            requiredCapabilities: ["research"],
+            estimatedTeamSize: 1,
+            priorityRoles: ["researcher"],
+            complexity: "low",
+            riskFactors: [],
+          },
+          roleSpecs: [{
+            name: "研究员",
+            purpose: "做研究",
+            responsibilities: ["收集资料"],
+            allowedTools: ["web_search"],
+            successCriteria: ["产出结论"],
+            budget: { maxRuntimeMinutes: 60, maxTasks: 2 },
+          }],
+        });
         if (options?.onStream) {
           for (const char of content) options.onStream(char);
         }
@@ -634,7 +525,63 @@ describe("HRAgent", () => {
       await hrAgent.analyzeAndPlan("mission-stream", missionBrief);
 
       expect(seen.length).toBeGreaterThan(0);
-      expect(seen.join("")).toBe("abc-def");
+      expect(seen.join("")).toContain("\"roleSpecs\"");
+    });
+
+    it("injects MissionPlan workstreams into the user prompt when plan is provided", async () => {
+      const captured: Array<{ role: string; content: string }[]> = [];
+      mockLlm.call = async (messages, options) => {
+        captured.push(messages);
+        const content = JSON.stringify({
+          analysis: {
+            requiredCapabilities: ["agent_collaboration"],
+            estimatedTeamSize: 6,
+            priorityRoles: ["状态管理员", "Agent1", "Agent2", "Agent3", "Agent4", "Agent5"],
+            complexity: "medium",
+            riskFactors: [],
+          },
+          roleSpecs: [
+            { name: "状态管理员", purpose: "管状态", responsibilities: ["记尾字"], allowedTools: ["agent_send_message"], successCriteria: ["状态最新"], budget: { maxRuntimeMinutes: 60, maxTasks: 50 } },
+            { name: "Agent1", purpose: "接龙玩家1", responsibilities: ["接龙"], allowedTools: ["agent_send_message"], successCriteria: ["按序"], budget: { maxRuntimeMinutes: 30, maxTasks: 10 } },
+            { name: "Agent2", purpose: "接龙玩家2", responsibilities: ["接龙"], allowedTools: ["agent_send_message"], successCriteria: ["按序"], budget: { maxRuntimeMinutes: 30, maxTasks: 10 } },
+            { name: "Agent3", purpose: "接龙玩家3", responsibilities: ["接龙"], allowedTools: ["agent_send_message"], successCriteria: ["按序"], budget: { maxRuntimeMinutes: 30, maxTasks: 10 } },
+            { name: "Agent4", purpose: "接龙玩家4", responsibilities: ["接龙"], allowedTools: ["agent_send_message"], successCriteria: ["按序"], budget: { maxRuntimeMinutes: 30, maxTasks: 10 } },
+            { name: "Agent5", purpose: "接龙玩家5", responsibilities: ["接龙"], allowedTools: ["agent_send_message"], successCriteria: ["按序"], budget: { maxRuntimeMinutes: 30, maxTasks: 10 } },
+          ],
+        });
+        if (options?.onStream) for (const ch of content) options.onStream(ch);
+        return { content, model: "test", usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, finishReason: "stop" };
+      };
+
+      const plan = makeChainGamePlan(missionBrief.goal);
+      const hrAgent = createHRAgent({ llm: mockLlm });
+      await hrAgent.analyzeAndPlan("mission_test", missionBrief, plan);
+
+      const userPrompt = captured[0]?.[1]?.content ?? "";
+      expect(userPrompt).toContain("MissionPlan");
+      expect(userPrompt).toContain("状态管理员");
+      expect(userPrompt).toContain("Agent1-5");
+      expect(userPrompt).toContain("执行流");
+      // Must instruct LLM to expand range patterns into N peer roles
+      expect(userPrompt.toLowerCase()).toMatch(/range|expand|n peer|对等/);
+    });
+
+    it("works without a plan (backward-compatible)", async () => {
+      mockLlm.call = async (_messages, options) => {
+        const content = JSON.stringify({
+          analysis: { requiredCapabilities: ["x"], estimatedTeamSize: 2, priorityRoles: ["a"], complexity: "low", riskFactors: [] },
+          roleSpecs: [
+            { name: "甲", purpose: "做事", responsibilities: ["做"], allowedTools: ["agent_send_message"], successCriteria: ["完"], budget: { maxRuntimeMinutes: 30, maxTasks: 5 } },
+            { name: "乙", purpose: "做事", responsibilities: ["做"], allowedTools: ["agent_send_message"], successCriteria: ["完"], budget: { maxRuntimeMinutes: 30, maxTasks: 5 } },
+          ],
+        });
+        if (options?.onStream) for (const ch of content) options.onStream(ch);
+        return { content, model: "test", usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 }, finishReason: "stop" };
+      };
+
+      const hrAgent = createHRAgent({ llm: mockLlm });
+      const result = await hrAgent.analyzeAndPlan("mission_nobackplan", missionBrief);
+      expect(result.roleSpecs.length).toBe(2);
     });
   });
 

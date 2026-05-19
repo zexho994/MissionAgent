@@ -388,7 +388,6 @@ function autopilotStageText(stage) {
     team_not_ready: "团队未就绪",
     missing_initial_tasks: "缺少初始任务",
     missing_execution_runner: "缺少执行器",
-    missing_schedule: "缺少运行节奏",
     ready: "已准备自动运行",
     running: "正在执行",
     blocked: "执行受阻",
@@ -657,6 +656,7 @@ function renderAgentDetailCard(data, agent) {
           </div>
         `).join("") : `<div class="empty-state compact">暂无进度消息</div>`}
       </div>
+      ${renderToolCallTimeline(data, agent)}
     </article>
   `;
 }
@@ -672,6 +672,76 @@ function latestAgentMessages(data, agentId) {
     .filter((message) => message.fromAgentId === agentId && message.type !== "user_message")
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 3);
+}
+
+function renderToolCallTimeline(data, agent) {
+  const calls = data.toolCalls
+    .filter((c) => c.agentId === agent.id)
+    .sort((a, b) => new Date(a.startedAt) - new Date(b.startedAt))
+    .slice(-10);
+
+  if (!calls.length) return "";
+
+  return `
+    <div class="agent-tool-timeline">
+      <span class="field-label">工具操作流水</span>
+      ${calls.map((call) => `
+        <div class="tool-call-item status-${esc(call.status)}">
+          <div class="tool-call-head">
+            <span class="tool-call-icon">${toolStatusIcon(call.status)}</span>
+            <time>${esc(formatTime(call.startedAt))}</time>
+            <strong>${esc(call.toolName)}</strong>
+          </div>
+          <pre class="tool-call-input">${esc(shortJson(call.input, 200))}</pre>
+          ${call.status === "completed" ? `<div class="tool-call-result">→ ${esc(summarizeToolOutput(call.toolName, call.output))}</div>` : ""}
+          ${call.status === "failed" ? `<div class="tool-call-error">✗ ${esc(call.error || "失败")}</div>` : ""}
+          ${call.status === "running" ? `<div class="tool-call-running">运行中...</div>` : ""}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function toolStatusIcon(status) {
+  switch (status) {
+    case "completed": return "✅";
+    case "failed": return "✗";
+    case "running": return "🔄";
+    default: return "•";
+  }
+}
+
+function shortJson(obj, maxLen) {
+  try {
+    const s = JSON.stringify(obj);
+    if (!s) return "";
+    return s.length > maxLen ? s.slice(0, maxLen) + "..." : s;
+  } catch {
+    return "";
+  }
+}
+
+function summarizeToolOutput(toolName, output) {
+  if (!output) return "完成";
+  switch (toolName) {
+    case "file_read":
+      if (output.exists === false) return "文件不存在";
+      return `读取 ${output.sizeBytes ?? "?"} 字节`;
+    case "file_write":
+      return `写入 ${output.bytesWritten ?? "?"} 字节 (${output.mode || "overwrite"})`;
+    case "pass_to_next_agent":
+      if (output.created) return `已派任务给 ${output.assigneeRole || "下一棒"} (taskId=${output.taskId || "?"})`;
+      return `拒绝:${output.reason || "未知"}`;
+    case "web_search": {
+      const count = Array.isArray(output.searchResults) ? output.searchResults.length : (Array.isArray(output.sources) ? output.sources.length : 0);
+      return `${count} 条搜索结果`;
+    }
+    case "list_skill_files":
+      return `${Array.isArray(output) ? output.length : (output.count ?? "?")} 个技能文件`;
+    case "load_skill":
+      return `加载 ${output.path || "技能"}`;
+    default: return "完成";
+  }
 }
 
 function renderTaskCard(data, task, artifact, agentById) {
