@@ -1154,9 +1154,15 @@ export class InMemoryMissionService {
       throw new Error(`Task already has a running execution: ${task.id}`);
     }
 
-    const runningTask = ensureTaskRunning(task);
+    // 优先使用 task 上预先绑定的 assigneeAgentId(followup 任务由 createFollowupTask 设置),
+    // 否则回退到 executionAgent 通用挑选。这保证不同 worker 真的轮流执行,而非全部归 pi_runner。
+    const preferredAgent =
+      task.assigneeAgentId && task.assigneeAgentId !== "pi_runner"
+        ? this.agents.get(task.assigneeAgentId)
+        : undefined;
+    const worker = preferredAgent ?? this.executionAgent(mission.id);
+    const runningTask = ensureTaskRunning(task, worker.id);
     this.tasks.set(runningTask.id, runningTask);
-    const worker = this.executionAgent(mission.id);
     const planner = this.planningAgent(mission.id);
     this.updateAgent(worker.id, {
       status: "running",
@@ -1313,7 +1319,10 @@ export class InMemoryMissionService {
       throw new Error(`Running execution not found: ${input.executionId}`);
     }
 
-    const runningTask = task.status === "running" ? task : ensureTaskRunning(task);
+    const runningTask =
+      task.status === "running"
+        ? task
+        : ensureTaskRunning(task, task.assigneeAgentId ?? "pi_runner");
     const qualityResult = evaluateArtifactQuality(input.content, mission);
     const artifact = createArtifact({
       taskId: runningTask.id,

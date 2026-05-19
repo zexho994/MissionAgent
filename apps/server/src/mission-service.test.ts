@@ -265,7 +265,8 @@ describe("InMemoryMissionService", () => {
     const worker = snapshot.agents.find((agent) => agent.role === "researcher" && agent.missionId === mission.id);
     if (!worker) throw new Error("missing worker");
 
-    expect(snapshot.tasks.some((candidate) => candidate.assigneeAgentId === "pi_runner")).toBe(true);
+    // 任务 assignee 现在是实际执行 worker 的 agent.id(不再硬编码 "pi_runner")
+    expect(snapshot.tasks.some((candidate) => candidate.assigneeAgentId === worker.id)).toBe(true);
     expect(snapshot.toolCalls.some((call) => call.agentId === worker.id && call.status === "completed")).toBe(true);
     expect(snapshot.agentMessages.some((message) => message.fromAgentId === worker.id && message.type === "execution_completed")).toBe(true);
     expect(snapshot.artifacts.some((artifact) => artifact.taskId === task.id)).toBe(true);

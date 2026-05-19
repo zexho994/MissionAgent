@@ -2,14 +2,14 @@ import { transitionTask, type Task } from "@digitalagent/core";
 import type { AgentSystemConfig } from "./system-config.js";
 import { renderTemplate } from "./system-config.js";
 
-export function ensureTaskRunning(task: Task): Task {
+export function ensureTaskRunning(task: Task, agentInstanceId = "pi_runner"): Task {
   if (task.status === "running") {
     return task;
   }
   if (task.status === "revision_needed") {
     const updated = transitionTask(task, { type: "task.updated" });
     const queued = transitionTask(updated, { type: "dependencies.met" });
-    return transitionTask(queued, { type: "worker.assigned", agentInstanceId: "pi_runner" });
+    return transitionTask(queued, { type: "worker.assigned", agentInstanceId });
   }
   if (task.status !== "draft") {
     throw new Error(`Task cannot be executed from status: ${task.status}`);
@@ -17,7 +17,7 @@ export function ensureTaskRunning(task: Task): Task {
 
   const ready = transitionTask(task, { type: "contract.completed" });
   const queued = transitionTask(ready, { type: "dependencies.met" });
-  return transitionTask(queued, { type: "worker.assigned", agentInstanceId: "pi_runner" });
+  return transitionTask(queued, { type: "worker.assigned", agentInstanceId });
 }
 
 export function deriveOwnerBrief(goal: string, config: AgentSystemConfig): {
