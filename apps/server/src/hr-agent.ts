@@ -259,7 +259,7 @@ function buildHRAgentSystemPrompt(): string {
     "- If the mission asks for N agents to collaborate, propose N actual runtime participant roles unless the user explicitly asks for manager/coordinator-only roles.",
     "- Do not replace required participant agents with coordinators, supervisors, validators, or other meta roles.",
     "- Coordinator/reviewer roles may be added only when they do not reduce the required participant count.",
-    "- Before designing the team, you may load digitalagent/SKILL.md and relevant capability files (file-io, agent-collaboration, web-search) via load_skill to learn the actual runtime tools available; assign those tool names in each role's allowedTools accordingly.",
+    "- The runtime exposes the capability list via the skill loader (see system directive for valid paths and load policy). Load at most 2-3 capability files relevant to this mission, then assign those tool names in each role's allowedTools.",
     "",
     "When proposing teams, ensure:",
     "- Each role has clear responsibilities",
@@ -405,7 +405,7 @@ function buildAnalyzeAndPlanPrompt(brief: MissionBrief, plan?: MissionPlan): str
   lines.push(
     "- The roleSpecs MUST cover the priorityRoles from the analysis (one role per priority role).",
     "- Use coordinator, supervisor, validator, or reviewer roles only as additional roles when they do not replace required participants.",
-    "- For collaborative or turn-based tasks, ensure the working roles' allowedTools cover the relevant capabilities discovered via load_skill (typically file IO + agent handoff tools).",
+    "- For collaborative or turn-based tasks, ensure the working roles' allowedTools list the actual tool names from the loaded capability files (typically file IO + agent handoff).",
     "- Each role must have non-empty responsibilities, allowedTools, successCriteria, and a positive budget.",
   );
 

@@ -69,38 +69,84 @@ smokeDescribe("V1 接龙:5 个 agent 协作完成 15 轮 (real LLM)", () => {
         constraints: [],
       });
 
-      // 真实流程:Owner 与用户协商生成 brief → 用户 confirm → 生成 MissionPlan → confirm → 激活。
-      // smoke 测试里如果走完整 LLM 协商成本很高,这里尽量用现有同步 helper 直推:
-      //   1. confirmBrief: 需要 mission.brief 已经存在;真实 LLM 流程会自动写入。
-      //   2. generateMissionPlan / confirmMissionPlan: 生成 + 确认计划。
-      //   3. activateMission: 调度首个任务。
-      // 任一步失败,捕获以便测试至少能 typecheck;运行时正确性靠手工验收。
-      try {
-        const anyMissions = missions as unknown as {
-          confirmBrief?: (input: { missionId: string }) => unknown;
-          generateMissionPlan?: (input: {
-            missionId: string;
-          }) => Promise<{ id: string }>;
-          confirmMissionPlan?: (input: {
-            missionId: string;
-            planId: string;
-          }) => unknown;
-        };
-        anyMissions.confirmBrief?.({ missionId: m.id });
-        const plan = await anyMissions.generateMissionPlan?.({
-          missionId: m.id,
-        });
-        if (plan) {
-          anyMissions.confirmMissionPlan?.({
-            missionId: m.id,
-            planId: plan.id,
-          });
+      // 真实流程:Owner LLM 异步生成 brief → confirm → 生成 MissionPlan → confirm → 激活。
+      // Owner 可能追问澄清问题(needs_info / owner_followup),需自动回话推进。
+      const getMission = () =>
+        missions.snapshot().missions.find((x) => x.id === m.id);
+
+      const waitForOwnerIdle = async (timeoutMs: number): Promise<void> => {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+          const snap = missions.snapshot();
+          const owner = snap.agents.find(
+            (a) => a.missionId === m.id && a.role === "owner",
+          );
+          if (owner && owner.status !== "thinking" && owner.status !== "running") return;
+          await new Promise((r) => setTimeout(r, 2000));
         }
-        await missions.activateMission({ missionId: m.id });
-      } catch (err) {
-        // 走不通就记录,smoke 仍然继续,让真实 LLM 流程在轮询里推进
-        console.warn("[V1 smoke] activation path needs adaptation:", err);
+        throw new Error("[V1 smoke] timeout waiting for Owner to settle");
+      };
+
+      // 自动回话直到 Owner 把 brief 写出来,最多 8 轮(maxGatheringTurns 默认 5,加余量)
+      const continueMission = (
+        missions as unknown as {
+          continueMission: (input: {
+            missionId: string;
+            message: string;
+          }) => Promise<unknown>;
+        }
+      ).continueMission.bind(missions);
+
+      const autoReplies = [
+        "就按你理解的目标走,不需要再追问。",
+        "保持目标:5 个 agent 协作接龙,完成 15 次。直接生成 brief。",
+        "目标已经够清晰了,请立刻输出 mission brief。",
+        "不需要再讨论,生成 brief。",
+        "Confirm,生成 brief。",
+        "Generate the brief now.",
+        "OK 就这样。",
+        "Yes 直接生成。",
+      ];
+
+      let attempt = 0;
+      while (!getMission()?.brief && attempt < autoReplies.length) {
+        await waitForOwnerIdle(180_000);
+        if (getMission()?.brief) break;
+        const reply = autoReplies[attempt] ?? "go";
+        console.log(`[V1 smoke] auto-reply attempt ${attempt + 1}: ${reply}`);
+        await continueMission({ missionId: m.id, message: reply });
+        attempt += 1;
       }
+
+      if (!getMission()?.brief) {
+        throw new Error(
+          `[V1 smoke] Owner failed to produce brief after ${attempt} auto-replies`,
+        );
+      }
+
+      const anyMissions = missions as unknown as {
+        confirmBrief: (input: { missionId: string }) => unknown;
+        generateMissionPlan: (input: {
+          missionId: string;
+        }) => Promise<{ id: string }>;
+        confirmMissionPlan: (input: {
+          missionId: string;
+          planId: string;
+        }) => unknown;
+      };
+
+      // 2. confirm brief
+      anyMissions.confirmBrief({ missionId: m.id });
+
+      // 3. 生成 + confirm plan
+      const plan = await anyMissions.generateMissionPlan({ missionId: m.id });
+      anyMissions.confirmMissionPlan({
+        missionId: m.id,
+        planId: plan.id,
+      });
+
+      // 4. 激活 mission (HR 开始招团队)
+      await missions.activateMission({ missionId: m.id });
 
       // === 轮询等 mission idle 或超时 ===
       const deadline = Date.now() + 600_000; // 10 分钟
