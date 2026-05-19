@@ -1231,7 +1231,12 @@ export class InMemoryMissionService {
       taskId: input.taskId,
     });
     const runtime = this.runtime;
-    const executor = this.executionAgent(mission.id);
+    // 与 startExecution 内部用同一套挑选规则:优先 task.assigneeAgentId,回退 executionAgent
+    const preferredExecutor =
+      task.assigneeAgentId && task.assigneeAgentId !== "pi_runner"
+        ? this.agents.get(task.assigneeAgentId)
+        : undefined;
+    const executor = preferredExecutor ?? this.executionAgent(mission.id);
     const systemPrompt = getRoleSystemPrompt(executor.role, this.config);
     const perCallTools = this.buildPerCallTools({
       missionId: input.missionId,
@@ -1239,9 +1244,21 @@ export class InMemoryMissionService {
       sourceAgentId: executor.id,
     });
 
+    // 注入团队 roster,LLM 才能在 pass_to_next_agent 用正确的队友名字(否则幻觉为 "agent_3" 等)
+    const teamRoster = [...this.agents.values()]
+      .filter(
+        (a) =>
+          a.missionId === mission.id && !["owner", "hr"].includes(a.role),
+      )
+      .map((a) => `- "${a.name || a.role}"${a.id === executor.id ? " (you)" : ""}`)
+      .join("\n");
+    const enrichedMessage = teamRoster
+      ? `${input.message}\n\nYour team (use these EXACT names when calling pass_to_next_agent — do NOT invent or shorten names like "agent_3"):\n${teamRoster}`
+      : input.message;
+
     void runtime
       .runAgentTask({
-        message: buildAgentMessage({ message: input.message, mission, task }),
+        message: buildAgentMessage({ message: enrichedMessage, mission, task }),
         timeoutSeconds: 300,
         sessionId: input.missionId,
         missionId: input.missionId,
