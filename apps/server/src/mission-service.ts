@@ -2795,10 +2795,53 @@ export class InMemoryMissionService {
     const backlog = this.toolCallStreamBacklog.get(missionId) ?? [];
     backlog.push(toolEvent);
     this.toolCallStreamBacklog.set(missionId, backlog.slice(-100));
+    this.recordToolCallEvent(missionId, toolEvent);
     this.notifyStreamListeners(missionId, {
       type: "tool_call",
       toolEvent,
     });
+  }
+
+  private recordToolCallEvent(missionId: string, evt: ToolCallTraceEvent): void {
+    // 找到当前 mission 下正在跑的 umbrella pi.agent record,从它继承 taskId / executionId / agentId
+    const umbrella = [...this.toolCalls.values()].find(
+      (c) =>
+        c.missionId === missionId &&
+        c.toolName === "pi.agent" &&
+        c.status === "running",
+    );
+    if (!umbrella) return; // 没有活跃的执行,无法归因
+
+    if (evt.status === "start") {
+      const record: ToolCallRecord = {
+        id: evt.toolCallId,
+        missionId,
+        taskId: umbrella.taskId,
+        executionId: umbrella.executionId,
+        agentId: umbrella.agentId,
+        toolName: evt.toolName,
+        status: "running",
+        input: (evt.args ?? {}) as Record<string, unknown>,
+        startedAt: new Date().toISOString(),
+      };
+      this.toolCalls.set(record.id, record);
+    } else if (evt.status === "end") {
+      const existing = this.toolCalls.get(evt.toolCallId);
+      if (!existing) return;
+      const updated: ToolCallRecord = {
+        ...existing,
+        status: evt.ok ? "completed" : "failed",
+        completedAt: new Date().toISOString(),
+      };
+      if (evt.details && typeof evt.details === "object") {
+        updated.output = evt.details as Record<string, unknown>;
+      }
+      if (!evt.ok && evt.error !== undefined) {
+        updated.error =
+          typeof evt.error === "string" ? evt.error : JSON.stringify(evt.error);
+      }
+      this.toolCalls.set(updated.id, updated);
+    }
   }
 
   private createOwnerAgent(missionId: string): WarRoomAgent {
@@ -3088,13 +3131,21 @@ export class InMemoryMissionService {
       return { created: false, reason: safety.reason, escalateMessageSent };
     }
 
-    const assignee = [...this.agents.values()].find(
-      (a) =>
-        a.missionId === input.missionId &&
-        (a.role === input.payload.assigneeRole ||
-          a.role.includes(input.payload.assigneeRole) ||
-          input.payload.assigneeRole.includes(a.role)),
-    );
+    const target = input.payload.assigneeRole;
+    const matches = (a: WarRoomAgent): boolean => {
+      if (a.missionId !== input.missionId) return false;
+      const role = a.role ?? "";
+      const name = a.name ?? "";
+      // 按 role 精确匹配优先(HR 招的角色 role 是 uuid,LLM 不会传)
+      if (role === target) return true;
+      // 按 name 匹配(HR roleSpec.name 是人类可读名字,如"玩家2",LLM 用这个)
+      if (name === target) return true;
+      // 容错:子串匹配
+      if (role.includes(target) || target.includes(role)) return true;
+      if (name.includes(target) || target.includes(name)) return true;
+      return false;
+    };
+    const assignee = [...this.agents.values()].find(matches);
     if (!assignee) {
       const owner = [...this.agents.values()].find(
         (a) => a.missionId === input.missionId && a.role === "owner",
