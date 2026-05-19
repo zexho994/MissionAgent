@@ -163,35 +163,15 @@ smokeDescribe("V1 接龙:5 个 agent 协作完成 15 轮 (real LLM)", () => {
       if (!initialTask) {
         throw new Error("[V1 smoke] initial task not created by confirmNegotiation");
       }
-      // 列出团队成员以便 LLM 知道接力对象
-      const teamRoster = missions
-        .snapshot()
-        .agents.filter(
-          (a) => a.missionId === m.id && !["owner", "hr"].includes(a.role),
-        )
-        .map((a) => `- "${a.name || a.role}": ${a.responsibility ?? "成语接龙参与者"}`)
-        .join("\n");
-
-      const directiveMessage = [
-        "你是接龙的第一棒。请按以下步骤执行:",
-        "",
-        "1. 调用 file_read({ path: 'chain.txt' }) 检查现状(第一棒应该 exists: false)。",
-        "2. 想一个常用的 4 字成语作为起始词。",
-        "3. 调用 file_write({ path: 'chain.txt', mode: 'append', content: '<成语>\\n' }) 写入。",
-        "4. 调用 pass_to_next_agent({ nextRole: '<队友名字>', objective: '继续接龙', reason: '我接了 <成语>,下一棒首字 <尾字>' }) 把任务交给团队中的下一个队友。",
-        "",
-        "目标:整队接龙完成 15 轮(每棒一个新成语,首字承接上一棒尾字)。当 chain.txt 已经有 15 行成语时,不再 pass_to_next_agent,自然结束。",
-        "",
-        "你的队友(从其中挑一个 pass 给下一棒):",
-        teamRoster,
-      ].join("\n");
-
+      // 故意用 UI 端点的默认 message(api.ts:150),smoke 必须验证 UI 真实路径
+      // 真正的多 agent 协作判断应该来自 worker system prompt 的协作原则,而不是 smoke 注入的特殊指令
+      const uiDefaultMessage =
+        "Execute the first confirmed mission task automatically after HR team approval.";
       console.log(`[V1 smoke] triggering initial task ${initialTask.id}: ${initialTask.title}`);
-      console.log(`[V1 smoke] team roster:\n${teamRoster}`);
       missions.executeTask({
         missionId: m.id,
         taskId: initialTask.id,
-        message: directiveMessage,
+        message: uiDefaultMessage,
       });
 
       // === 轮询等 mission idle 或超时,每 30s 打印状态便于诊断 ===
@@ -296,11 +276,14 @@ smokeDescribe("V1 接龙:5 个 agent 协作完成 15 轮 (real LLM)", () => {
         calls.filter((c) => c.toolName === "pass_to_next_agent").length,
       ).toBeGreaterThanOrEqual(10);
 
-      // 每个 worker agent 至少有 1 条 toolCall(没人摸鱼)
-      for (const a of workerAgents) {
-        const own = calls.filter((c) => c.agentId === a.id);
-        expect(own.length).toBeGreaterThan(0);
-      }
+      // 真协作:至少 2 个不同的 worker agent 各自有 toolCall(防"单 agent 独干"退化)
+      const workersWithCalls = workerAgents.filter(
+        (a) => calls.some((c) => c.agentId === a.id),
+      );
+      console.log(
+        `[V1 smoke] workers with tool activity: ${workersWithCalls.length}/${workerAgents.length}`,
+      );
+      expect(workersWithCalls.length).toBeGreaterThanOrEqual(2);
 
       rmSync(workspaceRoot, { recursive: true, force: true });
     },

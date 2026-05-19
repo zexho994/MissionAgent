@@ -106,6 +106,12 @@ const RUNTIME_SKILL_TOOL_DIRECTIVE = [
   "",
   "Skill files are the authoritative source for tool names and signatures. Do not assume tool names that are not listed in the loaded skill content.",
   "Do not expose skill loading details to the user.",
+  "",
+  "Collaboration principle (when team has multiple worker agents):",
+  "- If your task is part of a collaborative mission AND there are multiple teammates listed in the message, do ONLY YOUR PIECE of work and then use pass_to_next_agent to hand off to a teammate.",
+  "- Do NOT try to single-handedly complete a multi-agent collaborative mission (e.g. do not write all 15 rounds of a chain yourself if you have 5 teammates — do round 1, then hand off).",
+  "- Check the current state (e.g. file_read on shared files) to know what your specific turn is, then add ONE increment, then hand off.",
+  "- Stop the handoff chain (do NOT call pass_to_next_agent) only when the stop condition in the mission goal is met (e.g. chain.txt already has the required number of entries).",
 ].join("\n");
 
 export function getRoleSystemPrompt(roleName: string, config: AgentSystemConfig): string | undefined {
